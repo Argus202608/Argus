@@ -1722,7 +1722,11 @@ class AIAgent:
                     # Faithful to history: each assistant row stores whatever
                     # model produced it, independent of the current config or
                     # any later model switch. Non-assistant rows leave it NULL.
-                    model=(self.model if role == "assistant" else None),
+                    # Shutdown can flush a partially initialized agent created
+                    # before model resolution completed. Persist the transcript
+                    # anyway; per-message model metadata is optional.
+                    model=(getattr(self, "model", None)
+                           if role == "assistant" else None),
                 )
                 flushed_ids.add(msg_id)
             self._last_flushed_db_idx = len(messages)

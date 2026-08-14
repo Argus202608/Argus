@@ -236,28 +236,25 @@ class TestGatewayBridgeCodeParity:
 
 
 class TestVisionModelOverride:
-    """Test that AUXILIARY_VISION_MODEL env var overrides the default model in the handler."""
+    """The removed auxiliary fallback must not be revived by stale env vars."""
 
     def test_env_var_overrides_default(self, monkeypatch):
         monkeypatch.setenv("AUXILIARY_VISION_MODEL", "openai/gpt-4o")
+        import asyncio
         from tools.vision_tools import _handle_vision_analyze
-        with patch("tools.vision_tools.vision_analyze_tool", new_callable=MagicMock) as mock_tool:
-            mock_tool.return_value = '{"success": true}'
-            _handle_vision_analyze({"image_url": "http://test.jpg", "question": "test"})
-            call_args = mock_tool.call_args
-            # 3rd positional arg = model
-            assert call_args[0][2] == "openai/gpt-4o"
+        with patch("tools.vision_tools._should_use_native_vision_fast_path", return_value=False):
+            result = asyncio.run(_handle_vision_analyze(
+                {"image_url": "http://test.jpg", "question": "test"}))
+        assert "requires a vision-capable main model" in result
 
     def test_default_model_when_no_override(self, monkeypatch):
         monkeypatch.delenv("AUXILIARY_VISION_MODEL", raising=False)
+        import asyncio
         from tools.vision_tools import _handle_vision_analyze
-        with patch("tools.vision_tools.vision_analyze_tool", new_callable=MagicMock) as mock_tool:
-            mock_tool.return_value = '{"success": true}'
-            _handle_vision_analyze({"image_url": "http://test.jpg", "question": "test"})
-            call_args = mock_tool.call_args
-            # With no AUXILIARY_VISION_MODEL env var, model should be None
-            # (the centralized call_llm router picks the provider default)
-            assert call_args[0][2] is None
+        with patch("tools.vision_tools._should_use_native_vision_fast_path", return_value=False):
+            result = asyncio.run(_handle_vision_analyze(
+                {"image_url": "http://test.jpg", "question": "test"}))
+        assert "legacy aux-LLM" in result
 
 
 # ── DEFAULT_CONFIG shape tests ───────────────────────────────────────────────

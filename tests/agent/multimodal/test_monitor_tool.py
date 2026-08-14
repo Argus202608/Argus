@@ -173,7 +173,7 @@ def test_create_requires_live_stream(monkeypatch):
     _patch_agent(monkeypatch, agent)
     r = _call(op="create", monitor_query="盯门", label="门")
     assert r.get("success") is False
-    assert "视频流" in r.get("error", "") or "多模态未就绪" in r.get("error", "")
+    assert "video buffer is not ready" in r.get("error", "")
     assert agent.mm_monitors == {}
 
 
@@ -259,7 +259,7 @@ def test_create_stream_status_failure_is_fail_closed(monkeypatch):
     r = _call(op="create", monitor_query="盯门", label="门")
 
     assert r.get("success") is False
-    assert "无法确认视频流状态" in r.get("error", "")
+    assert "could not confirm video stream status" in r.get("error", "")
     assert engine.added == []
     assert agent.mm_monitors == {}
 
@@ -289,8 +289,8 @@ def test_create_reports_scheduled_status_without_claiming_remote_probe(monkeypat
     r = _call(op="create", monitor_query="盯进球", label="进球", report_interval=60)
     assert r["op"] == "create"
     assert r.get("status") == "running"
-    assert "等待首轮检测" in (r.get("note") or "")
-    assert "正常工作" not in (r.get("note") or "")
+    assert "waiting for the first check" in (r.get("note") or "")
+    assert "working normally" not in (r.get("note") or "")
 
 
 # (删: test_create_rejects_research_misroute —— 153f8320 把 set_monitor 的程序化
@@ -491,7 +491,7 @@ def test_monitor_ref_refuses_ambiguous_matches_without_mutation(monkeypatch):
     result = _call(op="update", monitor_ref="手机", label="被误改")
 
     assert result.get("success") is False
-    assert "不唯一" in result.get("error", "")
+    assert "ambiguous" in result.get("error", "")
     assert {mid: item["label"] for mid, item in agent.mm_monitors.items()} == before
 
 
@@ -547,7 +547,7 @@ def test_completed_once_monitor_cannot_be_reenabled(monkeypatch):
     result = _call(op="enable", monitor_id=mid)
 
     assert result.get("success") is False
-    assert "已完成" in result.get("error", "")
+    assert "already complete" in result.get("error", "")
     assert agent.mm_monitors[mid]["enabled"] is False
 
 
@@ -562,7 +562,7 @@ def test_completed_once_monitor_cannot_be_updated(monkeypatch):
     result = _call(op="update", monitor_id=mid, monitor_query="换个目标")
 
     assert result.get("success") is False
-    assert "已完成" in result.get("error", "")
+    assert "already complete" in result.get("error", "")
     assert agent.mm_monitors[mid]["monitor_query"] == "只等一次"
 
 

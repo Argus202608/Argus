@@ -233,6 +233,16 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
         from agent.prompt_builder import computer_use_guidance
         stable_parts.append(computer_use_guidance())
 
+    # Mid-turn steering is available to normal tool sessions. Multimodal
+    # sessions use the same role="user" transport for background monitor and
+    # watcher output, so they receive the dedicated sub-agent channel note
+    # instead of the interactive steering note.
+    if agent.valid_tool_names:
+        if getattr(agent, "_multimodal_session", False):
+            stable_parts.append(SUBAGENT_CHANNEL_NOTE)
+        else:
+            stable_parts.append(STEER_CHANNEL_NOTE)
+
     nous_subscription_prompt = _r.build_nous_subscription_prompt(agent.valid_tool_names)
     if nous_subscription_prompt:
         stable_parts.append(nous_subscription_prompt)

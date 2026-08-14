@@ -21,10 +21,9 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 # --- 配置部分 ---
-# ★ 整合到 Hermes 时的改动: 原文件在 import 时直接写 os.environ["http_proxy"],
-#   这会把整个 dashboard 进程的所有 HTTP (qwen/gemini 等) 都强制走内网代理而崩掉.
-#   改为: 不污染全局 env, 代理只作用于本工具内部的 httpx client (per-client proxy).
-#   代理 / RAG 地址都允许用环境变量覆盖 (内网地址, 换环境时改这俩即可).
+# Keep proxy configuration scoped to this tool's HTTP client instead of
+# mutating process-wide proxy environment variables. Both the proxy and RAG
+# endpoint are supplied explicitly through environment variables.
 PROXY_URL = os.environ.get("MM_SEARCH_PROXY_URL", "") or None
 RAG_API_URL = os.environ.get("MM_SEARCH_RAG_API_URL", "")
 

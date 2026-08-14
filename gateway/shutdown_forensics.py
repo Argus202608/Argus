@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -204,8 +205,10 @@ def spawn_async_diagnostic(
 
     Runs as a detached subprocess so it can't block the asyncio event loop
     or compete with platform teardown.  The subprocess uses its own
-    ``timeout`` so a wedged ``ps`` still self-cleans within
-    ``timeout_seconds``.
+    GNU ``timeout`` (or Homebrew ``gtimeout``) when available so a wedged
+    ``ps`` self-cleans within ``timeout_seconds``. On minimal POSIX/macOS
+    hosts without either wrapper, the detached diagnostic still runs rather
+    than being silently skipped.
 
     Returns the subprocess PID on success, ``None`` on failure.  Never
     raises.
@@ -240,6 +243,13 @@ def spawn_async_diagnostic(
         "echo '=== end ==='"
     )
 
+    timeout_bin = shutil.which("timeout") or shutil.which("gtimeout")
+    command = (
+        [timeout_bin, f"{timeout_seconds:.0f}", "bash", "-c", script]
+        if timeout_bin
+        else ["bash", "-c", script]
+    )
+
     try:
         # Open the log file in append mode and let the subprocess inherit.
         # We use os.O_APPEND so concurrent diagnostics from rapid signals
@@ -255,7 +265,7 @@ def spawn_async_diagnostic(
         # start_new_session, a SIGKILL on our cgroup takes the diag down
         # before it can flush.
         proc = subprocess.Popen(
-            ["timeout", f"{timeout_seconds:.0f}", "bash", "-c", script],
+            command,
             stdout=fd,
             stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL,

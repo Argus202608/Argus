@@ -291,7 +291,7 @@ def test_recall_verify_factory_uses_dedicated_messages_endpoint():
     try:
         assert client is not primary
         assert isinstance(client, MessagesMemoryClient)
-        assert client.endpoint.endswith("/u/5b102a9d2690c243/v1/messages")
+        assert client.endpoint == "https://example.invalid/v1/messages"
         assert model == "GPT-5.6 Luna"
     finally:
         asyncio.run(client.aclose())

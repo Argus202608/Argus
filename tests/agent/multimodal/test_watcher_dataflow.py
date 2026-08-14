@@ -569,7 +569,7 @@ def test_text_search_result_is_capped(monkeypatch):
 
     # Capped near the limit (plus the query header + truncation notice), NOT 300KB.
     assert len(out) < 5000, f"text_search result not capped: {len(out)} chars"
-    assert "已截断" in out
+    assert "result too long; truncated" in out
 
 
 def test_text_search_short_result_not_truncated(monkeypatch):

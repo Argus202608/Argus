@@ -79,11 +79,15 @@ def _make_worker(fids, llm_json):
         "max_tokens": max_tokens, "temperature": temperature}
 
     async def _create_chat_completion(msgs, *, max_tokens=256, temperature=0.1,
-                                      enable_thinking=False, channel_tag=""):
-        return await obj.client.chat.completions.create(
-            model=obj.model, messages=msgs, max_tokens=max_tokens,
+                                      enable_thinking=False, channel_tag="",
+                                      **overrides):
+        client = overrides.get("client_override") or obj.client
+        model = overrides.get("model_override") or obj.model
+        return await client.chat.completions.create(
+            model=model, messages=msgs, max_tokens=max_tokens,
             temperature=temperature)
     obj._create_chat_completion = _create_chat_completion
+    obj._parse_verify_json = RecallWorker._parse_verify_json
     obj._verify_frames_with_grounding = RecallWorker._verify_frames_with_grounding.__get__(obj, type(obj))
     return obj
 
@@ -142,13 +146,14 @@ def test_call_site_contract_empty_clears_none_keeps():
 
 
 @pytest.mark.asyncio
-async def test_frames_beyond_cap_are_conservatively_kept():
-    """Frames beyond recall_verify_max_frames are always retained."""
+async def test_frames_beyond_cap_are_not_silently_retained():
+    """The caller must bound candidates; unseen frames are not auto-approved."""
     _FakeCfg.recall_verify_max_frames = 2
     try:
         fids = ["f1", "f2", "f3", "f4"]
-        # LLM keeps nothing among the first 2; f3,f4 (beyond cap) survive.
+        # The verifier only saw the first two and approved none. Frames beyond
+        # the cap must not bypass visual verification.
         out = await _run(fids, '{"keep": []}')
-        assert out == ["f3", "f4"]
+        assert out == []
     finally:
         _FakeCfg.recall_verify_max_frames = 8

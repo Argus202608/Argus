@@ -192,44 +192,50 @@ class TestHandleVisionAnalyze:
             result.close()
 
     def test_prompt_contains_question(self):
-        """The full prompt should incorporate the user's question."""
+        """The native image request forwards the user's question unchanged."""
         with patch(
-            "tools.vision_tools.vision_analyze_tool", new_callable=AsyncMock
-        ) as mock_tool:
-            mock_tool.return_value = json.dumps({"result": "ok"})
+            "tools.vision_tools._should_use_native_vision_fast_path",
+            return_value=True,
+        ), patch(
+            "tools.vision_tools._vision_analyze_native", new_callable=AsyncMock
+        ) as mock_native:
+            mock_native.return_value = {"_multimodal": True}
             coro = _handle_vision_analyze(
                 {
                     "image_url": "https://example.com/img.png",
                     "question": "Describe the cat",
                 }
             )
-            # Clean up coroutine
             coro.close()
-            call_args = mock_tool.call_args
-            full_prompt = call_args[0][1]  # second positional arg
-            assert "Describe the cat" in full_prompt
-            assert "Fully describe and explain" in full_prompt
+            mock_native.assert_called_once_with(
+                "https://example.com/img.png", "Describe the cat"
+            )
 
     def test_uses_auxiliary_vision_model_env(self):
-        """AUXILIARY_VISION_MODEL env var should override DEFAULT_VISION_MODEL."""
+        """The legacy auxiliary model env does not reactivate text fallback."""
         with (
+            patch(
+                "tools.vision_tools._should_use_native_vision_fast_path",
+                return_value=False,
+            ),
             patch(
                 "tools.vision_tools.vision_analyze_tool", new_callable=AsyncMock
             ) as mock_tool,
             patch.dict(os.environ, {"AUXILIARY_VISION_MODEL": "custom/model-v1"}),
         ):
-            mock_tool.return_value = json.dumps({"result": "ok"})
             coro = _handle_vision_analyze(
                 {"image_url": "https://example.com/img.png", "question": "test"}
             )
             coro.close()
-            call_args = mock_tool.call_args
-            model = call_args[0][2]  # third positional arg
-            assert model == "custom/model-v1"
+            mock_tool.assert_not_called()
 
     def test_falls_back_to_default_model(self):
-        """Without AUXILIARY_VISION_MODEL, model should be None (let call_llm resolve default)."""
+        """Without native vision, the handler returns the explicit unsupported error."""
         with (
+            patch(
+                "tools.vision_tools._should_use_native_vision_fast_path",
+                return_value=False,
+            ),
             patch(
                 "tools.vision_tools.vision_analyze_tool", new_callable=AsyncMock
             ) as mock_tool,
@@ -237,16 +243,11 @@ class TestHandleVisionAnalyze:
         ):
             # Ensure AUXILIARY_VISION_MODEL is not set
             os.environ.pop("AUXILIARY_VISION_MODEL", None)
-            mock_tool.return_value = json.dumps({"result": "ok"})
             coro = _handle_vision_analyze(
                 {"image_url": "https://example.com/img.png", "question": "test"}
             )
             coro.close()
-            call_args = mock_tool.call_args
-            model = call_args[0][2]
-            # With no AUXILIARY_VISION_MODEL set, model should be None
-            # (the centralized call_llm router picks the default)
-            assert model is None
+            mock_tool.assert_not_called()
 
     def test_empty_args_graceful(self):
         """Missing keys should default to empty strings, not raise."""

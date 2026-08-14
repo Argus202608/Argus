@@ -3038,13 +3038,12 @@ _BARE_BILLING_PROVIDERS = {"auto", "openrouter", "custom"}
 
 
 def _stored_session_runtime_overrides(row: dict | None) -> dict:
-    """Return runtime fields persisted with a stored session.
+    """Return resumable preferences persisted with a stored session.
 
-    ``session.resume`` is a session-scoped operation: reopening an older chat
-    must restore the model/provider/reasoning state that chat actually used,
-    not whatever global model the user most recently selected in another chat.
-    The durable session row stores the model directly, the billing provider in
-    ``billing_provider``, and richer runtime knobs in JSON ``model_config``.
+    Model/provider/base-URL identity deliberately comes from the current
+    process configuration when a chat is resumed. Only identity-independent
+    preferences such as reasoning configuration and service tier survive.
+    Historical per-message model metadata remains available for display.
     """
     if not row:
         return {}
@@ -3102,22 +3101,12 @@ def _stored_session_runtime_overrides(row: dict | None) -> dict:
             )
         provider = healed or ("" if not base_url else provider)
 
-    # ── Model identity is NOT restored from the session row ──────────────
-    # 用户明确要求: 模型在程序启动时从 config 加载一次, 生命周期内固定, 且
-    # "未来用什么 model 与历史无关"。因此 resume 旧会话时【不】恢复历史存的
-    # model/provider/base_url/api_mode —— 让 _make_agent 落入无-override 分支,
-    # 走 _resolve_startup_runtime() 用当前 config 的完整运行时身份 (model +
-    # provider + base_url + api_key, 由 config 一致解析)。
-    #
-    # 这修复了旧的混搭 bug: 之前只在 model_override 里塞历史 model, 但 base_url
-    # 也可能来自另一时代的 config → "config 的 model 名打历史 endpoint" → 404
-    # (如 moonshot 的 model 名打到内部 gateway 端点)。现在整套身份都来自 config,
-    # 不再混搭。历史消息各自的 model 标签由 messages.model 列如实保留 (逐条记录),
-    # 与本次运行时身份无关。
-    #
-    # 仅保留与"模型身份"无关的会话运行时偏好 (reasoning / service_tier), 因为它们
-    # 是用户对该会话的显式选择, 且不受 config 端点切换影响。
-    _ = (model, provider, base_url, api_mode)  # 显式标注: 读取但不用于身份恢复
+    # Model identity is intentionally not restored. Mixing a historical model
+    # with credentials or an endpoint from the current configuration can route
+    # an invalid model/endpoint pair. Resume therefore uses one coherent
+    # identity from the current config while preserving identity-independent
+    # session preferences below.
+    _ = (model, provider, base_url, api_mode)
     if isinstance(reasoning_config, dict):
         overrides["reasoning_config_override"] = reasoning_config
     if service_tier:
@@ -7540,9 +7529,8 @@ def _(rid, params: dict) -> dict:
         # not replay the unanswered call forever (#29086).
         prefix = display_history[: max(0, len(display_history) - len(raw_history))]
         history = sanitize_replay_history(raw_history)
-        # Restore the model/provider/reasoning/tier this chat last used so the
-        # deferred build (and the info below) match the eager path — without them
-        # the build drops the provider ("No LLM provider configured").
+        # Restore identity-independent preferences only. The deferred build
+        # resolves model/provider/credentials as one bundle from current config.
         overrides = _stored_session_runtime_overrides(found) or {}
         model_override = overrides.get("model_override") or {}
         cwd = profile_resume_cwd or os.getenv("TERMINAL_CWD", os.getcwd())

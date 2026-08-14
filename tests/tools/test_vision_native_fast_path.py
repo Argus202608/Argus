@@ -202,8 +202,8 @@ class TestHandleVisionAnalyzeFastPath:
             f"Expected multimodal envelope, got {type(result).__name__}: {str(result)[:200]}"
         assert result.get("_multimodal") is True
 
-    def test_non_vision_main_model_falls_through_to_aux(self, tmp_path, monkeypatch):
-        """Non-vision main model → fast path skipped, aux LLM path attempted."""
+    def test_non_vision_main_model_returns_clear_error(self, tmp_path, monkeypatch):
+        """Non-vision models fail clearly instead of using the removed aux fallback."""
         img = tmp_path / "x.png"
         img.write_bytes(_TINY_PNG)
 
@@ -211,7 +211,10 @@ class TestHandleVisionAnalyzeFastPath:
             return '{"sentinel": "aux-path"}'
 
         from agent.auxiliary_client import set_runtime_main, clear_runtime_main
-        set_runtime_main("openrouter", "qwen/qwen3-coder")
+        # OpenRouter accepts image blocks at the transport layer regardless of
+        # the model slug, so use a genuinely unsupported provider to exercise
+        # the clear-error path.
+        set_runtime_main("brand-new-provider", "text-only-model")
         try:
             with patch("tools.vision_tools.vision_analyze_tool", side_effect=_aux_sentinel):
                 coro = _handle_vision_analyze({"image_url": str(img), "question": "?"})
@@ -219,8 +222,8 @@ class TestHandleVisionAnalyzeFastPath:
         finally:
             clear_runtime_main()
 
-        assert not (isinstance(result, dict) and result.get("_multimodal") is True), \
-            "Fast path fired for non-vision model; should have fallen through to aux LLM"
+        assert isinstance(result, str)
+        assert "requires a vision-capable main model" in result
 
     def test_fast_path_disabled_for_unsupported_provider(self, tmp_path, monkeypatch):
         """Even with vision-capable model, unknown provider → fall through."""
@@ -267,8 +270,8 @@ class TestHandleVisionAnalyzeFastPath:
         assert isinstance(result, dict) and result.get("_multimodal") is True
         mock_aux.assert_not_called()
 
-    def test_text_mode_wins_over_supports_vision_override(self, tmp_path):
-        """Explicit text routing blocks the fast path even with supports_vision."""
+    def test_legacy_text_mode_does_not_override_supports_vision(self, tmp_path):
+        """The removed text-routing flag cannot disable explicit native vision."""
         img = tmp_path / "x.png"
         img.write_bytes(_TINY_PNG)
 
@@ -292,6 +295,5 @@ class TestHandleVisionAnalyzeFastPath:
         finally:
             clear_runtime_main()
 
-        assert isinstance(result, str)
-        assert json.loads(result) == {"sentinel": "aux-path"}
-        mock_aux.assert_called_once()
+        assert isinstance(result, dict) and result.get("_multimodal") is True
+        mock_aux.assert_not_called()

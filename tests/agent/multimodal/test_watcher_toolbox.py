@@ -131,7 +131,7 @@ def test_text_search_graceful_on_http_error(monkeypatch):
     out = _run(tb.call("text_search", {"query": "q"}))
     # No exception bubbles; user-facing degraded marker instead.
     assert out.startswith("[text_search]")
-    assert "未返回结果" in out
+    assert "returned no result" in out
 
 
 def test_text_search_graceful_on_network_failure(monkeypatch):
@@ -139,7 +139,7 @@ def test_text_search_graceful_on_network_failure(monkeypatch):
     tb = _toolbox()
     out = _run(tb.call("text_search", {"query": "q"}))
     assert out.startswith("[text_search]")
-    assert "未返回结果" in out
+    assert "returned no result" in out
 
 
 def test_text_search_surfaces_jsonrpc_error(monkeypatch):
@@ -148,14 +148,14 @@ def test_text_search_surfaces_jsonrpc_error(monkeypatch):
         "error": {"code": -32000, "message": "rate limited"}}))
     tb = _toolbox()
     out = _run(tb.call("text_search", {"query": "q"}))
-    assert "外部检索出错" in out and "rate limited" in out
+    assert "external search error" in out and "rate limited" in out
 
 
 def test_text_search_empty_result(monkeypatch):
     _install_fake_httpx(monkeypatch, resp=_anysearch_ok(""))
     tb = _toolbox()
     out = _run(tb.call("text_search", {"query": "q"}))
-    assert "无相关信息返回" in out
+    assert "no relevant information returned" in out
 
 
 # --------------------------------------------------------------------------- #
@@ -164,19 +164,19 @@ def test_text_search_empty_result(monkeypatch):
 def test_unknown_tool_returns_clean_marker():
     tb = _toolbox()
     out = _run(tb.call("some_made_up_tool", {"x": 1}))
-    assert out.startswith("[tool] 未知工具")
+    assert out.startswith("[tool] unknown tool")
 
 
 def test_missing_query_is_reported():
     tb = _toolbox()
     out = _run(tb.call("text_search", {}))
-    assert "缺少 query" in out
+    assert "missing query" in out
 
 
 def test_enable_search_false_gates_all_tools():
     tb = _toolbox(enable_search=False)
     out = _run(tb.call("text_search", {"query": "q"}))
-    assert out == "[text_search] 已禁用"
+    assert out == "[text_search] disabled"
 
 
 def test_image_tools_are_deprecated_not_advertised():
@@ -209,6 +209,7 @@ def test_oversized_result_is_truncated(monkeypatch):
     _install_fake_httpx(monkeypatch, resp=_anysearch_ok(big))
     tb = _toolbox(anysearch_result_max_chars=4000)
     out = _run(tb.call("text_search", {"query": "q"}))
-    assert "已截断" in out and "换更精确的 query" in out
+    assert "result too long; truncated" in out
+    assert "Use a more precise query" in out
     # Header + capped body + truncation notice — nowhere near the full 9000.
     assert len(out) < 4500

@@ -331,8 +331,8 @@ def test_exact_text_verify_failure_invalidates_context_guess():
 
     assert recall.calls == 2
     assert verified is None
-    assert "不能采信" in correction
-    assert "地点" in correction
+    assert "Do not trust" in correction
+    assert "location or context" in correction
 
 
 def test_reviewer_retries_only_transient_overload():

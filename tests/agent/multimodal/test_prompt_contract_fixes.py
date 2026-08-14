@@ -54,7 +54,7 @@ def test_truncate_obs_long_appends_visible_marker():
     s = "x" * (_DISTILL_OBS_CAP + 500)
     out = _truncate_obs(s)
     assert out.startswith("x" * _DISTILL_OBS_CAP)
-    assert "截断" in out                      # visible marker present
+    assert "observation truncated here" in out  # visible marker present
     assert "500" in out                       # reports how much was cut
 
 

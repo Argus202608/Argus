@@ -76,6 +76,6 @@ class TestRecallEarlyFinalizeGuard(unittest.IsolatedAsyncioTestCase):
             ask_ts=200.0,
         )
 
-        assert "视觉复核未完成" in result.findings
+        assert "Visual verification did not complete" in result.findings
         assert "出租车" not in result.findings
         assert "不能采信" in result.findings

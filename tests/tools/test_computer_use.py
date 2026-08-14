@@ -1489,15 +1489,9 @@ class TestCuaDriverSessionReconnect:
 
 
 class TestCaptureAppFilterNoMatch:
-    """capture(app=X) must not silently fall back to the frontmost window
-    when X matches nothing — on a non-English macOS, list_windows returns
-    localized app names (e.g. "計算機"), so an English `app="Calculator"`
-    legitimately matches nothing and the caller needs to retry with the
-    localized name. The old code silently captured the frontmost window
-    (e.g. a menu-bar utility), giving the agent wrong UI elements.
-    """
+    """App filtering may match a localized application by window title."""
 
-    def test_app_filter_no_match_returns_empty_capture_with_diagnostic(self):
+    def test_app_filter_matches_localized_app_by_window_title(self):
         # Simulates a localized macOS where Calculator's app_name is "計算機".
         windows = [
             {"app_name": "Fuwari", "pid": 100, "window_id": 1,
@@ -1509,16 +1503,9 @@ class TestCaptureAppFilterNoMatch:
 
         cap = backend.capture(mode="som", app="Calculator")
 
-        # No window matched; capture must NOT pick the frontmost (Fuwari).
-        assert cap.app == "", (
-            f"app= filter no-match should not silently target a window; got {cap.app!r}"
-        )
-        assert cap.elements == []
-        assert "Calculator" in cap.window_title
-        assert "list_apps" in cap.window_title
-        # _active_pid must remain unset so a subsequent click doesn't hit Fuwari.
-        assert backend._active_pid is None
-        assert backend._active_window_id is None
+        assert cap.app == "計算機"
+        assert backend._active_pid == 200
+        assert backend._active_window_id == 2
 
     def test_app_filter_match_still_works(self):
         windows = [

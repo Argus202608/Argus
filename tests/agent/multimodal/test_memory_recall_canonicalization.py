@@ -227,11 +227,15 @@ def test_visual_verifier_returns_identity_correction_with_kept_frames():
         "max_tokens": max_tokens, "temperature": temperature}
 
     async def _create_chat_completion(msgs, *, max_tokens=256, temperature=0.1,
-                                      enable_thinking=False, channel_tag=""):
-        return await worker.client.chat.completions.create(
-            model=worker.model, messages=msgs, max_tokens=max_tokens,
+                                      enable_thinking=False, channel_tag="",
+                                      **overrides):
+        client = overrides.get("client_override") or worker.client
+        model = overrides.get("model_override") or worker.model
+        return await client.chat.completions.create(
+            model=model, messages=msgs, max_tokens=max_tokens,
             temperature=temperature)
     worker._create_chat_completion = _create_chat_completion
+    worker._parse_verify_json = RecallWorker._parse_verify_json
     method = RecallWorker._verify_frames_with_grounding.__get__(
         worker, type(worker))
     kept, correction = asyncio.run(method(

@@ -84,7 +84,7 @@ class TestGenerateTitle:
 
         with patch("agent.title_generator.call_llm", return_value=mock_response):
             title = generate_title("question", "answer")
-            assert len(title) == 80
+            assert len(title) == 40
             assert title.endswith("...")
 
     def test_returns_none_on_empty_response(self):

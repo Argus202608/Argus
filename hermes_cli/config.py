@@ -2141,8 +2141,8 @@ DEFAULT_CONFIG = {
         "watcher_answer_max_tokens": 1536,
         # ④ SearchWorker — external retrieval (resident under Router)
         # Uses the bundled agent/multimodal/sly_search_tool.py (RAG image/text
-        # search via an internal endpoint+proxy — override via MM_SEARCH_RAG_API_URL
-        # / MM_SEARCH_PROXY_URL env vars). Set enable_search false to turn it off,
+        # search via a configured endpoint and optional proxy — set
+        # MM_SEARCH_RAG_API_URL / MM_SEARCH_PROXY_URL). Set enable_search false,
         # or search_tool_path to point at a different tool module.
         "enable_search": True,
         "search_tool_path": "",      # "" = use bundled sly_search_tool.py

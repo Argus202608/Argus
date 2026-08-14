@@ -358,13 +358,10 @@ class TestVisionDispatchLoopSafety:
         from model_tools import _get_tool_loop
         from tools.registry import registry
 
-        fake_response = _mock_vision_response()
-
         with (
             patch(
-                "tools.vision_tools.async_call_llm",
-                new_callable=AsyncMock,
-                return_value=fake_response,
+                "tools.vision_tools._should_use_native_vision_fast_path",
+                return_value=True,
             ),
             patch(
                 "tools.vision_tools._download_image",
@@ -386,9 +383,9 @@ class TestVisionDispatchLoopSafety:
                 {"image_url": "https://example.com/cat.png", "question": "What is this?"},
             )
 
-        result = json.loads(result_json)
-        assert result.get("success") is True, f"dispatch failed: {result}"
-        assert "cat" in result.get("analysis", "").lower()
+        result = result_json
+        assert result.get("_multimodal") is True, f"dispatch failed: {result}"
+        assert any(part.get("type") == "image_url" for part in result["content"])
 
         loop = _get_tool_loop()
         assert not loop.is_closed(), (
@@ -403,13 +400,10 @@ class TestVisionDispatchLoopSafety:
         from model_tools import _get_tool_loop
         from tools.registry import registry
 
-        fake_response = _mock_vision_response()
-
         with (
             patch(
-                "tools.vision_tools.async_call_llm",
-                new_callable=AsyncMock,
-                return_value=fake_response,
+                "tools.vision_tools._should_use_native_vision_fast_path",
+                return_value=True,
             ),
             patch(
                 "tools.vision_tools._download_image",
@@ -428,14 +422,14 @@ class TestVisionDispatchLoopSafety:
         ):
             args = {"image_url": "https://example.com/cat.png", "question": "Describe"}
 
-            r1 = json.loads(registry.dispatch("vision_analyze", args))
+            r1 = registry.dispatch("vision_analyze", args)
             loop_after_first = _get_tool_loop()
 
-            r2 = json.loads(registry.dispatch("vision_analyze", args))
+            r2 = registry.dispatch("vision_analyze", args)
             loop_after_second = _get_tool_loop()
 
-        assert r1.get("success") is True
-        assert r2.get("success") is True
+        assert r1.get("_multimodal") is True
+        assert r2.get("_multimodal") is True
         assert loop_after_first is loop_after_second, "Loop changed between dispatches"
         assert not loop_after_second.is_closed()
 

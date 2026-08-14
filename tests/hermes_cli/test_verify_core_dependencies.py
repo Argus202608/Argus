@@ -155,12 +155,17 @@ class TestVerifyCoreDependencies:
             captured_argv.append(list(cmd))
             return MagicMock(returncode=0, stdout="", stderr="")
 
-        # Force sys.platform to look like Windows so the marker filters
-        # ptyprocess out. (We need the actual marker.evaluate() to see win32.)
+        # Give packaging's marker evaluator an explicit Windows environment.
+        # Its default environment may already be cached by an earlier test, so
+        # changing sys.platform here is order-dependent in the full suite.
+        from packaging.markers import default_environment
+        marker_environment = default_environment()
+        marker_environment["sys_platform"] = "win32"
+
         with patch("hermes_cli.main._resolve_install_target_python", return_value=py), \
              patch("hermes_cli.main.subprocess.run", side_effect=fake_subprocess_run), \
              patch("hermes_cli.main._run_install_with_heartbeat"), \
-             patch("sys.platform", "win32"):
+             patch("packaging.markers.default_environment", return_value=marker_environment):
 
             from hermes_cli.main import _verify_core_dependencies_installed
             _verify_core_dependencies_installed(["uv", "pip"], env=env)

@@ -1,4 +1,4 @@
-"""VoiceAgentV2 must use the dedicated DeepSeek client for every LLM role."""
+"""VoiceAgent must use one configured text client for every remote LLM role."""
 
 import unittest
 from unittest.mock import MagicMock, patch
@@ -21,13 +21,13 @@ class TestVoiceModelRouting(unittest.TestCase):
 
         with (
             patch("agent.auxiliary_client.get_async_text_auxiliary_client", resolver),
-            patch("agent.multimodal.voice_agent_v2.VoiceAgentV2", voice_cls),
+            patch("agent.multimodal.voice_agent.VoiceAgent", voice_cls),
             patch.object(server, "_load_cfg", return_value={}),
         ):
             result = server._get_voice_agent(session)
 
         self.assertIs(result, voice_agent)
-        resolver.assert_called_once_with(task="voice_intent")
+        resolver.assert_called_once_with(task="text")
         kwargs = voice_cls.call_args.kwargs
         self.assertIs(kwargs["aux_client"], deepseek_client)
         self.assertIs(kwargs["intent_client"], deepseek_client)

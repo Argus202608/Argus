@@ -55,9 +55,10 @@ source .venv/bin/activate
 uv pip install -e ".[web]"
 ```
 
-On Windows PowerShell, activate the environment with:
+On Windows PowerShell, run the native installer, then activate the environment:
 
 ```powershell
+PowerShell -ExecutionPolicy Bypass -File scripts/install.ps1
 .venv\Scripts\Activate.ps1
 ```
 

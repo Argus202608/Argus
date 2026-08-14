@@ -34,16 +34,21 @@ def _session(agent=None, **extra):
 def test_enqueue_pins_text_and_transport():
     session = _session()
     server._enqueue_prompt(session, "hello", "ws-1")
-    assert session["queued_prompt"] == {"text": "hello", "transport": "ws-1"}
+    queued = session["queued_prompt"]
+    assert queued["text"] == "hello"
+    assert queued["transport"] == "ws-1"
+    assert queued["user_originated"] is True
+    assert queued["origin"] == "user"
 
 
-def test_enqueue_merges_second_arrival_losslessly():
+def test_enqueue_keeps_second_arrival_as_an_independent_turn():
     session = _session()
     server._enqueue_prompt(session, "first", "ws-1")
     server._enqueue_prompt(session, "second", "ws-2")
-    assert session["queued_prompt"]["text"] == "first\n\nsecond"
-    # Latest transport wins so the drain streams to the most recent client.
-    assert session["queued_prompt"]["transport"] == "ws-2"
+    assert [item["text"] for item in session["queued_prompts"]] == ["first", "second"]
+    assert [item["transport"] for item in session["queued_prompts"]] == ["ws-1", "ws-2"]
+    # Compatibility alias continues to point at the queue head.
+    assert session["queued_prompt"] is session["queued_prompts"][0]
 
 
 # ── _handle_busy_submit (policy) ───────────────────────────────────────────
@@ -102,7 +107,9 @@ def test_drain_fires_queued_prompt_and_claims_running(monkeypatch):
     fired = {}
     monkeypatch.setattr(
         server, "_run_prompt_submit",
-        lambda rid, sid, session, text: fired.update(rid=rid, sid=sid, text=text),
+        lambda rid, sid, session, text, **kwargs: fired.update(
+            rid=rid, sid=sid, text=text
+        ),
     )
     session = _session(queued_prompt={"text": "go", "transport": "ws-9"})
 

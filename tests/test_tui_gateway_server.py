@@ -885,10 +885,10 @@ def test_load_enabled_toolsets_rejects_disabled_mcp_env(monkeypatch, capsys):
         config_mod, "load_config", lambda: {"platform_toolsets": {"cli": ["memory"]}}
     )
 
-    # Sorted: ["kanban", "memory", "project"]. `kanban` is auto-recovered by
-    # _get_platform_tools (a non-configurable platform toolset in hermes-cli's
-    # universe); `project` is GUI-only, folded in by _load_enabled_toolsets.
-    assert server._load_enabled_toolsets() == ["kanban", "memory", "project"]
+    # Argus always exposes its multimodal monitor/watcher toolsets in the GUI.
+    assert server._load_enabled_toolsets() == [
+        "kanban", "live_watcher", "memory", "monitor", "project"
+    ]
     err = capsys.readouterr().err
     assert "ignoring disabled MCP servers" in err
     assert "mcp-off" in err
@@ -909,7 +909,9 @@ def test_load_enabled_toolsets_falls_back_when_tui_env_invalid(monkeypatch, caps
         config_mod, "load_config", lambda: {"platform_toolsets": {"cli": ["memory"]}}
     )
 
-    assert server._load_enabled_toolsets() == ["kanban", "memory", "project"]
+    assert server._load_enabled_toolsets() == [
+        "kanban", "live_watcher", "memory", "monitor", "project"
+    ]
     assert "using configured CLI toolsets" in capsys.readouterr().err
 
 
@@ -1318,25 +1320,19 @@ def test_session_resume_passes_stored_runtime_to_agent(monkeypatch):
 
     monkeypatch.setattr(server, "_init_session", fake_init_session)
 
-    # eager_build: this asserts the synchronous build contract (stored runtime
-    # overrides reach _make_agent, info comes from _session_info). The deferred
-    # default restores the same overrides via _start_agent_build off-thread.
+    # Resume uses the current configured model identity while retaining
+    # session-scoped reasoning and service-tier preferences.
     resp = server.handle_request(
         {"id": "1", "method": "session.resume", "params": {"session_id": "stored-session", "eager_build": True}}
     )
 
     assert resp["result"]["info"] == {"model": "gpt-5.4", "provider": "openai-codex"}
-    assert captured["model_override"] == {
-        "model": "gpt-5.4",
-        "provider": "openai-codex",
-        "base_url": "https://custom.example/v1",
-        "api_mode": "chat_completions",
-    }
-    assert captured["provider_override"] == "openai-codex"
+    assert "model_override" not in captured
+    assert "provider_override" not in captured
     assert captured["reasoning_config_override"] == {"enabled": True, "effort": "high"}
     assert captured["service_tier_override"] == "priority"
     runtime_sid = resp["result"]["session_id"]
-    assert server._sessions[runtime_sid]["model_override"] == captured["model_override"]
+    assert "model_override" not in server._sessions[runtime_sid]
 
 
 def test_session_resume_profile_uses_profile_db_cwd(monkeypatch, tmp_path):
@@ -1466,33 +1462,22 @@ def test_session_cwd_set_profile_session_updates_profile_db(monkeypatch, tmp_pat
     assert "launch_update" not in captured
 
 
-def test_stored_session_runtime_overrides_skips_bare_billing_provider():
-    """A bare billing bucket ("custom"/"auto"/"openrouter") must not be restored as the
-    provider identity on resume. A custom endpoint that never used `/model` persists only
-    `billing_provider="custom"`; restoring that broke `session.resume` with "No LLM provider
-    configured" (agent_init treats it as non-routable). A real provider, or an explicit
-    `model_config.provider`, is still restored.
-    """
-    # Bare "custom" bucket, no explicit model_config.provider: no provider override restored.
+def test_stored_session_runtime_overrides_never_restore_model_identity():
+    """Resume keeps the current configured model/provider for every old row."""
     ov = server._stored_session_runtime_overrides({"model": "my-model", "billing_provider": "custom"})
-    assert "provider_override" not in ov
-    assert ov["model_override"]["provider"] is None
+    assert ov == {}
 
     for bare in ("auto", "openrouter", "custom"):
         ov = server._stored_session_runtime_overrides({"model": "m", "billing_provider": bare})
-        assert "provider_override" not in ov
+        assert ov == {}
 
-    # A real provider in billing_provider is still restored.
     ov = server._stored_session_runtime_overrides({"model": "m", "billing_provider": "anthropic"})
-    assert ov["provider_override"] == "anthropic"
-    assert ov["model_override"]["provider"] == "anthropic"
+    assert ov == {}
 
-    # An explicit routable provider in model_config wins over the bare billing bucket.
     ov = server._stored_session_runtime_overrides(
         {"model": "m", "billing_provider": "custom", "model_config": {"provider": "custom:myendpoint"}}
     )
-    assert ov["provider_override"] == "custom:myendpoint"
-    assert ov["model_override"]["provider"] == "custom:myendpoint"
+    assert ov == {}
 
 
 def test_persist_live_session_runtime_preserves_resume_metadata(monkeypatch):
@@ -6795,7 +6780,7 @@ def test_browser_manage_connect_default_local_reports_launch_hint(monkeypatch):
         == "Chromium-family browser isn't running with remote debugging — attempting to launch..."
     )
     assert any(
-        "No supported Chromium-family browser executable was found" in line
+        'open -a "Google Chrome"' in line
         for line in resp["result"]["messages"]
     )
     assert any(

@@ -334,7 +334,7 @@ def test_session_resume_returns_hydrated_messages(server, monkeypatch):
     assert resp["result"]["messages"] == [
         {"role": "user", "text": "hello"},
         {"role": "assistant", "text": "yo", "reasoning": "thoughts"},
-        {"role": "tool", "name": "tool", "context": ""},
+        {"role": "tool", "name": "tool", "context": "", "content": "searched"},
     ]
 
 
@@ -378,6 +378,7 @@ def test_session_resume_defaults_to_deferred_build(server, monkeypatch):
     monkeypatch.setattr(
         server, "_make_agent", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no eager build"))
     )
+    monkeypatch.setattr(server, "_resolve_model", lambda: "current/configured-model")
     monkeypatch.setattr(server, "_start_agent_build", lambda sid, session: builds.append(sid))
     monkeypatch.setattr(server, "_schedule_session_cap_enforcement", lambda: None)
 
@@ -398,11 +399,11 @@ def test_session_resume_defaults_to_deferred_build(server, monkeypatch):
         {"role": "user", "text": "hello"},
         {"role": "assistant", "text": "yo"},
     ]
-    # Lazy info contract (same shape session.create returns), with the session's
-    # persisted model/provider restored rather than the global default.
+    # Lazy info reflects the current configured runtime; historical model
+    # identity is display metadata and is not restored for future turns.
     assert result["info"]["lazy"] is True
-    assert result["info"]["model"] == "vendor/cool-model"
-    assert result["info"]["provider"] == "vendor"
+    assert result["info"]["model"] == "current/configured-model"
+    assert "provider" not in result["info"]
     assert result["info"]["desktop_contract"] == server.DESKTOP_BACKEND_CONTRACT
 
     sid = result["session_id"]
@@ -414,9 +415,7 @@ def test_session_resume_defaults_to_deferred_build(server, monkeypatch):
     assert not session["agent_ready"].is_set()
     # Not a watch spectator: a normal deferred resume is a real session.
     assert not session.get("lazy")
-    # The persisted runtime identity is stashed for the deferred build so it
-    # can't drop the provider ("No LLM provider configured").
-    assert session["resume_runtime_overrides"]["model_override"]["model"] == "vendor/cool-model"
+    assert session["resume_runtime_overrides"] is None
     assert server._find_live_session_by_key(target) == (sid, session)
 
 

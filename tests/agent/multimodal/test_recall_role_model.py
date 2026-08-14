@@ -81,7 +81,7 @@ class TestRecallAgentRoleModel(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(event["args"]["limit"], 8)
         self.assertIn("表 2", event["args"]["query"])
         self.assertIn("Argus | 91.2", event["obs_summary"])
-        self.assertIn("已从屏幕文字", event["findings_preview"])
+        self.assertIn("row-level evidence", event["findings_preview"])
         self.assertGreater(event["obs_len"], 0)
         self.assertGreaterEqual(event["elapsed_sec"], 0)
         self.assertEqual(event["frame_ids"], ["f_1234567890"])
@@ -161,7 +161,10 @@ class TestRecallAgentRoleModel(unittest.IsolatedAsyncioTestCase):
             ["gpt-5.6-luna"] * 3,
         )
         for call in create.await_args_list:
-            self.assertNotIn("extra_body", call.kwargs)
+            self.assertEqual(
+                call.kwargs.get("extra_body"),
+                {"thinking": {"type": "disabled"}},
+            )
             self.assertNotIn("top_p", call.kwargs)
             self.assertNotIn("temperature", call.kwargs)
             self.assertGreaterEqual(call.kwargs["max_completion_tokens"], 8192)
@@ -235,7 +238,7 @@ class TestRecallAgentRoleModel(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(recall.mem_tools.call.call_count, 1)
-        self.assertEqual(result.findings, "(记忆里未找到相关线索)")
+        self.assertEqual(result.findings, "(no relevant clues found in memory)")
         skipped = [event for event in events
                    if event.get("phase") == "tool_skipped"]
         self.assertEqual(len(skipped), 1)
@@ -281,6 +284,8 @@ class TestWatcherFallbackRecallRouting(unittest.TestCase):
         # existing-but-incomplete backend must fail instead of spawning a second
         # memory stack.
         engine._memory_backend = None
+        import threading
+        engine._stop = threading.Event()
         return engine
 
     def test_fallback_uses_dedicated_recall_pair_not_watcher_pair(self):

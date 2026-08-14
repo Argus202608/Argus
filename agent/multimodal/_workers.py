@@ -2190,8 +2190,13 @@ Image-first rule:
   changes, scores, subtitles, documents, tables, charts, and UI text.
 - Use text_search only when the frames do not contain enough information and
   external knowledge is genuinely needed.
+- If the frames already answer the question, do not call search. A bad pattern
+  is reading a visible name or value and then searching that same keyword
+  instead of interpreting the attached evidence.
 - Use recall_memory when the task depends on earlier stream content.
 - If frames conflict with text memory or search findings, trust the frames.
+- If external search is unavailable, do not stall: continue from the visual
+  evidence and state the limitation.
 
 Each round must do exactly one of:
 - Call tools and write no normal answer content.
@@ -2227,8 +2232,15 @@ Finite-task lifecycle rule:
 
 Writing rules:
 - No opening filler. Start with substantive analysis.
-- Be evidence-first and concise, but include meaningful details.
-- Preserve exact numbers, names, URLs, dates, and on-screen text.
+- Produce a structured interpretation, not a one-line conversational reply.
+- Be evidence-first and concise, but include meaningful details and point out
+  worthwhile follow-up questions or details to explore.
+- Preserve exact numbers, names, URLs, dates, and on-screen text verbatim. Do
+  not invent values or proper nouns that are not visible in the evidence.
+- Do not expose internal tool names, search plumbing, or provenance filler such
+  as "according to the database" in the user-facing analysis.
+- For continuous research, report only incremental, newly observed information
+  relative to earlier segments; do not repeat unchanged findings.
 - Say when something is unclear. Do not guess.
 - For parallel facets, use bold labels and short paragraphs or bullets.
 """
@@ -2631,7 +2643,7 @@ class OpenAIMemoryClient(MemoryLLMClient):
                 max_completion_tokens=portable_max,
             )
             if _model_is_kimi_k3(self.model):
-                # Smoke tests on the XHS Kimi K3 gateway:
+                # Smoke tests on a production Kimi K3 gateway:
                 #   min/medium can still run until the 60s nginx deadline on
                 #   large reviewer prompts, while low returns usable JSON.
                 portable_kwargs["reasoning_effort"] = "low"

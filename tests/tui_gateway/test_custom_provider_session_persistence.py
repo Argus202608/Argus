@@ -136,10 +136,8 @@ def _make_agent_with_override(override, monkeypatch, config, model_cfg=None):
 
 
 class TestResumeRoundTrip:
-    def test_round_trip_restores_entry_credentials(self, monkeypatch):
-        """persist → stored-overrides → _make_agent resolves the entry's
-        api_key again (the exact path that raised "No LLM provider
-        configured" before the fix)."""
+    def test_resume_uses_current_config_instead_of_historical_identity(self, monkeypatch):
+        """A resumed session must not restore an old provider/model bundle."""
         monkeypatch.setattr(rp, "load_config", lambda: LEGACY_LIST_CONFIG)
 
         from tui_gateway.server import (
@@ -153,15 +151,7 @@ class TestResumeRoundTrip:
             "model_config": json.dumps(model_config),
         }
         overrides = _stored_session_runtime_overrides(row)
-        assert overrides["model_override"]["provider"] == "custom:mimo-v2.5-pro"
-
-        kwargs = _make_agent_with_override(
-            overrides["model_override"], monkeypatch, LEGACY_LIST_CONFIG
-        )
-
-        assert kwargs["provider"] == "custom"
-        assert kwargs["base_url"] == MIMO_URL
-        assert kwargs["api_key"] == MIMO_KEY
+        assert overrides == {}
 
     def test_legacy_row_with_bare_custom_heals_via_base_url(self, monkeypatch):
         """Rows persisted BEFORE the fix stored provider="custom"; the
@@ -261,7 +251,7 @@ class TestBareCustomNoBaseUrlHealsFromConfig:
         # Bare "custom" must NOT be persisted — it heals to the entry identity.
         assert config["provider"] == "custom:mimo-v2.5-pro"
 
-    def test_restore_heals_bare_custom_row_without_base_url(self, monkeypatch):
+    def test_restore_ignores_bare_custom_row_without_base_url(self, monkeypatch):
         monkeypatch.setattr(rp, "load_config", lambda: NAMED_CONFIG)
         monkeypatch.setattr(rp, "_get_model_config", lambda: NAMED_CONFIG["model"])
 
@@ -277,8 +267,7 @@ class TestBareCustomNoBaseUrlHealsFromConfig:
         }
         overrides = _stored_session_runtime_overrides(row)
 
-        assert overrides["provider_override"] == "custom:mimo-v2.5-pro"
-        assert overrides["model_override"]["provider"] == "custom:mimo-v2.5-pro"
+        assert overrides == {}
 
     def test_restore_drops_bare_custom_when_config_cannot_heal(self, monkeypatch):
         """No recoverable identity: do NOT restore bare "custom" as a routable
@@ -299,8 +288,7 @@ class TestBareCustomNoBaseUrlHealsFromConfig:
         }
         overrides = _stored_session_runtime_overrides(row)
 
-        assert "provider_override" not in overrides
-        assert overrides["model_override"]["provider"] is None
+        assert overrides == {}
 
     def test_make_agent_heals_bare_custom_no_base_url_end_to_end(self, monkeypatch):
         """The exact failing path: stored override has bare custom + no
@@ -350,5 +338,4 @@ class TestBareCustomNoBaseUrlHealsFromConfig:
 
         persisted = captured.get("model_config") or {}
         assert persisted.get("provider") == "custom:mimo-v2.5-pro"
-
 

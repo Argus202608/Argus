@@ -21,33 +21,33 @@ PROMPT = workers_mod.WATCHER_REACT_SYSTEM
 # --------------------------------------------------------------------------- #
 def test_prompt_declares_image_first_as_top_rule():
     # The #1 rule must be image-first, search-supplementary.
-    assert "图像优先" in PROMPT
-    assert "外部搜索是补充" in PROMPT
+    assert "Image-first rule" in PROMPT
+    assert "Inspect them yourself before using tools" in PROMPT
     # Explicit: search backfills BACKGROUND, doesn't replace looking at frames.
-    assert "不是替代你看画面" in PROMPT
+    assert "external knowledge is genuinely needed" in PROMPT
 
 
 def test_prompt_has_negative_example_against_search_over_reliance():
     # A concrete "反面教材": seeing info on-screen but searching keywords anyway.
-    assert "反面教材" in PROMPT
-    assert "直接去搜" in PROMPT
+    assert "A bad pattern" in PROMPT
+    assert "searching that same keyword" in PROMPT
 
 
 def test_prompt_lets_it_answer_from_image_without_any_search():
     # Frame is clear -> answer directly, dispatch NO search at all.
-    assert "完全不派 search" in PROMPT
+    assert "frames already answer the question, do not call search" in PROMPT
 
 
 def test_prompt_prefers_image_on_conflict():
     # When image and memory/search text disagree, image wins.
-    assert "以画面为准" in PROMPT
+    assert "trust the frames" in PROMPT
 
 
 def test_prompt_search_gated_on_only_when_image_insufficient():
     # search allowed ONLY when the frame can't show it AND external knowledge
     # is genuinely required.
-    assert "画面里看不出" in PROMPT
-    assert "需要外部知识" in PROMPT
+    assert "frames do not contain enough information" in PROMPT
+    assert "external knowledge is genuinely needed" in PROMPT
 
 
 # --------------------------------------------------------------------------- #
@@ -55,37 +55,37 @@ def test_prompt_search_gated_on_only_when_image_insufficient():
 # --------------------------------------------------------------------------- #
 def test_prompt_demands_structured_interpretation_not_one_liner():
     # The output is a rich 解读, not a one-sentence chat reply.
-    assert "解读" in PROMPT
-    assert "不是一句口语答复" in PROMPT
+    assert "structured interpretation" in PROMPT
+    assert "not a one-line conversational reply" in PROMPT
 
 
 def test_prompt_forbids_leakage_and_filler():
     # No "好的/经查询" openers, no "图搜结果/数据库显示" tool-leakage.
-    assert "不要开场白" in PROMPT
-    assert "不要露馅" in PROMPT
+    assert "No opening filler" in PROMPT
+    assert "Do not expose internal tool names" in PROMPT
 
 
 def test_prompt_forbids_hallucinating_numbers_and_names():
     # Numbers/dates/names/urls copied verbatim from frame/findings, not invented.
-    assert "逐字复用" in PROMPT
-    assert "不臆造" in PROMPT
+    assert "verbatim" in PROMPT
+    assert "not invent values or proper nouns" in PROMPT
 
 
 def test_prompt_requires_surfacing_things_worth_exploring():
     # The user's stated ideal: proactively point out 值得深入的点.
-    assert "值得进一步探索的点" in PROMPT
+    assert "worthwhile follow-up questions or details to explore" in PROMPT
 
 
 def test_prompt_requires_incremental_only_new_content():
     # Continuous research: only analyze what's NEW vs prior batches (no repeats).
-    assert "增量" in PROMPT
-    assert "新出现" in PROMPT
+    assert "incremental, newly observed information" in PROMPT
+    assert "do not repeat unchanged findings" in PROMPT
 
 
 def test_prompt_graceful_when_search_unavailable():
     # #1/#6 interplay: if search is down, do NOT stall — answer from the frame.
-    assert "外部搜索不可用" in PROMPT
-    assert "不要卡住" in PROMPT
+    assert "external search is unavailable" in PROMPT
+    assert "do not stall" in PROMPT
 
 
 # --------------------------------------------------------------------------- #
