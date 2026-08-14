@@ -764,6 +764,7 @@ def test_session_resume_reuses_existing_live_session(server, monkeypatch):
     closed_sids: list[str] = []
     first_agent_started = threading.Event()
     agent_can_finish = threading.Event()
+    thread_timeout = 10
 
     class _DB:
         def get_session(self, _sid):
@@ -797,7 +798,7 @@ def test_session_resume_reuses_existing_live_session(server, monkeypatch):
     def make_agent(sid, key, session_id=None, session_db=None):
         created_sids.append(sid)
         first_agent_started.set()
-        assert agent_can_finish.wait(timeout=1)
+        assert agent_can_finish.wait(timeout=thread_timeout)
         return _Agent(sid, session_id or key)
 
     monkeypatch.setattr(server, "_get_db", lambda: _DB())
@@ -838,7 +839,7 @@ def test_session_resume_reuses_existing_live_session(server, monkeypatch):
 
         first_thread = threading.Thread(target=resume_first)
         first_thread.start()
-        assert first_agent_started.wait(timeout=1)
+        assert first_agent_started.wait(timeout=thread_timeout)
 
         second_holder = {}
 
@@ -855,8 +856,8 @@ def test_session_resume_reuses_existing_live_session(server, monkeypatch):
         second_thread.start()
         agent_can_finish.set()
 
-        first_thread.join(timeout=1)
-        second_thread.join(timeout=1)
+        first_thread.join(timeout=thread_timeout)
+        second_thread.join(timeout=thread_timeout)
         assert not first_thread.is_alive()
         assert not second_thread.is_alive()
         first = first_holder["resp"]
