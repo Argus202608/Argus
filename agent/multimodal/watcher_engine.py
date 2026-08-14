@@ -2306,7 +2306,7 @@ class WatcherAgent:
 
         poll = float(getattr(self.cfg, "watch_poll_interval", 2.0) or 2.0)
         static_tail_flush_sec = max(0.1, float(getattr(
-            self.cfg, "watch_static_tail_flush_sec", 4.0) or 4.0))
+            self.cfg, "watch_static_tail_flush_sec", 2.0) or 2.0))
         task_lower = str(task_instruction or "").lower()
         finite_completion_requested = any(token in task_lower for token in (
             "结束", "播放完", "播完", "看完", "完成后", "结束后",
@@ -2610,15 +2610,31 @@ class WatcherAgent:
             advances for every raw capture. Their timestamp gap therefore measures
             a visually static tail without consulting wall-clock frame silence.
             A dead capture cannot open this gate because its raw timestamp stops.
+
+            After at least one batch has been consumed, a completely static tail
+            legitimately has *zero* novel frames.  In that case the exclusive
+            dHash cursor is the last analyzed visual timestamp and is the correct
+            baseline for the raw-capture gap.  Requiring ``frames`` here used to
+            strand finite video tasks at 0/N until the normal TTL expired and then
+            in the indefinite "waiting for new frames" state.
             """
-            if not finite_completion_requested or not frames:
+            if not finite_completion_requested:
                 return None
             try:
                 raw_ts = self.frame_buffer.monitor_latest_ts
                 if raw_ts is None:
                     return None
+                if frames:
+                    baseline_ts = float(frames[-1].ts)
+                elif cursor is not None:
+                    baseline_ts = float(cursor)
+                else:
+                    # The first batch has no trustworthy analyzed boundary yet.
+                    # Keep its existing accumulation semantics rather than
+                    # treating an arbitrary raw-buffer age as a static ending.
+                    return None
                 static_for = max(
-                    0.0, float(raw_ts) - float(frames[-1].ts))
+                    0.0, float(raw_ts) - baseline_ts)
                 return max(0.0, static_tail_flush_sec - static_for)
             except Exception:
                 return None
@@ -2682,6 +2698,11 @@ class WatcherAgent:
         # It is verified once only if no dHash-novel scene follows during the
         # configured grace period.
         pending_completion_candidate: Optional[dict] = None
+        # A rejected rule-based static check remains latched until a genuinely
+        # novel frame arrives. Without this latch the same frozen pixels trigger
+        # another expensive VLM request every poll cycle forever.
+        static_tail_checked_anchor_ts: Optional[float] = None
+        terminal_completion_observation = ""
         no_progress = 0                      # 连续无进展周期数 (仅日志)
         batches_since_report = 0             # 距上次增量推送的批数 (#2)
 
@@ -2859,6 +2880,13 @@ class WatcherAgent:
                     # fresh 够多 → 直接进入本轮分析; 不够 → 保留 fresh, 进累积循环续攒。
                 else:
                     fresh = _gather(cursor_ts)
+
+                if (fresh and static_tail_checked_anchor_ts is not None
+                        and float(fresh[-1].ts)
+                        > float(static_tail_checked_anchor_ts) + 1e-6):
+                    # Playback (or another visible scene) resumed. Re-arm the
+                    # two-second rule for the new visual boundary.
+                    static_tail_checked_anchor_ts = None
 
                 if _source_replaced():
                     stop_reason = "source_end"
@@ -3124,6 +3152,7 @@ class WatcherAgent:
                 _wait_seg = int(round_idx)
                 round_start = time.monotonic()
                 _static_tail_flushed = False
+                _static_tail_anchor_ts: Optional[float] = None
                 # 首轮仅当帧已够多(_first_enough)才跳过累积; 帧太少则和后续轮一样进累积等待。
                 if source_live_at_start and not (_is_first and _first_enough):
                     def _elapsed():
@@ -3134,13 +3163,42 @@ class WatcherAgent:
                         static_remaining = _static_tail_remaining(
                             fresh, cursor=cursor_ts)
                         if static_remaining is not None and static_remaining <= 0:
+                            _static_tail_anchor_ts = float(
+                                fresh[-1].ts if fresh else cursor_ts)
+                            if (static_tail_checked_anchor_ts is not None
+                                    and _static_tail_anchor_ts
+                                    <= float(static_tail_checked_anchor_ts) + 1e-6):
+                                # This unchanged visual boundary already received
+                                # its one strict VLM verdict. Wait for a novel scene
+                                # (or source/user stop) instead of rechecking it.
+                                if emit is not None:
+                                    try:
+                                        emit("multimodal.bg", {
+                                            "request_id": rid,
+                                            "channel": "bg",
+                                            "type": "completion_confirm_wait",
+                                            "seg": _wait_seg,
+                                            "paused": True,
+                                            "waiting_for_scene_change": True,
+                                            "ttl_remaining": 0.0,
+                                        })
+                                    except Exception:
+                                        pass
+                                try:
+                                    await asyncio.wait_for(
+                                        stop_ev.wait(), timeout=poll)
+                                except asyncio.TimeoutError:
+                                    pass
+                                fresh = (self.frame_buffer.latest(target_frames)
+                                         if _is_first else _gather(cursor_ts))
+                                continue
                             try:
                                 _df.append_note(
                                     rid,
                                     "Finite-task static tail reached "
-                                    f"{static_tail_flush_sec:.1f}s; flushing "
-                                    f"{len(fresh)} frame(s) before the normal "
-                                    f"{ttl_sec:.0f}s segment TTL.",
+                                    f"{static_tail_flush_sec:.1f}s; starting a "
+                                    "before/after raw-frame completion check "
+                                    f"before the normal {ttl_sec:.0f}s segment TTL.",
                                 )
                             except Exception:
                                 pass
@@ -3191,25 +3249,136 @@ class WatcherAgent:
                         fresh = (self.frame_buffer.latest(target_frames)
                                  if _is_first else _gather(cursor_ts))
 
-                    # dHash intentionally drops a static end screen. Attach a
-                    # couple of newest raw captures to the early-flushed batch
-                    # so the model sees the current progress/replay/spinner UI,
-                    # not only the last novel frame from several seconds ago.
+                    # Rule-based end check: compare raw captures from before and
+                    # after the two-second no-change boundary in one dedicated VLM
+                    # call. This is independent of the segment model choosing a
+                    # completion tool and therefore also covers zero novel frames.
                     if _static_tail_flushed:
+                        anchor_ts = float(
+                            _static_tail_anchor_ts
+                            if _static_tail_anchor_ts is not None
+                            else (fresh[-1].ts if fresh else cursor_ts))
+                        n_confirm = max(2, int(getattr(
+                            self.cfg, "watch_completion_confirm_frames", 8) or 8))
+                        raw_window = []
+                        raw_latest_ts = getattr(
+                            self.frame_buffer, "monitor_latest_ts", None)
                         try:
-                            raw_ts = self.frame_buffer.monitor_latest_ts
-                            raw_tail = (
-                                self.frame_buffer.raw_all_le(raw_ts, n=2)
-                                if raw_ts is not None else [])
+                            window_start = anchor_ts - static_tail_flush_sec
+                            window_end = anchor_ts + static_tail_flush_sec
+                            before = self.frame_buffer.raw_all_le(
+                                anchor_ts, n=n_confirm)
+                            before = [
+                                frame for frame in before
+                                if float(frame.ts) >= window_start - 1e-6
+                            ] or self.frame_buffer.raw_all_le(anchor_ts, n=1)
+                            raw_after = getattr(
+                                self.frame_buffer, "monitor_all_after", None)
+                            after = (
+                                raw_after(anchor_ts)
+                                if callable(raw_after) else [])
+                            after = [
+                                frame for frame in after
+                                if float(frame.ts) <= window_end + 1e-6
+                            ]
                             by_ts = {
                                 float(frame.ts): frame
-                                for frame in list(fresh) + list(raw_tail or [])
+                                for frame in list(before) + list(after)
                                 if getattr(frame, "jpeg_b64", "")
                             }
-                            fresh = sorted(
+                            raw_window = sorted(
                                 by_ts.values(), key=lambda frame: frame.ts)
+                            if len(raw_window) > n_confirm:
+                                raw_window = _even_downsample(
+                                    raw_window, n_confirm)
+                        except Exception:
+                            raw_window = []
+
+                        confirmed = False
+                        confidence = 0.0
+                        confirm_reason = ""
+                        confirm_observation = ""
+                        verifier = getattr(
+                            self.responder, "confirm_visual_completion", None)
+                        if verifier is not None:
+                            try:
+                                static_for = max(
+                                    0.0,
+                                    float(raw_latest_ts) - anchor_ts
+                                    if raw_latest_ts is not None else
+                                    static_tail_flush_sec,
+                                )
+                                (confirmed, confidence, confirm_reason,
+                                 confirm_observation) = await verifier(
+                                    task_instruction=task_instruction,
+                                    candidate_reason=(
+                                        "Raw capture kept advancing while no "
+                                        f"dHash-novel scene appeared for "
+                                        f"{static_for:.1f}s; compare the frames "
+                                        "before and after the static boundary."),
+                                    last_segment_report=str(
+                                        (prev_segment or {}).get("report") or ""),
+                                    idle_sec=static_for,
+                                    total_idle_sec=static_for,
+                                    attempt=1,
+                                    prior_confirmation_reason="",
+                                    frames=raw_window,
+                                )
+                            except Exception as exc:
+                                confirm_reason = str(exc)
+                                log.warning(
+                                    "[watcher] rule-based completion check failed "
+                                    "(%s): %s", rid, exc)
+
+                        if confirmed:
+                            stop_reason = "task_complete"
+                            terminal_completion_observation = (
+                                confirm_observation or confirm_reason or
+                                "The video reached its ended state.")
+                            try:
+                                _df.append_note(
+                                    rid,
+                                    "Watcher completion confirmed by the "
+                                    "before/after static-boundary check "
+                                    f"(confidence={confidence:.2f}): "
+                                    + (confirm_reason or "confirmed"),
+                                )
+                            except Exception:
+                                pass
+                            if emit is not None:
+                                try:
+                                    emit("multimodal.bg", {
+                                        "request_id": rid,
+                                        "channel": "bg",
+                                        "type": "completion_confirmed",
+                                        "attempt": 1,
+                                        "confidence": confidence,
+                                        "reason": confirm_reason,
+                                    })
+                                except Exception:
+                                    pass
+                            break
+
+                        static_tail_checked_anchor_ts = anchor_ts
+                        try:
+                            _df.append_note(
+                                rid,
+                                "Static-boundary completion check was not "
+                                "confirmed; waiting for a novel scene before "
+                                "re-arming: "
+                                + (confirm_reason or
+                                   "insufficient visual ending evidence"),
+                            )
                         except Exception:
                             pass
+                        # The dedicated verifier already judged this boundary.
+                        # Do not ask the normal segment model to judge the same
+                        # raw pixels again. If there are novel frames, preserve
+                        # them for ordinary analysis; otherwise pause below.
+                        _static_tail_flushed = False
+                        if not fresh:
+                            round_idx -= 1
+                            continue
 
                     if _source_replaced():
                         stop_reason = "source_end"
@@ -3612,6 +3781,10 @@ class WatcherAgent:
                     )
             except Exception:
                 complete_report_parts = []
+            if (terminal_completion_observation
+                    and terminal_completion_observation
+                    not in complete_report_parts):
+                complete_report_parts.append(terminal_completion_observation)
             running_fallback = "\n\n".join(complete_report_parts).strip()
             if not running_fallback:
                 running_fallback = "\n\n".join(running_report).strip()

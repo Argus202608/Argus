@@ -31,6 +31,14 @@ from dataclasses import fields
 from types import SimpleNamespace
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from agent.messages_wire import (
+    hybrid_messages_from_chat,
+    is_local_hybrid_messages_endpoint,
+    openai_messages_from_chat,
+    uses_anthropic_messages_wire,
+    uses_anthropic_tools_wire,
+)
+
 from .core import (
     Config,
     GeminiMemoryClient,
@@ -76,12 +84,7 @@ def _messages_endpoint(base_url: str) -> str:
 
 
 def _messages_uses_anthropic_wire(base_url: str) -> bool:
-    base = (base_url or "").strip().lower()
-    return (
-        base.endswith("/v1/messages")
-        and "127.0.0.1:8080" not in base
-        and "localhost:8080" not in base
-    )
+    return uses_anthropic_messages_wire(base_url)
 
 
 def _anthropic_tool_choice(tool_choice: Any, payload: Dict[str, Any]) -> Any:
@@ -280,10 +283,9 @@ def _anthropic_messages_from_openai(messages: Any) -> Tuple[Any, list]:
 def _messages_preserve_image_url_from_openai(messages: Any) -> Tuple[Any, list]:
     """Build a /v1/messages payload that keeps OpenAI-style image_url parts.
 
-    The internal messages fleet is not fully uniform: GPT-5.6 Luna expects
-    Anthropic image/source blocks on the remote endpoint, while kimi/kimi-k3 is
-    more stable with the original image_url parts.  System text is still lifted
-    to top-level `system` for the messages endpoint.
+    Some messages gateways use the endpoint path while retaining OpenAI content
+    parts.  System text is still lifted to top-level ``system`` for the direct
+    messages transport.
     """
     system_parts = []
     out = []
@@ -343,10 +345,31 @@ def _messages_payload(kwargs: Dict[str, Any], *, base_url: str = "") -> Dict[str
                 if key in kwargs
             }
     else:
-        payload = {}
-        for key in ("model", "messages", "tools", "tool_choice"):
-            if key in kwargs:
-                payload[key] = kwargs[key]
+        if uses_anthropic_tools_wire(base_url):
+            system, messages = hybrid_messages_from_chat(
+                kwargs.get("messages") or [],
+                lift_system=not is_local_hybrid_messages_endpoint(base_url),
+            )
+        else:
+            system, messages = openai_messages_from_chat(
+                kwargs.get("messages") or [],
+                lift_system=not is_local_hybrid_messages_endpoint(base_url),
+            )
+        payload = {"model": kwargs.get("model"), "messages": messages}
+        if system:
+            payload["system"] = system
+        if uses_anthropic_tools_wire(base_url):
+            tools = _anthropic_tools_from_openai(kwargs.get("tools") or [])
+            if tools:
+                payload["tools"] = tools
+            converted_choice = _anthropic_tool_choice(
+                kwargs.get("tool_choice"), payload)
+            if converted_choice is not None and payload.get("tools"):
+                payload["tool_choice"] = converted_choice
+        else:
+            for key in ("tools", "tool_choice"):
+                if key in kwargs:
+                    payload[key] = kwargs[key]
     max_out = kwargs.get("max_tokens") or kwargs.get("max_completion_tokens")
     if max_out:
         payload["max_tokens"] = int(max_out)

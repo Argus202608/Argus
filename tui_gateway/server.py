@@ -6866,6 +6866,24 @@ def _format_watcher_hook_message(hook: dict) -> str:
     return _append_hook_result(task, report)
 
 
+def _format_watcher_hook_fallback(hook: dict) -> str:
+    """User-visible fallback when the hidden synthesis turn cannot complete.
+
+    The watcher report is already the durable, consolidated execution result.
+    Returning it is strictly better than completing the hidden turn with an
+    empty/error response and leaving the foreground UI waiting forever.
+    """
+    report = str(hook.get("report") or "").strip()
+    if not report:
+        return ""
+    label = str(hook.get("label") or "Watcher").strip() or "Watcher"
+    return (
+        f"{label}已完成，但主 Agent 的二次整理暂时失败。"
+        "以下是 Watcher 已生成的完整总结：\n\n"
+        f"{report}"
+    )
+
+
 def _drain_watcher_hook(rid, sid: str, session: dict) -> bool:
     """Fire ONE queued watcher-completion hook if the session is idle. Returns
     True if a hook turn was dispatched (caller should skip lower-priority
@@ -6897,6 +6915,7 @@ def _drain_watcher_hook(rid, sid: str, session: dict) -> bool:
             session,
             _format_watcher_hook_message(hook),
             internal_origin="watcher_hook",
+            internal_fallback_text=_format_watcher_hook_fallback(hook),
         )
     except Exception as exc:
         print(
@@ -12304,7 +12323,10 @@ def _interrupt_running_mm_jobs(sid: str, session: dict) -> int:
 def _run_prompt_submit(rid, sid: str, session: dict, text: Any,
                        *, user_originated: bool = False,
                        client_request_id: str = "",
-                       internal_origin: str = "") -> None:
+                       internal_origin: str = "",
+                       internal_fallback_text: str = "",
+                       anchor_ts: Optional[float] = None,
+                       anchor_frozen: bool = False) -> None:
     # Every turn must own a distinct stream key before emitting anything.  Keep
     # a caller-provided id byte-for-byte (within the protocol bound), otherwise
     # allocate once and reuse it for user echo/start/delta/complete, MM query
@@ -12883,6 +12905,24 @@ def _run_prompt_submit(rid, sid: str, session: dict, text: Any,
                 raw = str(result)
                 status = "complete"
 
+            _watcher_fallback_used = False
+            if (
+                internal_origin == "watcher_hook"
+                and str(internal_fallback_text or "").strip()
+                and (
+                    status != "complete"
+                    or not isinstance(raw, str)
+                    or not raw.strip()
+                )
+            ):
+                logger.warning(
+                    "[mm-watcher] completion synthesis failed or returned "
+                    "empty; delivering consolidated watcher report directly"
+                )
+                raw = str(internal_fallback_text).strip()
+                status = "complete"
+                _watcher_fallback_used = True
+
             _ephemeral_control = bool(
                 status == "complete"
                 and isinstance(handoff_meta, dict)
@@ -12905,6 +12945,14 @@ def _run_prompt_submit(rid, sid: str, session: dict, text: Any,
                 payload["reasoning"] = last_reasoning
             if status_note:
                 payload["warning"] = status_note
+            if _watcher_fallback_used:
+                payload.update({
+                    "watcher_fallback": True,
+                    "warning": (
+                        "Main-agent watcher synthesis failed; the consolidated "
+                        "watcher report was delivered directly."
+                    ),
+                })
             rendered = render_message(raw, cols)
             if rendered:
                 payload["rendered"] = rendered
@@ -13143,7 +13191,35 @@ def _run_prompt_submit(rid, sid: str, session: dict, text: Any,
             print(
                 f"[gateway-turn] {type(e).__name__}: {e}", file=sys.stderr, flush=True
             )
-            _emit("error", sid, {**_event_tag, "message": str(e)})
+            _watcher_fallback = (
+                str(internal_fallback_text or "").strip()
+                if internal_origin == "watcher_hook"
+                else ""
+            )
+            if _watcher_fallback:
+                # The hidden hook already owns a message.start slot. Complete
+                # that slot with the durable report so the Web client cannot be
+                # left spinning merely because the optional synthesis failed.
+                fallback_payload = {
+                    **_event_tag,
+                    "text": _watcher_fallback,
+                    "usage": _get_usage(agent),
+                    "status": "complete",
+                    "watcher_fallback": True,
+                    "warning": (
+                        "Main-agent watcher synthesis raised an exception; the "
+                        "consolidated watcher report was delivered directly."
+                    ),
+                }
+                try:
+                    rendered = render_message(_watcher_fallback, cols)
+                    if rendered:
+                        fallback_payload["rendered"] = rendered
+                except Exception:
+                    pass
+                _emit("message.complete", sid, fallback_payload)
+            else:
+                _emit("error", sid, {**_event_tag, "message": str(e)})
             # A VoiceAgent task may be awaiting this exact turn. Resolve it on
             # the error path as well; otherwise the foreground gate is released
             # below but its Future remains stuck until the 300s timeout.

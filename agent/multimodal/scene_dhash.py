@@ -47,9 +47,11 @@ _PACE_TIERS = {
 }
 _DEFAULT_PACE = "medium"   # 还没判过场景时的默认档
 
-# dHash cutoff is policy, not a second model judgement. It must stay coupled to
-# the pace selected from the scene: ``distance < cutoff`` is dropped, so
-# slow/static scenes use a higher cutoff while live scenes use a lower one.
+# dHash cutoff is a Hamming distance over a 64-bit perceptual hash, NOT fps.
+# ``distance < cutoff`` is dropped: slow=11 drops distances 0..10, medium=7
+# drops 0..6, fast=4 drops 0..3, and live=2 drops only 0..1. It must stay
+# coupled to the selected scene pace so slow/static scenes deduplicate more
+# aggressively while fast/live scenes preserve small visual changes.
 _PACE_DHASH_THRESHOLDS = {
     "slow": 11,
     "medium": 7,
@@ -146,7 +148,7 @@ def pace_to_pacing(pace: Optional[str]) -> dict:
 
 
 def threshold_from_pace(pace: Optional[str]) -> int:
-    """Return the deterministic dHash cutoff paired with a pace tier."""
+    """Return the 64-bit dHash Hamming-distance cutoff, not a frame rate."""
     return int(_PACE_DHASH_THRESHOLDS.get(
         (pace or "").strip().lower(),
         _PACE_DHASH_THRESHOLDS[_DEFAULT_PACE],

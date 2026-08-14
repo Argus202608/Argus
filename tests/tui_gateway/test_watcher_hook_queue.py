@@ -56,6 +56,7 @@ class TestWatcherHookQueue(unittest.TestCase):
         self.assertEqual(len(self.dispatched), 1)
         txt = self.dispatched[0]["text"]
         self.assertTrue(self.dispatched[0].get("internal_origin") == "watcher_hook")
+        self.assertIn("第1段", self.dispatched[0]["internal_fallback_text"])
         self.assertIn("整理成一份观影报告", txt)
         self.assertIn("monitor / watcher result for reference:", txt)
         self.assertIn("第1段", txt)  # report embedded
@@ -147,6 +148,14 @@ class TestWatcherHookQueue(unittest.TestCase):
         txt = self.dispatched[0]["text"]
         self.assertIn("monitor / watcher result for reference:", txt)
         self.assertNotIn("None", txt)
+
+    def test_fallback_is_empty_without_a_durable_report(self):
+        s = self._session()
+        self.S._enqueue_watcher_hook(
+            s, rid="req_no_report", label="L", task="T", report="")
+        self.S._drain_watcher_hook("d", "sid", s)
+        self.assertEqual(
+            self.dispatched[0].get("internal_fallback_text"), "")
 
     def test_busy_via_monitor_hook_flag_also_blocks(self):
         s = self._session()
@@ -284,6 +293,91 @@ def test_active_watcher_hook_queues_user_without_interrupt_then_drains(
     assert session["running"] is False
     assert session["_monitor_hook_running"] is False
     assert agent.interrupts == 0
+
+
+def test_failed_watcher_hook_delivers_durable_report_fallback(monkeypatch):
+    """A provider failure in the hidden synthesis turn must still complete the
+    visible Assistant slot with the consolidated watcher report."""
+    from tui_gateway import server
+
+    completed = threading.Event()
+    complete_payloads = []
+
+    class FailingAgent:
+        compression_enabled = True
+        mm_monitors = {}
+        mm_watchers = {}
+        session_id = "durable-watcher-fallback"
+
+        def clear_interrupt(self):
+            pass
+
+        def run_conversation(
+            self, _prompt, conversation_history=None, stream_callback=None,
+        ):
+            return {
+                "final_response": "",
+                "messages": list(conversation_history or []),
+                "failed": True,
+                "error": "provider rejected tool_use",
+            }
+
+    agent = FailingAgent()
+    sid = "live-watcher-fallback"
+    session = {
+        "agent": agent,
+        "attached_images": [],
+        "cols": 80,
+        "history": [],
+        "history_lock": threading.Lock(),
+        "history_version": 0,
+        "queued_prompt": None,
+        "queued_prompts": [],
+        "running": False,
+        "session_key": "durable-watcher-fallback",
+        "source": "tui",
+        "transport": None,
+    }
+
+    def emit(event, _sid, payload=None):
+        if event == "message.complete":
+            complete_payloads.append(payload or {})
+            completed.set()
+
+    monkeypatch.setitem(server._sessions, sid, session)
+    monkeypatch.setattr(server, "_emit", emit)
+    monkeypatch.setattr(server, "render_message", lambda *_args: "")
+    monkeypatch.setattr(server, "make_stream_renderer", lambda *_args: None)
+    monkeypatch.setattr(server, "_get_usage", lambda _agent: {})
+    monkeypatch.setattr(server, "_session_info", lambda *_args: {})
+    monkeypatch.setattr(server, "_get_db", lambda: None)
+    monkeypatch.setattr(server, "_set_session_context", lambda *_args: [])
+    monkeypatch.setattr(server, "_clear_session_context", lambda *_args: None)
+    monkeypatch.setattr(server, "_wire_callbacks", lambda *_args: None)
+    monkeypatch.setattr(server, "_register_session_cwd", lambda *_args: None)
+    monkeypatch.setattr(server, "_session_cwd", lambda *_args: "")
+    monkeypatch.setattr(
+        server, "_sync_session_key_after_compress", lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(server, "_voice_tts_enabled", lambda: False)
+
+    server._enqueue_watcher_hook(
+        session,
+        rid="watcher-fallback",
+        label="视频内容总结",
+        task="用中文整理视频内容",
+        report="第一段内容。\n\n第二段结论。",
+    )
+    assert server._drain_watcher_hook("drain", sid, session) is True
+    assert completed.wait(timeout=3)
+
+    assert len(complete_payloads) == 1
+    payload = complete_payloads[0]
+    assert payload["status"] == "complete"
+    assert payload["watcher_fallback"] is True
+    assert "第一段内容" in payload["text"]
+    assert "第二段结论" in payload["text"]
+    assert "provider rejected tool_use" not in payload["text"]
 
 
 if __name__ == "__main__":

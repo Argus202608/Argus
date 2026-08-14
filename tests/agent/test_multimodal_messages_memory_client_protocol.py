@@ -1,8 +1,9 @@
 """Offline wire-contract tests for ``MessagesMemoryClient``.
 
-The memory writer always supplies OpenAI-shaped messages. Remote
-``/v1/messages`` proxies expect Anthropic content blocks, while the local
-127.0.0.1:8080 hybrid endpoint deliberately keeps accepting the OpenAI shape.
+The memory writer always supplies OpenAI-shaped messages. A ``/v1/messages``
+path alone does not determine its content schema: remote Luna and the local
+127.0.0.1:8080 hybrid endpoint accept OpenAI content parts, while an explicit
+``/anthropic`` route selects Anthropic blocks.
 """
 
 from __future__ import annotations
@@ -65,7 +66,7 @@ async def _call_with_mock_post(
     return result, post
 
 
-def test_remote_messages_converts_system_and_image_to_anthropic_wire():
+def test_remote_messages_lifts_system_and_preserves_openai_image_parts():
     client = MessagesMemoryClient(
         base_url="https://messages.example.test/proxy/v1/messages",
         api_key="test-key",
@@ -105,16 +106,15 @@ def test_remote_messages_converts_system_and_image_to_anthropic_wire():
         "content": [
             {"type": "text", "text": "Describe this frame."},
             {
-                "type": "image",
-                "source": {
-                    "type": "base64",
-                    "media_type": "image/png",
-                    "data": "aW1hZ2UtYnl0ZXM=",
+                "type": "image_url",
+                "image_url": {
+                    "url": "data:image/png;base64,aW1hZ2UtYnl0ZXM=",
                 },
             },
         ],
     }]
-    assert "image_url" not in repr(payload["messages"])
+    assert "image_url" in repr(payload["messages"])
+    assert "'type': 'image'" not in repr(payload["messages"])
 
 
 def test_local_8080_hybrid_preserves_openai_system_and_image_url():

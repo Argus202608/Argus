@@ -3,7 +3,7 @@ import type {Config} from '@docusaurus/types';
 import type * as Preset from '@docusaurus/preset-classic';
 
 const config: Config = {
-  title: 'Hermes Agent',
+  title: 'MM-Argus',
   tagline: 'The self-improving AI agent',
   favicon: 'img/favicon.ico',
 
@@ -101,7 +101,7 @@ const config: Config = {
   ],
 
   themeConfig: {
-    image: 'img/hermes-agent-banner.png',
+    image: 'img/mmargus-banner.png',
     colorMode: {
       defaultMode: 'dark',
       respectPrefersColorScheme: true,
@@ -113,9 +113,9 @@ const config: Config = {
       },
     },
     navbar: {
-      title: 'Hermes Agent',
+      title: 'MM-Argus',
       logo: {
-        alt: 'Hermes Agent',
+        alt: 'MM-Argus',
         src: 'img/logo.png',
       },
       items: [

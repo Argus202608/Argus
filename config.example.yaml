@@ -92,22 +92,22 @@ model:
       round_ttl_sec: 120.0         # 无场景/无 ttl 时的兜底轮 ttl (秒)
       poll_interval: 2.0           # 攒帧轮询/进度推送间隔 (秒)
       report_every_rounds: 3       # 每 N 批推一次累积报告
-      # 原始采集仍持续、但去重后的画面连续 4 秒无新场景时，立即用手头尾帧分析，
+      # 原始采集仍持续、但去重后的画面连续 2 秒无新场景时，立即用手头尾帧分析，
       # 不再等待正常的 10~200 秒分段 TTL。这里只提前触发视觉判断，不直接判结束。
-      static_tail_flush_sec: 4.0
+      static_tail_flush_sec: 2.0
       # Luna 接口最多 50 图；当前段与召回历史图共享 48 图预算，保留协议余量。
       request_max_images: 48
-      # 分段模型只标记“疑似结束”；之后无新画面持续到以下时长，
-      # 再用末尾原始采集帧做一次独立视觉确认，避免把暂停/普通静态误判为结束。
-      completion_confirm_delay_sec: 3.0
+      # 分段模型标记“疑似结束”后，无新画面持续 2 秒即独立确认一次；
+      # 有可信结尾线索且没有恢复播放证据时立即结束并返回已有总结。
+      completion_confirm_delay_sec: 2.0
       # 高级兼容项：只有显式把 max_attempts 调回 2+ 时才生效；二次门槛按候选
       # 首次出现后的累计静止时长计算，首次模型调用耗时也计入。
       completion_confirm_retry_total_sec: 8.0
-      # 明确的进度到末尾/重播/结束卡由分段模型直接 finish；其他歧义只严格确认一次，
-      # 不再串行调用两次视觉模型。
+      # 明确的进度到末尾/重播/结束卡由分段模型直接 finish；其他疑似结尾确认一次，
+      # 不再串行调用两次视觉模型。0.6 接受“更可能结束”的判断。
       completion_confirm_max_attempts: 1
       completion_confirm_frames: 8
-      completion_confirm_min_confidence: 0.8
+      completion_confirm_min_confidence: 0.6
     # ReAct 大脑 (多轮派 search/recall)
     react:
       max_tokens: 512

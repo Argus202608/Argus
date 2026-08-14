@@ -323,10 +323,10 @@ class Config:
     watch_round_ttl_sec: float = 120.0  # 无场景/无 ttl 时的兜底轮 ttl (秒)
     watch_poll_interval: float = 2.0    # 攒帧时的轮询/进度推送间隔 (秒)
     # If raw capture keeps advancing but the dHash-novel tail stays unchanged,
-    # flush the partial batch after this short interval instead of waiting for
-    # the normal 10-200s scene TTL. This starts an end-state model check within
-    # the requested 3-5 second window without treating capture silence as end.
-    watch_static_tail_flush_sec: float = 4.0
+    # run one before/after raw-frame completion check after this interval instead
+    # of waiting for the normal 10-200s scene TTL. Raw timestamps must keep
+    # advancing, so a dead capture cannot be mistaken for an ended video.
+    watch_static_tail_flush_sec: float = 2.0
     # Provider accepts at most 50 images. Keep two slots of headroom for
     # provider-side wrappers and share this budget between recalled/current
     # frames in every Watcher ReAct request.
@@ -334,14 +334,19 @@ class Config:
     # A normal segment may flag a plausible ending without terminating the
     # watcher.  If no dHash-novel frame arrives for this grace period, a small
     # dedicated visual call re-checks the raw capture tail before task_complete.
-    watch_completion_confirm_delay_sec: float = 3.0
+    # Keep this aligned with static_tail_flush_sec so either detection path
+    # responds after the same two-second static boundary.
+    watch_completion_confirm_delay_sec: float = 2.0
     # Advanced compatibility knob used only when max_attempts is explicitly
     # raised above the default 1. It is a TOTAL no-novel-scene duration measured
     # from candidate detection, so prior waits/model latency also count.
     watch_completion_confirm_retry_total_sec: float = 8.0
     watch_completion_confirm_max_attempts: int = 1
     watch_completion_confirm_frames: int = 8
-    watch_completion_confirm_min_confidence: float = 0.8
+    # The verifier uses 0.6-0.79 for a likely (but not explicit) ending. Product
+    # policy prefers returning the accumulated report over waiting indefinitely
+    # once ending evidence is more likely than playback continuation.
+    watch_completion_confirm_min_confidence: float = 0.6
     # watch_stream_idle_stop: DELETED — 帧空闲启发式判"流停止"已废弃 (直播正常间隙会
     #   误判)。改用前端显式 multimodal.source_stopped 信号 (见 watcher_engine._source_stopped)。
     watch_max_rounds: int = 0           # 持续型硬上限 (轮数); 0/负=不限 (默认)。

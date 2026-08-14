@@ -312,8 +312,8 @@ def test_visual_task_complete_signal_stops_live_source_and_finalizes_once():
 
 
 def test_static_tail_flushes_partial_batch_before_long_ttl():
-    """A finite video task must inspect a continuously captured static tail
-    immediately instead of leaving a few end frames behind a 60-second gate."""
+    """Two seconds without visual change sends the before/after raw window to
+    the dedicated completion verifier instead of waiting for the 60s gate."""
     rid = "req_static_tail_fast"
     session = _session_with_turn2(rid)
     from agent.multimodal._memory import Frame, FrameBuffer
@@ -325,6 +325,7 @@ def test_static_tail_flushes_partial_batch_before_long_ttl():
         def __init__(self):
             super().__init__([], [])
             self.batch_timestamps = []
+            self.confirm_timestamps = []
 
         async def _spawn_delegation(self, *, on_event,
                                    ask_frames_override=None, **_kwargs):
@@ -344,18 +345,16 @@ def test_static_tail_flushes_partial_batch_before_long_ttl():
                     # raw screen. Only ts=60 enters the dHash-novel buffer.
                     for ts in range(60, 66):
                         fb.push(Frame(ts=float(ts), jpeg_b64=_grad(9)))
-                else:
-                    await on_event({
-                        "type": "answer_ready",
-                        "answer_full": "播放器显示 00:50/00:50，视频结束。",
-                        # Exercise the runtime guard for a conservative provider
-                        # that selected candidate despite exact end progress.
-                        "task_complete": False,
-                        "completion_candidate": True,
-                        "completion_candidate_reason": (
-                            "player displays 00:50/00:50 with a spinner"),
-                    })
             return _task()
+
+        async def confirm_visual_completion(self, **kwargs):
+            self.confirm_timestamps = [
+                frame.ts for frame in (kwargs.get("frames") or [])]
+            return (
+                True, 0.96,
+                "progress reached 00:50/00:50 across the static boundary",
+                "播放器显示 00:50/00:50，视频结束。",
+            )
 
     responder = _TailResponder()
     emits = []
@@ -364,7 +363,7 @@ def test_static_tail_flushes_partial_batch_before_long_ttl():
         _cfg(
             watch_min_batch=60,
             watch_round_ttl_sec=60.0,
-            watch_static_tail_flush_sec=4.0,
+            watch_static_tail_flush_sec=2.0,
             watch_poll_interval=0.01,
         ),
         session, "sid-static-tail", emits,
@@ -375,14 +374,170 @@ def test_static_tail_flushes_partial_batch_before_long_ttl():
         timeout=2.0,
     )
 
-    assert responder.calls == 2
-    assert max(responder.batch_timestamps[1]) == 65.0
+    assert responder.calls == 1
+    assert min(responder.confirm_timestamps) <= 60.0
+    assert max(responder.confirm_timestamps) >= 62.0
     assert any(
         ev == "multimodal.bg" and p.get("type") == "static_tail_flush"
         for ev, p in emits
     )
     completions = [p for ev, p in emits if ev == "watcher.complete"]
     assert completions[-1]["stop_reason"] == "task_complete"
+    finals = [p for ev, p in emits if ev == "watcher.final"]
+    assert finals and "视频结束" in finals[-1]["text"]
+
+
+def test_static_tail_flushes_when_zero_novel_frames_but_raw_capture_advances():
+    """A fully deduplicated end screen must still receive one raw-tail check.
+
+    This is the exact 0/N regression: after the first segment, capture keeps
+    delivering the same JPEG so the raw monitor cursor advances while the
+    dHash-novel buffer remains empty.  The watcher must flush one or two raw
+    captures before the long TTL instead of entering its indefinite pause.
+    """
+    rid = "req_static_tail_zero_novel"
+    session = _session_with_turn2(rid)
+    from agent.multimodal._memory import Frame, FrameBuffer
+    fb = FrameBuffer(SimpleNamespace(buffer_seconds=1800, buffer_capture_fps=2))
+    for i in range(60):
+        fb.push(Frame(ts=float(i), jpeg_b64=_grad(i)))
+
+    class _ZeroNovelTailResponder(_FakeResponder):
+        def __init__(self):
+            super().__init__([], [])
+            self.batch_timestamps = []
+            self.confirm_timestamps = []
+
+        async def _spawn_delegation(self, *, on_event,
+                                   ask_frames_override=None, **_kwargs):
+            idx = self.calls
+            self.calls += 1
+            batch = list(ask_frames_override or [])
+            self.batch_timestamps.append([frame.ts for frame in batch])
+
+            async def _task():
+                if idx == 0:
+                    await on_event({
+                        "type": "answer_ready",
+                        "answer_full": "视频主体内容。",
+                        "task_complete": False,
+                        "completion_candidate": False,
+                    })
+                    # Exact copies of the last retained frame advance only the
+                    # raw monitor deque.  No frame after ts=59 enters the novel
+                    # deque, faithfully reproducing the Web watcher at 0/N.
+                    for ts in range(60, 63):
+                        fb.push(Frame(ts=float(ts), jpeg_b64=_grad(59)))
+            return _task()
+
+        async def confirm_visual_completion(self, **kwargs):
+            self.confirm_timestamps = [
+                frame.ts for frame in (kwargs.get("frames") or [])]
+            return (
+                True, 0.95, "persistent raw end screen",
+                "静止的播放器结束画面已确认，视频结束。",
+            )
+
+    responder = _ZeroNovelTailResponder()
+    emits = []
+    eng = _build_engine(
+        fb, responder,
+        _cfg(
+            watch_min_batch=60,
+            watch_round_ttl_sec=60.0,
+            watch_static_tail_flush_sec=2.0,
+            watch_poll_interval=0.01,
+        ),
+        session, "sid-static-tail-zero", emits,
+    )
+    _run(
+        eng._run_delegation(
+            rid, task_instruction="持续观看，视频结束后生成总结"),
+        timeout=2.0,
+    )
+
+    assert responder.calls == 1
+    assert min(responder.confirm_timestamps) <= 59.0
+    assert max(responder.confirm_timestamps) >= 61.0
+    flushes = [
+        p for ev, p in emits
+        if ev == "multimodal.bg" and p.get("type") == "static_tail_flush"
+    ]
+    assert flushes and flushes[-1]["have"] == 0
+    completions = [p for ev, p in emits if ev == "watcher.complete"]
+    assert completions[-1]["stop_reason"] == "task_complete"
+
+
+def test_rejected_static_boundary_is_not_rechecked_until_scene_changes():
+    """A buffering/frozen verdict must latch the boundary instead of calling
+    the VLM again every two seconds on identical raw captures."""
+    rid = "req_static_tail_rejected_once"
+    session = _session_with_turn2(rid)
+    from agent.multimodal._memory import Frame, FrameBuffer
+    fb = FrameBuffer(SimpleNamespace(buffer_seconds=1800, buffer_capture_fps=2))
+    for i in range(60):
+        fb.push(Frame(ts=float(i), jpeg_b64=_grad(i)))
+
+    class _BufferingResponder(_FakeResponder):
+        def __init__(self):
+            super().__init__([], [])
+            self.confirm_calls = 0
+
+        async def _spawn_delegation(self, *, on_event, **_kwargs):
+            self.calls += 1
+
+            async def _task():
+                await on_event({
+                    "type": "answer_ready",
+                    "answer_full": "视频主体内容。",
+                    "task_complete": False,
+                    "completion_candidate": False,
+                })
+                for ts in range(60, 70):
+                    fb.push(Frame(ts=float(ts), jpeg_b64=_grad(59)))
+            return _task()
+
+        async def confirm_visual_completion(self, **_kwargs):
+            self.confirm_calls += 1
+            return (
+                False, 0.98,
+                "Spinner may indicate temporary buffering; no end UI is visible.",
+                "",
+            )
+
+    responder = _BufferingResponder()
+    emits = []
+    eng = _build_engine(
+        fb, responder,
+        _cfg(
+            watch_min_batch=60,
+            watch_round_ttl_sec=60.0,
+            watch_static_tail_flush_sec=2.0,
+            watch_poll_interval=0.01,
+        ),
+        session, "sid-static-tail-rejected", emits,
+    )
+    original_emit = eng._emit_cb
+
+    def _stop_after_latched_wait(event, payload):
+        original_emit(event, payload)
+        if payload.get("waiting_for_scene_change"):
+            eng._source_stopped = True
+
+    eng._emit_cb = _stop_after_latched_wait
+    _run(
+        eng._run_delegation(
+            rid, task_instruction="持续观看，视频结束后生成总结"),
+        timeout=2.0,
+    )
+
+    assert responder.calls == 1
+    assert responder.confirm_calls == 1
+    assert any(
+        event == "multimodal.bg"
+        and payload.get("waiting_for_scene_change")
+        for event, payload in emits
+    )
 
 
 def test_ambiguous_ending_is_confirmed_once_after_no_novel_frames():

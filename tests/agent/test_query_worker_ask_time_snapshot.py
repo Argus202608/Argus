@@ -915,6 +915,64 @@ class QueryWorkerAskTimeSnapshotTests(unittest.TestCase):
 
         asyncio.run(_case())
 
+    def test_visual_completion_accepts_likely_ending_on_first_check(self):
+        """A suspected ending must finish promptly instead of requiring
+        explicit replay UI or an exact elapsed/duration match."""
+        async def _case():
+            captured = {}
+
+            class _Completions:
+                async def create(self, **kwargs):
+                    captured.update(kwargs)
+                    message = SimpleNamespace(content=json.dumps({
+                        "ended": True,
+                        "confidence": 0.65,
+                        "reason": (
+                            "closing speech and a stable terminal-looking frame; "
+                            "no playback resume is visible"
+                        ),
+                        "final_observation": "The likely ending remained static.",
+                    }))
+                    return SimpleNamespace(choices=[SimpleNamespace(
+                        message=message, finish_reason="stop")])
+
+            worker = WatcherWorker.__new__(WatcherWorker)
+            worker.cfg = SimpleNamespace(
+                model="test-model",
+                watch_completion_confirm_min_confidence=0.6,
+            )
+            worker.client = SimpleNamespace(
+                chat=SimpleNamespace(completions=_Completions()))
+            worker.recorder = None
+
+            from agent.multimodal._memory import Frame
+            result = await worker.confirm_visual_completion(
+                task_instruction="Watch until the video ends.",
+                candidate_reason="The presenter gave a closing line.",
+                last_segment_report="A closing interaction was visible.",
+                idle_sec=2.0,
+                attempt=1,
+                total_idle_sec=2.0,
+                frames=[
+                    Frame(ts=8.0, jpeg_b64="frame-a"),
+                    Frame(ts=10.0, jpeg_b64="frame-b"),
+                ],
+            )
+
+            self.assertTrue(result[0])
+            self.assertEqual(result[1], 0.65)
+            system_prompt = " ".join(
+                captured["messages"][0]["content"].split())
+            self.assertIn(
+                "Timely completion is the product priority", system_prompt)
+            self.assertIn(
+                "more consistent with completion than continuation",
+                system_prompt,
+            )
+            self.assertFalse(captured["stream"])
+
+        asyncio.run(_case())
+
     def test_query_worker_prompt_completes_mixed_visual_external_questions(self):
         async def _case():
             captured = {}

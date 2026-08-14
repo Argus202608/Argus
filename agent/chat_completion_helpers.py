@@ -34,6 +34,14 @@ from agent.message_sanitization import (
     _sanitize_surrogates,
     _repair_tool_call_arguments,
 )
+from agent.messages_wire import (
+    hybrid_messages_from_chat,
+    is_local_hybrid_messages_endpoint,
+    openai_messages_from_chat,
+    tools_wire_label,
+    uses_anthropic_messages_wire,
+    uses_anthropic_tools_wire,
+)
 from tools.terminal_tool import is_persistent_env
 from utils import base_url_host_matches, base_url_hostname, env_float, env_int
 
@@ -74,21 +82,17 @@ def _messages_proxy_endpoint(base_url: str) -> str:
 
 
 def _messages_proxy_uses_anthropic_wire(base_url: str) -> bool:
-    base = (base_url or "").strip().lower()
-    return (
-        base.endswith("/v1/messages")
-        and "127.0.0.1:8080" not in base
-        and "localhost:8080" not in base
-    )
+    return uses_anthropic_messages_wire(base_url)
 
 
 def _uses_messages_proxy(agent) -> bool:
-    """True for gateways that expose Anthropic-style /v1/messages.
+    """True for gateways that expose a direct ``/v1/messages`` transport.
 
-    The proxy accepts OpenAI-style messages/image_url/tools and returns
-    chat-completion-shaped JSON, but the OpenAI SDK cannot target it because
-    it appends /chat/completions. Some compatible gateways return native
-    Messages-shaped JSON, which we normalize below.
+    The payload may use OpenAI or Anthropic content blocks; that independent
+    decision is centralized in :mod:`agent.messages_wire`.  The OpenAI SDK
+    cannot target either leaf directly because it appends /chat/completions.
+    Compatible gateways may return either chat-completion-shaped or native
+    Messages-shaped JSON, which is normalized below.
     """
     model = str(getattr(agent, "model", "") or "").strip().lower()
     base = str(getattr(agent, "base_url", "") or "").strip().lower()
@@ -378,8 +382,31 @@ def _messages_proxy_payload(api_kwargs: dict, base_url: str = "") -> dict:
             allowed = {"model", "messages", "tools", "tool_choice"}
             payload = {k: v for k, v in api_kwargs.items() if k in allowed}
     else:
-        allowed = {"model", "messages", "tools", "tool_choice"}
-        payload = {k: v for k, v in api_kwargs.items() if k in allowed}
+        if uses_anthropic_tools_wire(base_url):
+            system, messages = hybrid_messages_from_chat(
+                api_kwargs.get("messages") or [],
+                lift_system=not is_local_hybrid_messages_endpoint(base_url),
+            )
+        else:
+            system, messages = openai_messages_from_chat(
+                api_kwargs.get("messages") or [],
+                lift_system=not is_local_hybrid_messages_endpoint(base_url),
+            )
+        payload = {"model": api_kwargs.get("model"), "messages": messages}
+        if system:
+            payload["system"] = system
+        if uses_anthropic_tools_wire(base_url):
+            tools = _anthropic_tools_from_openai(api_kwargs.get("tools") or [])
+            if tools:
+                payload["tools"] = tools
+            converted_choice = _anthropic_tool_choice(
+                api_kwargs.get("tool_choice"), payload)
+            if converted_choice is not None and payload.get("tools"):
+                payload["tool_choice"] = converted_choice
+        else:
+            for key in ("tools", "tool_choice"):
+                if key in api_kwargs:
+                    payload[key] = api_kwargs[key]
     max_out = (
         api_kwargs.get("max_tokens")
         or api_kwargs.get("max_completion_tokens")
@@ -606,7 +633,7 @@ def _env_float(name: str, default: float) -> float:
 # chat.completions.create call: message count, image-part count, latency,
 # and the response's usage numbers. Points to "slow turn" root causes:
 #
-#   [mm-llm] SEND msgs=N imgs=K think=True
+#   [mm-llm] SEND msgs=N imgs=K tool_count=T tool_wire=anthropic think=True
 #     ↳ K=4 with a plain math question means explicit/legacy image parts
 #       remained in the provider payload → inspect history stripping.
 #   [mm-llm] RECV 42.1s in=27431 out=812 reason=712
@@ -665,12 +692,22 @@ def _mm_diag_before(agent, api_kwargs: dict) -> None:
                          or ((extra.get("chat_template_kwargs") or {})
                              .get("enable_thinking")))
         agent._mm_diag_t0 = time.monotonic()
+        tool_wire = (
+            tools_wire_label(
+                getattr(agent, "base_url", ""),
+                api_mode=getattr(agent, "api_mode", None),
+            )
+            if _uses_messages_proxy(agent)
+            else "openai"
+        )
         payload = {
             "phase": "SEND",
             "model": api_kwargs.get("model", "?"),
             "msgs": len(msgs),
             "imgs": img_parts,
             "img_bytes": img_bytes,
+            "tool_count": len(api_kwargs.get("tools") or []),
+            "tool_wire": tool_wire,
             "think": think,
             "max_out": api_kwargs.get("max_tokens"),
             "stream": bool(api_kwargs.get("stream")),
