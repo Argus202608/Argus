@@ -3,8 +3,8 @@
   "name": "Argus",
   "version": "0.1.0",
   "description": "Real-time multimodal AI agent with ACP editor integration, persistent memory, skills, and rich tool support.",
-  "repository": "https://github.com/Argus202608/Argus",
-  "website": "https://github.com/Argus202608/Argus/tree/main/website/docs/user-guide/features/acp.md",
+  "repository": "https://github.com/MMArgus-Team/Argus",
+  "website": "https://github.com/MMArgus-Team/Argus/tree/main/website/docs/user-guide/features/acp.md",
   "authors": ["Nous Research", "Argus Contributors"],
   "license": "MIT",
   "distribution": {

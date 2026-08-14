@@ -36,7 +36,7 @@ El nombre de la distribución es `mm-argus` y el comando principal es `argus`.
 ## Instalación desde el código fuente
 
 ```bash
-git clone https://github.com/Argus202608/Argus.git
+git clone https://github.com/MMArgus-Team/Argus.git
 cd argus
 uv venv --python 3.11 .venv
 source .venv/bin/activate
@@ -70,7 +70,7 @@ npm --workspace apps/desktop run dev
 ## Enlaces
 
 - [Documentación](website/docs)
-- [Incidencias](https://github.com/Argus202608/Argus/issues)
+- [Incidencias](https://github.com/MMArgus-Team/Argus/issues)
 - [Política de seguridad](SECURITY.es.md)
 - [Contribuir](CONTRIBUTING.es.md)
 

@@ -43,7 +43,7 @@ PyPI پیکیج کا نام `mm-argus` اور بنیادی کمانڈ `argus` ہ
 <div dir="ltr">
 
 ```bash
-git clone https://github.com/Argus202608/Argus.git
+git clone https://github.com/MMArgus-Team/Argus.git
 cd argus
 uv venv --python 3.11 .venv
 source .venv/bin/activate
@@ -72,7 +72,7 @@ API keys، tokens اور passwords رکھیں۔ حقیقی credentials کبھی 
 ## روابط
 
 - [دستاویزات](website/docs)
-- [مسائل](https://github.com/Argus202608/Argus/issues)
+- [مسائل](https://github.com/MMArgus-Team/Argus/issues)
 - [سیکیورٹی پالیسی](SECURITY.md)
 - [تعاون](CONTRIBUTING.md)
 

@@ -296,10 +296,10 @@ all = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/Argus202608/Argus"
-Repository = "https://github.com/Argus202608/Argus"
-Issues = "https://github.com/Argus202608/Argus/issues"
-Documentation = "https://github.com/Argus202608/Argus/tree/main/website/docs"
+Homepage = "https://github.com/MMArgus-Team/Argus"
+Repository = "https://github.com/MMArgus-Team/Argus"
+Issues = "https://github.com/MMArgus-Team/Argus/issues"
+Documentation = "https://github.com/MMArgus-Team/Argus/tree/main/website/docs"
 
 [project.scripts]
 argus = "hermes_cli.main:main"

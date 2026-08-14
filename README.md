@@ -47,7 +47,7 @@ compatibility with inherited integrations.
 ## Install from source
 
 ```bash
-git clone https://github.com/Argus202608/Argus.git
+git clone https://github.com/MMArgus-Team/Argus.git
 cd argus
 
 uv venv --python 3.11 .venv
@@ -121,7 +121,7 @@ npm --workspace apps/desktop run test:desktop
 ## Documentation and support
 
 - [Documentation source](website/docs)
-- [Issues](https://github.com/Argus202608/Argus/issues)
+- [Issues](https://github.com/MMArgus-Team/Argus/issues)
 - [Security policy](SECURITY.md)
 - [Contributing](CONTRIBUTING.md)
 
