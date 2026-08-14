@@ -1,70 +1,69 @@
-import { type AppendMessage, AssistantRuntimeProvider, type ThreadMessage } from '@assistant-ui/react'
+import {
+  type AppendMessage,
+  AssistantRuntimeProvider,
+  ExportedMessageRepository,
+  type ThreadMessage
+} from '@assistant-ui/react'
 import { useStore } from '@nanostores/react'
 import { useQuery } from '@tanstack/react-query'
-import type { ReadableAtom } from 'nanostores'
 import type * as React from 'react'
-import { memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useLocation } from 'react-router'
+import { Suspense, useCallback, useMemo, useRef } from 'react'
+import { useLocation } from 'react-router-dom'
 
-import type { SubmitTextOptions } from '@/app/session/hooks/use-prompt-actions/utils'
 import { Thread } from '@/components/assistant-ui/thread'
-import { TranscriptWindowProvider } from '@/components/assistant-ui/thread/transcript-window'
 import { Backdrop } from '@/components/Backdrop'
-import { COMPOSER_HEART_CONFIG, HeartField } from '@/components/chat/vibe-hearts'
-import { usePaneVisible } from '@/components/pane-shell/pane-visibility'
-import { $sessionTileDragging, $sessionTileEdgeHover } from '@/components/pane-shell/tree/store'
 import { PromptOverlays } from '@/components/prompt-overlays'
 import { Button } from '@/components/ui/button'
+import { Codicon } from '@/components/ui/codicon'
 import { ErrorState } from '@/components/ui/error-state'
-import { TitleMenuTrigger } from '@/components/ui/title-menu-trigger'
-import { type HermesGateway } from '@/hermes'
+import { getGlobalModelOptions, type HermesGateway } from '@/hermes'
 import { useI18n } from '@/i18n'
 import type { ChatMessage } from '@/lib/chat-messages'
-import { NEW_SESSION_TITLE, quickModelOptions, sessionTitle } from '@/lib/chat-runtime'
+import { quickModelOptions, sessionTitle, toRuntimeMessage } from '@/lib/chat-runtime'
 import { useIncrementalExternalStoreRuntime } from '@/lib/incremental-external-store-runtime'
-import { modelOptionsQueryKey, requestModelOptions } from '@/lib/model-options'
 import { cn } from '@/lib/utils'
-import { migrateSessionDraft } from '@/store/composer'
-import { migrateQueuedPrompts, parkQueuedPrompts } from '@/store/composer-queue'
+import type { ComposerAttachment } from '@/store/composer'
 import { $pinnedSessionIds } from '@/store/layout'
-import { $petActive } from '@/store/pet'
-import { $petOverlayActive } from '@/store/pet-overlay'
-import { $activeGatewayProfile, $gatewaySwapTarget, $profiles } from '@/store/profile'
+import { $gatewaySwapTarget } from '@/store/profile'
 import {
+  $activeSessionId,
+  $awaitingResponse,
+  $busy,
   $contextSuggestions,
-  $freshDraftReady,
+  $currentCwd,
+  $currentModel,
+  $currentProvider,
   $gatewayState,
   $introPersonality,
   $introSeed,
+  $lastVisibleMessageIsUser,
+  $messages,
+  $messagesEmpty,
   $resumeExhaustedSessionId,
+  $selectedStoredSessionId,
   $sessions,
-  resolveComposerSessionKey,
-  sessionMatchesStoredId,
-  sessionPinId,
-  shouldMigrateComposerScope
+  sessionPinId
 } from '@/store/session'
-import { isAuxiliaryWindow, isWatchWindow } from '@/store/windows'
+import { $mmRailCollapsed, toggleMmRail } from '@/store/multimodal'
+import { isSecondaryWindow } from '@/store/windows'
 import type { ModelOptionsResponse } from '@/types/hermes'
+import { PanelLeftIcon } from '@/lib/icons'
 
-import { primaryRouteSelectedSessionId, routeSessionId } from '../routes'
+import { DeepRail, MediaRail } from '../multimodal/rail'
+import { routeSessionId } from '../routes'
 import { titlebarHeaderBaseClass, titlebarHeaderShadowClass, titlebarHeaderTitleClass } from '../shell/titlebar'
 
 import { ChatDropOverlay } from './chat-drop-overlay'
 import { ChatSwapOverlay } from './chat-swap-overlay'
 import { ChatBar, ChatBarFallback } from './composer'
-import { requestComposerInsert } from './composer/focus'
-import { droppedFileInlineRefs } from './composer/inline-refs'
-import { useComposerScope } from './composer/scope'
+import { requestComposerInsert, requestComposerInsertRefs } from './composer/focus'
+import { droppedFileInlineRefs, type SessionDragPayload, sessionInlineRef } from './composer/inline-refs'
 import type { ChatBarState } from './composer/types'
 import { type DroppedFile, partitionDroppedFiles } from './hooks/use-composer-actions'
-import { type DragKind, useFileDropZone } from './hooks/use-file-drop-zone'
-import { ProfileTag } from './profile-tag'
-import { useRuntimeMessageRepository } from './runtime-repository'
+import { useFileDropZone } from './hooks/use-file-drop-zone'
 import { ScrollToBottomButton } from './scroll-to-bottom-button'
-import { useSessionView } from './session-view'
 import { SessionActionsMenu } from './sidebar/session-actions-menu'
 import { threadLoadingState } from './thread-loading'
-import { advanceTranscriptWindow, type TranscriptWindowState } from './transcript-window'
 
 interface ChatViewProps extends Omit<React.ComponentProps<'div'>, 'onSubmit'> {
   gateway: HermesGateway | null
@@ -74,24 +73,24 @@ interface ChatViewProps extends Omit<React.ComponentProps<'div'>, 'onSubmit'> {
   onCancel: () => Promise<void> | void
   onAddContextRef: (refText: string, label?: string, detail?: string) => void
   onAddUrl: (url: string) => void
-  onBranchInNewChat?: (messageId: string) => void
-  maxVoiceRecordingSeconds?: number
+  onBranchInNewChat: (messageId: string) => void
   onAttachImageBlob: (blob: Blob) => Promise<boolean | void> | boolean | void
   onAttachDroppedItems: (candidates: DroppedFile[]) => Promise<boolean | void> | boolean | void
-  onAttachPrCommentUrl?: (url: string) => boolean
   onPasteClipboardImage: (opts?: { silent?: boolean }) => Promise<boolean> | void
   onPickFiles: () => void
   onPickFolders: () => void
   onPickImages: () => void
   onRemoveAttachment: (id: string) => void
   onSteer: (text: string) => Promise<boolean> | boolean
-  onSubmit: (text: string, options?: SubmitTextOptions) => Promise<boolean> | boolean
+  onSubmit: (
+    text: string,
+    options?: { attachments?: ComposerAttachment[]; fromQueue?: boolean }
+  ) => Promise<boolean> | boolean
   onThreadMessagesChange: (messages: readonly ThreadMessage[]) => void
   onEdit: (message: AppendMessage) => Promise<void>
   onReload: (parentId: string | null) => Promise<void>
   onRestoreToMessage?: (messageId: string, target?: { text?: string; userOrdinal?: number | null }) => Promise<void>
   onRetryResume: (sessionId: string) => void
-  onTranscribeAudio?: (audio: Blob) => Promise<string>
   onDismissError?: (messageId: string) => void
 }
 
@@ -112,17 +111,11 @@ function ChatHeader({
 }: ChatHeaderProps) {
   const sessions = useStore($sessions)
   const pinnedSessionIds = useStore($pinnedSessionIds)
-  const profiles = useStore($profiles)
 
   const activeStoredSession =
-    (selectedSessionId && sessions.find(session => sessionMatchesStoredId(session, selectedSessionId))) || null
+    sessions.find(session => session.id === selectedSessionId || session._lineage_root_id === selectedSessionId) || null
 
-  const title = activeStoredSession ? sessionTitle(activeStoredSession) : NEW_SESSION_TITLE
-
-  // Which agent/persona owns this chat — glanceable in the header once a
-  // second profile exists, so the open session's ownership is never ambiguous
-  // (#66003). Single-profile users see the unchanged header.
-  const showProfileTag = profiles.length > 1 && Boolean(activeStoredSession)
+  const title = activeStoredSession ? sessionTitle(activeStoredSession) : 'New session'
 
   // Pins live on the durable lineage-root id, but selectedSessionId is the live
   // (tip) id — resolve through the loaded row so the menu reflects the pin
@@ -136,20 +129,25 @@ function ChatHeader({
   // Secondary windows (new-session scratch, subagent watch, cmd-click pop-out)
   // are compact side panels — they drop the session-actions header + border
   // entirely. A brand-new draft has nothing to pin/delete/rename either.
-  if (isAuxiliaryWindow() || (!selectedSessionId && !activeSessionId && !isRoutedSessionView)) {
+  if (isSecondaryWindow() || (!selectedSessionId && !activeSessionId && !isRoutedSessionView)) {
     return null
   }
 
   return (
     <header className={cn(titlebarHeaderBaseClass, isRoutedSessionView && titlebarHeaderShadowClass)}>
+      {/* ★ 共享标题栏 (横跨 视频列 + 主对话列 + 深度研究列): 折叠按钮 + "Multimodal" + 会话下拉。
+         base class 是 pointer-events-none, 交互子元素需自带 pointer-events-auto + no-drag。 */}
+      <RailCollapseButton />
+      <span className="shrink-0 select-none text-[0.75rem] font-semibold leading-none text-(--ui-text-secondary)">
+        Multimodal
+      </span>
       <div
-        className={cn(titlebarHeaderTitleClass, showProfileTag && 'flex items-center')}
+        className={titlebarHeaderTitleClass}
         style={{
           maxWidth:
             'calc(100vw - var(--titlebar-content-inset,0px) - var(--titlebar-tools-right) - var(--titlebar-tools-width) - 1.5rem)'
         }}
       >
-        {showProfileTag && <ProfileTag className="pointer-events-auto mr-1.5" profile={activeStoredSession?.profile} />}
         <SessionActionsMenu
           align="start"
           onDelete={selectedSessionId ? onDeleteSelectedSession : undefined}
@@ -159,10 +157,39 @@ function ChatHeader({
           sideOffset={8}
           title={title}
         >
-          <TitleMenuTrigger>{title}</TitleMenuTrigger>
+          <Button
+            className="pointer-events-auto flex h-6 min-w-0 max-w-full gap-1 overflow-hidden border border-transparent bg-transparent px-2 py-0 text-(--ui-text-secondary) hover:border-(--ui-stroke-tertiary) hover:bg-(--ui-control-hover-background) hover:text-foreground data-[state=open]:border-(--ui-stroke-tertiary) data-[state=open]:bg-(--ui-control-active-background) [-webkit-app-region:no-drag]"
+            type="button"
+            variant="ghost"
+          >
+            <h2 className="min-w-0 flex-1 truncate text-[0.75rem] font-medium leading-none">{title}</h2>
+            <Codicon className="shrink-0 text-(--ui-text-tertiary)" name="chevron-down" size="0.8125rem" />
+          </Button>
         </SessionActionsMenu>
       </div>
+      {/* 标题栏喇叭/停止朗读按钮已移除: 朗读控制改由每条 assistant 消息头部行的
+         播放/停止按钮承担 (可播放、播放时变停止、切换播放旧按钮复位)。 */}
     </header>
+  )
+}
+
+/**
+ * 共享标题栏最左端的折叠/展开按钮 —— 切换左侧视频流列 (MediaRail) 的显隐。
+ * 窗口缩小时视频列不再自动隐藏, 由用户点此手动收起/调出。
+ */
+function RailCollapseButton() {
+  const collapsed = useStore($mmRailCollapsed)
+  return (
+    <Button
+      aria-label={collapsed ? '显示视频流' : '隐藏视频流'}
+      className="pointer-events-auto flex size-6 shrink-0 items-center justify-center border border-transparent bg-transparent p-0 text-(--ui-text-secondary) hover:border-(--ui-stroke-tertiary) hover:bg-(--ui-control-hover-background) hover:text-foreground [-webkit-app-region:no-drag]"
+      onClick={() => toggleMmRail()}
+      title={collapsed ? '显示视频流' : '隐藏视频流'}
+      type="button"
+      variant="ghost"
+    >
+      <PanelLeftIcon className={cn('size-3.5', collapsed && 'text-(--ui-text-tertiary)')} />
+    </Button>
   )
 }
 
@@ -179,30 +206,6 @@ interface ChatRuntimeBoundaryProps {
 }
 
 const NO_MESSAGES: ChatMessage[] = []
-
-/**
- * The view's $messages, live only while this surface is the VISIBLE tab.
- *
- * Keep-alive keeps every ever-active tab MOUNTED (tree-group.tsx), so without
- * this gate a hidden tab re-renders its entire thread on every streaming
- * delta flush (~30×/s) — five busy tabs quintuple the per-token render cost
- * and the app crawls. Hidden tabs freeze their transcript instead (status
- * dots stay live through the separate status atoms) and catch up in one
- * commit on reveal — the subscribe fires immediately with the current value.
- */
-function useMessagesWhileVisible($messages: ReadableAtom<ChatMessage[]>): ChatMessage[] {
-  const visible = usePaneVisible()
-  const [messages, setMessages] = useState(() => $messages.get())
-
-  // nanostores types the listener value ReadonlyIfObject; the store publishes
-  // a fresh array per flush, so the cast is safe and avoids a per-token clone.
-  useEffect(
-    () => (visible ? $messages.subscribe(value => setMessages(value as ChatMessage[])) : undefined),
-    [$messages, visible]
-  )
-
-  return messages
-}
 
 /**
  * Owns the $messages subscription and the assistant-ui external-store runtime.
@@ -223,38 +226,44 @@ function ChatRuntimeBoundary({
   onThreadMessagesChange,
   suppressMessages
 }: ChatRuntimeBoundaryProps) {
-  const view = useSessionView()
-  const runtimeId = useStore(view.$runtimeId)
-  const storeMessages = useMessagesWhileVisible(view.$messages)
+  const storeMessages = useStore($messages)
   const messages = suppressMessages ? NO_MESSAGES : storeMessages
+  const runtimeMessageCacheRef = useRef(new WeakMap<ChatMessage, ThreadMessage>())
 
-  const [windowPages, setWindowPages] = useState(1)
-  const [windowSessionKey, setWindowSessionKey] = useState(runtimeId)
-  // Sticky-cut continuity across flushes (advanceTranscriptWindow). A ref, not
-  // state: it is derived from `messages` and must never trigger a render.
-  const windowStateRef = useRef<null | TranscriptWindowState>(null)
+  const runtimeMessageRepository = useMemo(() => {
+    const items: { message: ThreadMessage; parentId: string | null }[] = []
+    const branchParentByGroup = new Map<string, string | null>()
+    let visibleParentId: string | null = null
+    let headId: string | null = null
 
-  // Reset the window on session swap during RENDER, so a large expand from the
-  // previous chat can't leak into the next one's first paint (#55191).
-  if (windowSessionKey !== runtimeId) {
-    setWindowSessionKey(runtimeId)
-    setWindowPages(1)
-    windowStateRef.current = null
-  }
+    for (const message of messages) {
+      let parentId = visibleParentId
 
-  const { messages: windowedMessages, windowed } = useMemo(() => {
-    const next = advanceTranscriptWindow(windowStateRef.current, messages, windowPages)
+      if (message.role === 'assistant' && message.branchGroupId) {
+        if (!branchParentByGroup.has(message.branchGroupId)) {
+          branchParentByGroup.set(message.branchGroupId, visibleParentId)
+        }
 
-    windowStateRef.current = next
+        parentId = branchParentByGroup.get(message.branchGroupId) ?? null
+      }
 
-    return next.window
-  }, [messages, windowPages])
+      const cachedMessage = runtimeMessageCacheRef.current.get(message)
+      const runtimeMessage = cachedMessage ?? toRuntimeMessage(message)
 
-  const runtimeMessageRepository = useRuntimeMessageRepository(windowedMessages)
+      if (!cachedMessage) {
+        runtimeMessageCacheRef.current.set(message, runtimeMessage)
+      }
 
-  const expandWindow = useCallback(() => setWindowPages(pages => pages + 1), [])
+      items.push({ message: runtimeMessage, parentId })
 
-  const transcriptWindow = useMemo(() => ({ olderAvailable: windowed, expandWindow }), [expandWindow, windowed])
+      if (!message.hidden) {
+        visibleParentId = message.id
+        headId = message.id
+      }
+    }
+
+    return ExportedMessageRepository.fromBranchableArray(items, { headId })
+  }, [messages])
 
   const runtime = useIncrementalExternalStoreRuntime<ThreadMessage>({
     messageRepository: runtimeMessageRepository,
@@ -269,17 +278,10 @@ function ChatRuntimeBoundary({
     onReload
   })
 
-  return (
-    <TranscriptWindowProvider value={transcriptWindow}>
-      <AssistantRuntimeProvider runtime={runtime}>{children}</AssistantRuntimeProvider>
-    </TranscriptWindowProvider>
-  )
+  return <AssistantRuntimeProvider runtime={runtime}>{children}</AssistantRuntimeProvider>
 }
 
-// Memoized: the tile caller (session-tile.tsx) and the contrib surface re-render
-// on idle ticks unrelated to the chat; with stable callback props (hoisted to
-// useCallback at the call sites) memo() lets the whole chat shell skip those.
-export const ChatView = memo(function ChatView({
+export function ChatView({
   className,
   gateway,
   modelMenuContent,
@@ -290,9 +292,7 @@ export const ChatView = memo(function ChatView({
   onAddUrl,
   onAttachImageBlob,
   onAttachDroppedItems,
-  onAttachPrCommentUrl,
   onBranchInNewChat,
-  maxVoiceRecordingSeconds,
   onPasteClipboardImage,
   onPickFiles,
   onPickFolders,
@@ -305,95 +305,33 @@ export const ChatView = memo(function ChatView({
   onReload,
   onRestoreToMessage,
   onRetryResume,
-  onTranscribeAudio,
   onDismissError
 }: ChatViewProps) {
   const location = useLocation()
   const { t } = useI18n()
-  // The view this surface renders: the primary route-driven session (global
-  // atoms) or a tile's session slice — same component either way.
-  const view = useSessionView()
-  const composerScope = useComposerScope()
-  const isPrimary = view.kind === 'primary'
-  const activeSessionId = useStore(view.$runtimeId)
-  const storedId = useStore(view.$storedId)
-  // Dock anchor for a session drop onto this surface: the workspace pane for the
-  // primary, this tile's pane id for a tile. Read by the session-drop bridge.
-  const sessionAnchor = isPrimary ? 'workspace' : `session-tile:${storedId ?? ''}`
-  const awaitingResponse = useStore(view.$awaitingResponse)
-  const busy = useStore(view.$busy)
-  const activeGatewayProfile = useStore($activeGatewayProfile)
+  const activeSessionId = useStore($activeSessionId)
+  const awaitingResponse = useStore($awaitingResponse)
+  const busy = useStore($busy)
+  const railCollapsed = useStore($mmRailCollapsed)
   const contextSuggestions = useStore($contextSuggestions)
-  // Per-session (SessionView) reads — a tile IS its session, so these come
-  // from the view slice, not the global atoms (which track the primary only).
-  const currentCwd = useStore(view.$cwd)
-  const currentModel = useStore(view.$model)
-  const currentProvider = useStore(view.$provider)
-  // A pet anywhere (in-window or popped out) owns the hearts; composer only when none.
-  const petActive = useStore($petActive)
-  const petOverlayActive = useStore($petOverlayActive)
-  const petPresent = petActive || petOverlayActive
-  const freshDraftReady = useStore($freshDraftReady)
+  const currentCwd = useStore($currentCwd)
+  const currentModel = useStore($currentModel)
+  const currentProvider = useStore($currentProvider)
   const gatewayState = useStore($gatewayState)
   const gatewaySwapTarget = useStore($gatewaySwapTarget)
   const gatewayOpen = gatewayState === 'open'
   const introPersonality = useStore($introPersonality)
   const introSeed = useStore($introSeed)
-  // PERF: ChatView must not subscribe to the view's $messages — the atom is
-  // replaced on every streaming delta flush (~30×/s) and a subscription here
-  // re-renders the entire chat shell (header, chat bar, thread wrapper) per
-  // token. The runtime that DOES need the messages lives in
-  // ChatRuntimeBoundary below; this component only needs streaming-stable
-  // derivations.
-  const messagesEmpty = useStore(view.$messagesEmpty)
-  const lastVisibleIsUser = useStore(view.$lastVisibleIsUser)
-  const selectedSessionId = useStore(view.$storedId)
-  const sessions = useStore($sessions)
+  // PERF: ChatView must not subscribe to $messages — the atom is replaced on
+  // every streaming delta flush (~30×/s) and a subscription here re-renders
+  // the entire chat shell (header, chat bar, thread wrapper) per token. The
+  // runtime that DOES need the messages lives in ChatRuntimeBoundary below;
+  // this component only needs streaming-stable derivations.
+  const messagesEmpty = useStore($messagesEmpty)
+  const lastVisibleIsUser = useStore($lastVisibleMessageIsUser)
+  const selectedSessionId = useStore($selectedStoredSessionId)
   const resumeExhaustedSessionId = useStore($resumeExhaustedSessionId)
-
-  // Durable composer/queue scope (lineage root) so auto-compression tip rotation
-  // does not wipe an in-progress draft or orphan /queue entries. For the
-  // primary view, the route is authoritative over the store selection — the
-  // latter can be momentarily null/stale mid-switch, which used to leak into
-  // the composer's scope key (#59305). A tile has no route, so it always uses
-  // its own selection directly.
-  const queueSessionKey = useMemo(() => {
-    const effectiveSelectedSessionId = isPrimary
-      ? primaryRouteSelectedSessionId(location.pathname, selectedSessionId)
-      : selectedSessionId
-
-    return resolveComposerSessionKey(effectiveSelectedSessionId, sessions)
-  }, [isPrimary, location.pathname, selectedSessionId, sessions])
-
-  // When the tip row arrives after compression, migrate any tip-keyed stash onto
-  // the durable lineage key before the composer remounts onto that key.
-  //
-  // ONLY same-conversation rekeys (tip → root). The route-driven queueSessionKey
-  // can flip to Session B a frame before the store selection leaves Session A;
-  // migrating on bare inequality would re-home A's queued prompts onto B and
-  // auto-drain them into the wrong chat.
-  useEffect(() => {
-    if (!shouldMigrateComposerScope(selectedSessionId, queueSessionKey, sessions)) {
-      return
-    }
-
-    migrateSessionDraft(selectedSessionId, queueSessionKey)
-    migrateQueuedPrompts(selectedSessionId, queueSessionKey)
-  }, [queueSessionKey, selectedSessionId, sessions])
-
-  // Transcript-side stops (the streaming message's hover Stop, the runtime's
-  // cancel) are explicit halts, same as the composer's Stop button: park any
-  // queued turns so the interrupt doesn't roll straight into the next one.
-  // ChatBar wraps its own onCancel internally — its send-now-while-busy path
-  // needs the raw interrupt — so it still receives the unwrapped prop.
-  const haltRun = useCallback(() => {
-    parkQueuedPrompts(queueSessionKey || activeSessionId)
-
-    return onCancel()
-  }, [activeSessionId, onCancel, queueSessionKey])
-
-  // A tile IS its session — no route involved, never "mismatched".
-  const routedSessionId = isPrimary ? routeSessionId(location.pathname) : selectedSessionId
+  const routedSessionId = routeSessionId(location.pathname)
   const isRoutedSessionView = Boolean(routedSessionId)
 
   // The URL points at a session the store hasn't loaded yet (sidebar / cmd-K /
@@ -402,16 +340,9 @@ export const ChatView = memo(function ChatView({
   // waiting for the resume effect (which paints a frame later) to clear them.
   const routeSessionMismatch = isRoutedSessionView && routedSessionId !== selectedSessionId
 
-  // The compact new-session pop-out skips the wordmark/tagline intro — it's a
-  // scratch window, not the full-height empty state.
-  const showIntro =
-    isPrimary &&
-    !isAuxiliaryWindow() &&
-    freshDraftReady &&
-    !isRoutedSessionView &&
-    !selectedSessionId &&
-    !activeSessionId &&
-    messagesEmpty
+  // 多模态引导气泡常驻主 Agent 对话顶部 (无论是否有消息, 无论是否已建 session)。
+  // 仅子窗口 (scratch/pop-out/subagent watch) 不显示 —— 那些是脚手架视图, 不需要。
+  const showIntro = !isSecondaryWindow()
 
   // Session is still loading if the route references a session we haven't
   // resumed yet. Once `activeSessionId` is set (runtime has resumed), the
@@ -424,21 +355,30 @@ export const ChatView = memo(function ChatView({
   // Suppress the loader and show an explicit error + manual Retry instead of
   // spinning forever. Gated on the route matching so a stale latch from another
   // session can't blank the current one.
-  const resumeExhausted = isPrimary && isRoutedSessionView && resumeExhaustedSessionId === routedSessionId
+  const resumeExhausted = isRoutedSessionView && resumeExhaustedSessionId === routedSessionId
 
   const loadingSession =
     !resumeExhausted && isRoutedSessionView && (routeSessionMismatch || (messagesEmpty && !activeSessionId))
 
   const threadLoading = threadLoadingState(loadingSession, busy, awaitingResponse, lastVisibleIsUser)
   // Hide the composer in the exhausted error state too: there's no live runtime
-  // to send to until a retry rebinds one. Watch windows are pure spectators of a
-  // subagent run driven elsewhere — no composer, transcript is read-only.
-  const showChatBar = !loadingSession && !resumeExhausted && !isWatchWindow()
+  // to send to until a retry rebinds one.
+  const showChatBar = !loadingSession && !resumeExhausted
   const threadKey = selectedSessionId || activeSessionId || (isRoutedSessionView ? location.pathname : 'new')
 
   const modelOptionsQuery = useQuery<ModelOptionsResponse>({
-    queryKey: modelOptionsQueryKey(activeGatewayProfile, activeSessionId),
-    queryFn: () => requestModelOptions({ gateway: gateway || undefined, sessionId: activeSessionId }),
+    queryKey: ['model-options', activeSessionId || 'global'],
+    queryFn: () => {
+      if (!activeSessionId) {
+        return getGlobalModelOptions()
+      }
+
+      if (!gateway) {
+        throw new Error('Argus gateway unavailable')
+      }
+
+      return gateway.request<ModelOptionsResponse>('model.options', { session_id: activeSessionId })
+    },
     enabled: gatewayOpen
   })
 
@@ -461,10 +401,6 @@ export const ChatView = memo(function ChatView({
         enabled: true,
         label: 'Add context',
         suggestions: contextSuggestions
-      },
-      voice: {
-        enabled: true,
-        active: false
       }
     }),
     [contextSuggestions, currentModel, currentProvider, gatewayOpen, modelMenuContent, quickModels]
@@ -482,65 +418,52 @@ export const ChatView = memo(function ChatView({
       const refs = droppedFileInlineRefs(inAppRefs, currentCwd)
 
       if (refs.length) {
-        requestComposerInsert(refs.join(' '), { mode: 'inline', target: composerScope.target })
+        requestComposerInsert(refs.join(' '), { mode: 'inline', target: 'main' })
       }
 
       if (osDrops.length) {
         void onAttachDroppedItems(osDrops)
       }
     },
-    [composerScope.target, currentCwd, onAttachDroppedItems]
+    [currentCwd, onAttachDroppedItems]
   )
 
-  // Session drags are POINTER drags (session-drag.ts) — never native DnD.
-  // The drop zone below only handles files; session drops commit through the
-  // drag session itself, which routes a center/link drop to this surface's
-  // composer via `data-composer-target`.
-  const { dragKind, dropHandlers } = useFileDropZone({ enabled: showChatBar, onDropFiles })
+  // Dropping a sidebar session inserts an @session link the agent can resolve
+  // via session_search (carries the source profile, so cross-profile works).
+  const onDropSession = useCallback((session: SessionDragPayload) => {
+    requestComposerInsertRefs([sessionInlineRef(session)], { target: 'main' })
+  }, [])
 
-  // While a session drag targets one of this surface's EDGES or a tab strip,
-  // the zone overlay/caret owns the visual — the link overlay stands down.
-  // It shows for the whole drag on every chat surface otherwise (the drag
-  // session's global sentinel, not a per-surface hover chain).
-  // COMPUTED booleans, never the raw `$dropHint`: the hint churns on every
-  // pointer-crossing of every drag (pane drags included), and a re-render
-  // here is the WHOLE surface — thread, composer, header — per mounted tile.
-  const sessionDragging = useStore($sessionTileDragging)
-  const sessionEdgeHover = useStore($sessionTileEdgeHover)
-
-  const overlayKind: DragKind = dragKind === 'files' ? 'files' : sessionDragging && !sessionEdgeHover ? 'session' : null
+  const { dragKind, dropHandlers } = useFileDropZone({ enabled: showChatBar, onDropFiles, onDropSession })
 
   return (
     <div
       className={cn(
+        // ★ 根改为 flex-col: 顶部一条【共享标题栏】横跨 视频列 + 主对话列 + 深度研究列,
+        //    下面再是横向三列。会话列表列在本组件之外 (shell 的 chat-sidebar Pane), 不受影响。
         'relative isolate flex h-full min-w-0 flex-col overflow-hidden bg-(--ui-chat-surface-background)',
         className
       )}
-      data-chat-surface=""
-      data-composer-target={composerScope.target}
-      data-session-anchor={sessionAnchor}
     >
+      {/* 共享标题栏 (Multimodal + 折叠按钮 + 会话下拉), 横跨下方三列。 */}
+      <ChatHeader
+        activeSessionId={activeSessionId}
+        isRoutedSessionView={isRoutedSessionView}
+        onDeleteSelectedSession={onDeleteSelectedSession}
+        onToggleSelectedPin={onToggleSelectedPin}
+        selectedSessionId={selectedSessionId}
+      />
+      <div className="relative isolate flex min-h-0 min-w-0 flex-1 flex-row overflow-hidden">
+      {/* ★ 第2列 (会话列表与主 Agent 之间): 视频流 + 观察面板。折叠按钮可收起/调出。 */}
+      {!isSecondaryWindow() && !railCollapsed && <MediaRail />}
+      <div className="relative isolate flex h-full min-w-0 flex-1 flex-col overflow-hidden">
       <Backdrop />
-      {/* Tiles get their chrome from the layout zone (chip strip); the modal
-          prompt overlays stay active-session-scoped in the primary surface. */}
-      {isPrimary && (
-        <ChatHeader
-          activeSessionId={activeSessionId}
-          isRoutedSessionView={isRoutedSessionView}
-          onDeleteSelectedSession={onDeleteSelectedSession}
-          onToggleSelectedPin={onToggleSelectedPin}
-          selectedSessionId={selectedSessionId}
-        />
-      )}
 
-      {/* Mounted for the primary AND every tile, each scoped to its own session
-          so a tiled/background session's blocking prompt surfaces instead of
-          stalling to timeout. */}
-      <PromptOverlays sessionId={activeSessionId} />
+      <PromptOverlays />
 
       <ChatRuntimeBoundary
         busy={busy}
-        onCancel={haltRun}
+        onCancel={onCancel}
         onEdit={onEdit}
         onReload={onReload}
         onThreadMessagesChange={onThreadMessagesChange}
@@ -558,7 +481,7 @@ export const ChatView = memo(function ChatView({
             intro={showIntro ? { personality: introPersonality, seed: introSeed } : undefined}
             loading={threadLoading}
             onBranchInNewChat={onBranchInNewChat}
-            onCancel={haltRun}
+            onCancel={onCancel}
             onDismissError={onDismissError}
             onRestoreToMessage={onRestoreToMessage}
             sessionId={activeSessionId}
@@ -580,21 +503,7 @@ export const ChatView = memo(function ChatView({
             </div>
           )}
           {showChatBar && <ScrollToBottomButton />}
-          {/* Vibe hearts rise from the composer only when no pet is out (else
-              they play on the pet). Fired by the core `reaction` event. */}
-          {!petPresent && (
-            <HeartField
-              className="absolute inset-x-0 z-30"
-              config={COMPOSER_HEART_CONFIG}
-              style={{
-                top: 0,
-                bottom: 'calc(var(--composer-measured-height) + 0.25rem)'
-              }}
-            />
-          )}
-          {/* A session drag hovering an EDGE hands the visual to the zone
-              target; the link overlay shows only for the center region. */}
-          <ChatDropOverlay kind={overlayKind} />
+          <ChatDropOverlay kind={dragKind} />
           <ChatSwapOverlay profile={gatewaySwapTarget} />
         </div>
         {/* Composer renders OUTSIDE the contain:[layout paint] wrapper above:
@@ -613,12 +522,10 @@ export const ChatView = memo(function ChatView({
               disabled={!gatewayOpen}
               focusKey={activeSessionId}
               gateway={gateway}
-              maxRecordingSeconds={maxVoiceRecordingSeconds}
               onAddContextRef={onAddContextRef}
               onAddUrl={onAddUrl}
               onAttachDroppedItems={onAttachDroppedItems}
               onAttachImageBlob={onAttachImageBlob}
-              onAttachPrCommentUrl={onAttachPrCommentUrl}
               onCancel={onCancel}
               onPasteClipboardImage={onPasteClipboardImage}
               onPickFiles={onPickFiles}
@@ -627,14 +534,18 @@ export const ChatView = memo(function ChatView({
               onRemoveAttachment={onRemoveAttachment}
               onSteer={onSteer}
               onSubmit={onSubmit}
-              onTranscribeAudio={onTranscribeAudio}
-              queueSessionKey={queueSessionKey}
+              queueSessionKey={selectedSessionId}
               sessionId={activeSessionId}
               state={chatBarState}
             />
           </Suspense>
         )}
       </ChatRuntimeBoundary>
+      </div>
+      {/* ★ 第4列 (主 Agent 右侧): 深度研究/监控窗口。仅当有任务时出现 (无任务自隐藏,
+          不占横向空间), 对齐 web 布局。 */}
+      {!isSecondaryWindow() && <DeepRail />}
+      </div>
     </div>
   )
-})
+}

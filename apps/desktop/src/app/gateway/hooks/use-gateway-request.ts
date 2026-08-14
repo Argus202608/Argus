@@ -1,22 +1,14 @@
-import { isGatewayReauthRequired, resolveGatewayWsUrl } from '@hermes/shared'
 import { useStore } from '@nanostores/react'
 import { useCallback, useEffect, useRef } from 'react'
 
 import type { HermesGateway } from '@/hermes'
+import { isGatewayReauthRequired, resolveGatewayWsUrl } from '@/lib/gateway-ws-url'
 import { $gateway, ensureActiveGatewayOpen, isActivePrimary } from '@/store/gateway'
 import { $activeGatewayProfile } from '@/store/profile'
 import { $gatewayState, setConnection } from '@/store/session'
 
 export function useGatewayRequest() {
   const gatewayState = useStore($gatewayState)
-  // Reactive companion to `gatewayRef`. The ref exists so `requestGateway`
-  // keeps a stable identity and always reaches the live socket, but it is only
-  // populated by the subscription effect below — i.e. AFTER the first render.
-  // A component that reads `gatewayRef.current` while rendering therefore sees
-  // null on mount, and if the connection state doesn't happen to flip
-  // afterwards it never re-renders to pick the instance up. Anything that needs
-  // the gateway as a render-time VALUE (props, memo deps) must use this.
-  const gateway = useStore($gateway) as HermesGateway | null
   const gatewayRef = useRef<HermesGateway | null>(null)
 
   const connectionRef = useRef<Awaited<ReturnType<NonNullable<typeof window.hermesDesktop>['getConnection']>> | null>(
@@ -30,7 +22,6 @@ export function useGatewayRequest() {
   // message instead of the opaque "connection closed" that triggered the retry.
   const reauthErrorRef = useRef<unknown>(null)
 
-  // eslint-disable-next-line no-restricted-syntax -- legitimate non-atom ref write (see eslint rule comment)
   useEffect(() => {
     gatewayStateRef.current = gatewayState
   }, [gatewayState])
@@ -78,10 +69,9 @@ export function useGatewayRequest() {
         setConnection(conn)
         // Re-mint the WS URL before reconnecting. OAuth tickets are single-use
         // and short-lived, so the cached conn.wsUrl ticket is dead here;
-        // resolveGatewayWsUrl() never connects with a stale ticket. An explicit
-        // auth rejection becomes a reauth error; transport failures remain
-        // retryable. Stash only the former so requestGateway can show the
-        // actionable "sign in again" message.
+        // resolveGatewayWsUrl() throws a reauth error in OAuth mode rather than
+        // connecting with a stale ticket. Stash it so requestGateway can show
+        // the actionable "sign in again" message.
         const wsUrl = await resolveGatewayWsUrl(desktop, conn)
         await existing.connect(wsUrl)
 
@@ -108,7 +98,7 @@ export function useGatewayRequest() {
       const gateway = gatewayRef.current
 
       if (!gateway) {
-        throw new Error('Hermes gateway unavailable')
+        throw new Error('Argus gateway unavailable')
       }
 
       try {
@@ -144,5 +134,5 @@ export function useGatewayRequest() {
     [ensureGatewayOpen]
   )
 
-  return { connectionRef, gateway, gatewayRef, requestGateway }
+  return { connectionRef, gatewayRef, requestGateway }
 }

@@ -21,9 +21,9 @@
 import { Button } from "@nous-research/ui/ui/components/button";
 import { ListItem } from "@nous-research/ui/ui/components/list-item";
 import { Spinner } from "@nous-research/ui/ui/components/spinner";
-import { AlertCircle, MessageSquarePlus, RefreshCw } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useSearchParams } from "react-router";
+import { AlertCircle, MessageSquarePlus, RefreshCw, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import { useSearchParams } from "react-router-dom";
 
 import { useI18n } from "@/i18n";
 import { api, type SessionInfo } from "@/lib/api";
@@ -45,6 +45,25 @@ interface ChatSessionListProps {
    * omitted, we fall back to clearing the resume param ourselves.
    */
   onNewChat?: () => void;
+  /**
+   * When provided, picking a row calls this instead of setting `?resume=`.
+   * Used by the Multimodal chat page (sidebar mount): it navigates to
+   * `/multimodal?mm=<id>` so the gateway session resumes + restores history.
+   * When omitted, the legacy `?resume=` behavior runs (ChatPage / TUI).
+   */
+  onSelect?: (id: string) => void;
+  /**
+   * Hide the component's own chrome (title bar + "New chat" button). Used by the
+   * sidebar mount, where the collapsible section header owns the "SESSIONS"
+   * label plus the new-chat (+) and refresh actions. Only the scrollable row
+   * list renders in this mode.
+   */
+  hideHeader?: boolean;
+  /**
+   * When provided, the component writes its `reload()` fn into this ref so an
+   * external header (the sidebar section) can trigger a manual refresh.
+   */
+  reloadRef?: { current: (() => void) | null };
 }
 
 function rowLabel(session: SessionInfo, untitled: string): string {
@@ -61,6 +80,9 @@ export function ChatSessionList({
   className,
   onPicked,
   onNewChat,
+  onSelect,
+  hideHeader,
+  reloadRef,
 }: ChatSessionListProps) {
   const { t } = useI18n();
   const [, setSearchParams] = useSearchParams();
@@ -85,7 +107,8 @@ export function ChatSessionList({
     setLoading(true);
     setError(null);
     api
-      .getSessions(SESSION_LIMIT, 0, scopeKey, "recent")
+      // exclude tool(subagent)/cron sessions — this is a human-chat switcher.
+      .getSessions(SESSION_LIMIT, 0, scopeKey, "recent", "tool,cron")
       .then((res) => {
         if (reqRef.current !== myReq) return;
         setSessions(res.sessions);
@@ -110,12 +133,39 @@ export function ChatSessionList({
 
   const reload = useCallback(() => setReloadNonce((n) => n + 1), []);
 
+  // ★ 删除一条 session (确认后调 REST deleteSession, 成功即从本地列表移除 + 刷新)。
+  //   stopPropagation 避免触发 pick(切会话)。
+  const del = useCallback(
+    (e: MouseEvent, s: SessionInfo) => {
+      e.stopPropagation();
+      const name = (s.title?.trim() || s.preview?.trim() || s.id).slice(0, 24);
+      if (!window.confirm(`删除会话「${name}」? 此操作不可恢复。`)) return;
+      // Optimistic remove; on failure reload to restore truth.
+      setSessions((prev) => (prev ? prev.filter((x) => x.id !== s.id) : prev));
+      api.deleteSession(s.id, scopeKey).catch(() => reload());
+    },
+    [scopeKey, reload],
+  );
+
+  // Expose reload() to an external header (sidebar section) via reloadRef.
+  useEffect(() => {
+    if (!reloadRef) return;
+    reloadRef.current = reload;
+    return () => { reloadRef.current = null; };
+  }, [reload, reloadRef]);
+
   // Picking a row sets `/chat?resume=<id>`. Re-picking the row already in
   // the terminal is a no-op (avoids a needless PTY teardown).
   const pick = useCallback(
     (id: string) => {
       onPicked?.();
       if (id === activeSessionId) return;
+      // Multimodal mode: hand the id to the caller (navigates to
+      // /multimodal?mm=<id>). Legacy mode: set ?resume= for the TUI PTY.
+      if (onSelect) {
+        onSelect(id);
+        return;
+      }
       setSearchParams(
         (prev) => {
           const next = new URLSearchParams(prev);
@@ -125,7 +175,7 @@ export function ChatSessionList({
         { replace: false },
       );
     },
-    [activeSessionId, onPicked, setSearchParams],
+    [activeSessionId, onPicked, onSelect, setSearchParams],
   );
 
   // "New chat" prefers ChatPage's robust handler (clears resume + forces a
@@ -178,7 +228,7 @@ export function ChatSessionList({
       );
     }
     return (
-      <div className="flex flex-col gap-0.5">
+      <div className={cn("flex flex-col", hideHeader ? "gap-1.5" : "gap-0.5")}>
         {sessions.map((s) => {
           const isActive = s.id === activeSessionId;
           return (
@@ -187,17 +237,41 @@ export function ChatSessionList({
               onClick={() => pick(s.id)}
               aria-current={isActive ? "true" : undefined}
               className={cn(
-                "flex-col items-start gap-0.5 rounded px-2 py-1.5",
+                "group relative flex-col items-start rounded-md",
+                // Compact rows in the sidebar (hideHeader); roomier standalone.
+                hideHeader ? "gap-0 px-2 py-1.5" : "gap-0.5 px-2 py-1.5",
                 "normal-case tracking-normal",
-                isActive
-                  ? "bg-primary/10 text-foreground border-l-2 border-primary"
-                  : "text-text-secondary hover:bg-midground/5 hover:text-foreground",
+                // Every row gets a visible card boundary (bg + border) so it's
+                // clear where each session begins/ends; active + hover shift it.
+                hideHeader
+                  ? isActive
+                    ? "border border-primary/60 bg-primary/15 text-foreground"
+                    : "border border-current/10 bg-midground/[0.04] text-text-secondary hover:border-current/25 hover:bg-midground/10 hover:text-foreground"
+                  : isActive
+                    ? "bg-primary/10 text-foreground border-l-2 border-primary"
+                    : "text-text-secondary hover:bg-midground/5 hover:text-foreground",
               )}
             >
-              <span className="w-full truncate text-sm font-medium">
+              {/* 删除按钮: 悬停行时出现在右上角; 点击 stopPropagation 不触发切会话。 */}
+              <button
+                type="button"
+                onClick={(e) => del(e, s)}
+                aria-label={t.common.delete ?? "Delete"}
+                title={t.common.delete ?? "Delete"}
+                className="absolute right-1 top-1 hidden rounded p-0.5 text-text-tertiary hover:bg-destructive/15 hover:text-destructive group-hover:block"
+              >
+                <Trash2 className="h-3 w-3" />
+              </button>
+              <span className={cn(
+                "w-full truncate pr-5 font-medium",
+                hideHeader ? "text-xs leading-tight" : "text-sm",
+              )}>
                 {rowLabel(s, t.sessions.untitledSession)}
               </span>
-              <span className="flex w-full items-center gap-1.5 text-[0.6875rem] text-text-tertiary">
+              <span className={cn(
+                "flex w-full items-center gap-1.5 text-text-tertiary",
+                hideHeader ? "text-[0.625rem] leading-tight" : "text-[0.6875rem]",
+              )}>
                 <span>{timeAgo(s.last_active)}</span>
                 {s.message_count > 0 && (
                   <>
@@ -217,7 +291,7 @@ export function ChatSessionList({
         })}
       </div>
     );
-  }, [activeSessionId, error, loading, pick, reload, sessions, t]);
+  }, [activeSessionId, del, error, hideHeader, loading, pick, reload, sessions, t]);
 
   return (
     <aside
@@ -226,33 +300,44 @@ export function ChatSessionList({
         className,
       )}
     >
-      <div className="flex items-center justify-between gap-2 px-2 pb-2">
-        <span className="text-display text-xs tracking-wider text-text-tertiary">
-          {t.sessions.title}
-        </span>
-        <Button
-          ghost
-          size="icon"
-          onClick={reload}
-          aria-label={t.common.refresh}
-          title={t.common.refresh}
-          className="text-text-secondary hover:text-foreground"
-        >
-          <RefreshCw className={cn(loading && "animate-spin")} />
-        </Button>
-      </div>
+      {/* Own chrome (title + refresh + New chat) only in standalone mode. In
+          sidebar mode (hideHeader) the collapsible section header owns them. */}
+      {!hideHeader && (
+        <>
+          <div className="flex items-center justify-between gap-2 px-2 pb-2">
+            <span className="text-display text-xs tracking-wider text-text-tertiary">
+              {t.sessions.title}
+            </span>
+            <Button
+              ghost
+              size="icon"
+              onClick={reload}
+              aria-label={t.common.refresh}
+              title={t.common.refresh}
+              className="text-text-secondary hover:text-foreground"
+            >
+              <RefreshCw className={cn(loading && "animate-spin")} />
+            </Button>
+          </div>
 
-      <Button
-        outlined
-        size="sm"
-        onClick={startNew}
-        prefix={<MessageSquarePlus />}
-        className="mx-2 mb-2 justify-center"
-      >
-        {t.sessions.newChat}
-      </Button>
+          <Button
+            outlined
+            size="sm"
+            onClick={startNew}
+            prefix={<MessageSquarePlus />}
+            className="mx-2 mb-2 justify-center"
+          >
+            {t.sessions.newChat}
+          </Button>
+        </>
+      )}
 
-      <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-1 pb-1">
+      <div className={cn(
+        "min-h-0 flex-1 overflow-y-auto overflow-x-hidden pb-1",
+        // Sidebar mode: extra left inset so the session cards sit indented
+        // (aligned under the section label) and read narrower; less right pad.
+        hideHeader ? "pl-4 pr-2" : "px-1",
+      )}>
         {content}
       </div>
     </aside>

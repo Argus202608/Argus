@@ -12,7 +12,6 @@ Config files are stored in ~/.hermes/ for easy access.
 """
 
 import importlib.util
-import json
 import logging
 import os
 import re
@@ -24,6 +23,7 @@ from typing import Optional, Dict, Any
 
 from hermes_cli.nous_subscription import get_nous_subscription_features
 from tools.tool_backend_helpers import managed_nous_tools_enabled
+from utils import base_url_hostname
 from hermes_constants import get_optional_skills_dir
 
 logger = logging.getLogger(__name__)
@@ -84,7 +84,6 @@ _DEFAULT_PROVIDER_MODELS = {
         "gpt-4o",
         "gpt-4o-mini",
         "claude-opus-4.6",
-        "claude-sonnet-5",
         "claude-sonnet-4.6",
         "claude-sonnet-4.5",
         "claude-haiku-4.5",
@@ -92,24 +91,18 @@ _DEFAULT_PROVIDER_MODELS = {
     ],
     "gemini": [
         "gemini-3.1-pro-preview", "gemini-3-pro-preview",
-        "gemini-3.6-flash", "gemini-3.1-flash-lite-preview",
-    ],
-    "vertex": [
-        "google/gemini-3.1-pro-preview", "google/gemini-3-pro-preview",
-        "google/gemini-3-flash-preview", "google/gemini-3.1-flash-lite-preview",
-        "google/gemini-2.5-pro", "google/gemini-2.5-flash",
+        "gemini-3-flash-preview", "gemini-3.1-flash-lite-preview",
     ],
     "zai": ["glm-5.2", "glm-5.1", "glm-5", "glm-4.7", "glm-4.5", "glm-4.5-flash"],
-    "kimi-coding": ["kimi-k3", "kimi-k2.6", "kimi-k2.5", "kimi-k2-thinking", "kimi-k2-turbo-preview"],
-    "kimi-coding-cn": ["kimi-k3", "kimi-k2.6", "kimi-k2.5", "kimi-k2-thinking", "kimi-k2-turbo-preview"],
+    "kimi-coding": ["kimi-k2.6", "kimi-k2.5", "kimi-k2-thinking", "kimi-k2-turbo-preview"],
+    "kimi-coding-cn": ["kimi-k2.6", "kimi-k2.5", "kimi-k2-thinking", "kimi-k2-turbo-preview"],
     "stepfun": ["step-3.5-flash", "step-3.5-flash-2603"],
     "arcee": ["trinity-large-thinking", "trinity-large-preview", "trinity-mini"],
     "minimax": ["MiniMax-M2.7", "MiniMax-M2.5", "MiniMax-M2.1", "MiniMax-M2"],
     "minimax-cn": ["MiniMax-M2.7", "MiniMax-M2.5", "MiniMax-M2.1", "MiniMax-M2"],
-    "ai-gateway": ["anthropic/claude-opus-4.6", "anthropic/claude-sonnet-4.6", "openai/gpt-5", "google/gemini-3-flash"],
-    "kilocode": ["anthropic/claude-sonnet-5", "anthropic/claude-opus-4.6", "anthropic/claude-sonnet-4.6", "openai/gpt-5.4", "google/gemini-3-pro-preview", "google/gemini-3-flash-preview"],
-    "opencode-zen": ["gpt-5.4", "gpt-5.3-codex", "claude-sonnet-5", "claude-sonnet-4-6", "gemini-3-flash", "glm-5", "kimi-k2.5", "minimax-m2.7"],
-    "opencode-go": ["kimi-k3", "kimi-k2.6", "kimi-k2.5", "glm-5.1", "glm-5", "mimo-v2.5-pro", "mimo-v2.5", "mimo-v2-pro", "mimo-v2-omni", "minimax-m2.7", "minimax-m2.5", "qwen3.7-max", "qwen3.6-plus", "qwen3.5-plus"],
+    "kilocode": ["anthropic/claude-opus-4.6", "anthropic/claude-sonnet-4.6", "openai/gpt-5.4", "google/gemini-3-pro-preview", "google/gemini-3-flash-preview"],
+    "opencode-zen": ["gpt-5.4", "gpt-5.3-codex", "claude-sonnet-4-6", "gemini-3-flash", "glm-5", "kimi-k2.5", "minimax-m2.7"],
+    "opencode-go": ["kimi-k2.6", "kimi-k2.5", "glm-5.1", "glm-5", "mimo-v2.5-pro", "mimo-v2.5", "mimo-v2-pro", "mimo-v2-omni", "minimax-m2.7", "minimax-m2.5", "qwen3.7-max", "qwen3.6-plus", "qwen3.5-plus"],
     "huggingface": [
         "Qwen/Qwen3.5-397B-A17B", "Qwen/Qwen3-235B-A22B-Thinking-2507",
         "Qwen/Qwen3-Coder-480B-A35B-Instruct", "deepseek-ai/DeepSeek-R1-0528",
@@ -395,25 +388,6 @@ def _prompt_api_key(var: dict):
 
 def _print_setup_summary(config: dict, hermes_home):
     """Print the setup completion summary."""
-    # Provider readiness — the one thing setup absolutely must produce.
-    # Previously a user could cancel the API-key prompt mid-wizard (Enter →
-    # "Cancelled."), watch the wizard continue through Terminal/Gateway/Tools,
-    # and exit "successfully" with NO working model — believing they were set
-    # up. Say so loudly instead (consumer-onboarding audit finding #7).
-    try:
-        from hermes_cli.auth import resolve_provider
-
-        resolve_provider()
-        _provider_ready = True
-    except Exception:
-        _provider_ready = False
-    if not _provider_ready:
-        print()
-        print_warning("No inference provider is configured — Hermes cannot chat yet.")
-        print_info("  Finish this one step with either of:")
-        print_info("    hermes model            (pick any provider/model)")
-        print_info("    hermes setup --portal   (Nous Portal OAuth, no API key)")
-
     # Tool availability summary
     print()
     print_header("Tool Availability Summary")
@@ -566,35 +540,6 @@ def _print_setup_summary(config: dict, hermes_home):
             tool_status.append(("Text-to-Speech (KittenTTS — not installed)", False, "run 'hermes setup tts'"))
     else:
         tool_status.append(("Text-to-Speech (Edge TTS)", True, None))
-
-    # STT — show configured provider
-    stt_provider = cfg_get(config, "stt", "provider", default="local") or "local"
-    _stt_feature = subscription_features.features.get("stt")
-    if _stt_feature is not None and _stt_feature.managed_by_nous:
-        tool_status.append(("Speech-to-Text (OpenAI via Nous subscription)", True, None))
-    elif stt_provider == "openai" and (
-        get_env_value("VOICE_TOOLS_OPENAI_KEY") or get_env_value("OPENAI_API_KEY")
-    ):
-        tool_status.append(("Speech-to-Text (OpenAI)", True, None))
-    elif stt_provider == "groq" and get_env_value("GROQ_API_KEY"):
-        tool_status.append(("Speech-to-Text (Groq Whisper)", True, None))
-    elif stt_provider == "elevenlabs" and get_env_value("ELEVENLABS_API_KEY"):
-        tool_status.append(("Speech-to-Text (ElevenLabs Scribe)", True, None))
-    elif stt_provider == "xai":
-        tool_status.append(("Speech-to-Text (xAI)", True, None))
-    elif stt_provider == "deepinfra" and get_env_value("DEEPINFRA_API_KEY"):
-        tool_status.append(("Speech-to-Text (DeepInfra)", True, None))
-    else:
-        try:
-            fw_ok = importlib.util.find_spec("faster_whisper") is not None
-        except Exception:
-            fw_ok = False
-        if fw_ok:
-            tool_status.append(("Speech-to-Text (Local Whisper)", True, None))
-        else:
-            tool_status.append(
-                ("Speech-to-Text (Local Whisper — not installed)", False, "run 'hermes tools' → Speech-to-Text")
-            )
 
     if subscription_features.modal.managed_by_nous:
         tool_status.append(("Modal Execution (Nous subscription)", True, None))
@@ -764,102 +709,6 @@ def _prompt_container_resources(config: dict):
         pass
 
 
-def _prompt_vercel_sandbox_settings(config: dict):
-    """Prompt for Vercel Sandbox settings without exposing unsupported disk sizing."""
-    terminal = config.setdefault("terminal", {})
-
-    print()
-    print_info("Vercel Sandbox settings:")
-    print_info("  Filesystem persistence uses Vercel snapshots.")
-    print_info("  Snapshots restore files only; live processes do not continue after sandbox recreation.")
-
-    from tools.terminal_tool import _SUPPORTED_VERCEL_RUNTIMES
-
-    current_runtime = terminal.get("vercel_runtime") or "node24"
-    supported_label = ", ".join(_SUPPORTED_VERCEL_RUNTIMES)
-    runtime = prompt(f"  Runtime ({supported_label})", current_runtime).strip() or current_runtime
-    if runtime not in _SUPPORTED_VERCEL_RUNTIMES:
-        print_warning(f"Unsupported Vercel runtime '{runtime}', keeping {current_runtime}.")
-        runtime = current_runtime if current_runtime in _SUPPORTED_VERCEL_RUNTIMES else "node24"
-    terminal["vercel_runtime"] = runtime
-    save_env_value("TERMINAL_VERCEL_RUNTIME", runtime)
-
-    current_persist = terminal.get("container_persistent", True)
-    persist_label = "yes" if current_persist else "no"
-    terminal["container_persistent"] = prompt(
-        "  Persist filesystem with snapshots? (yes/no)", persist_label
-    ).lower() in {"yes", "true", "y", "1"}
-
-    current_cpu = terminal.get("container_cpu", 1)
-    cpu_str = prompt("  CPU cores", str(current_cpu))
-    try:
-        terminal["container_cpu"] = float(cpu_str)
-    except ValueError:
-        pass
-
-    current_mem = terminal.get("container_memory", 5120)
-    mem_str = prompt("  Memory in MB (5120 = 5GB)", str(current_mem))
-    try:
-        terminal["container_memory"] = int(mem_str)
-    except ValueError:
-        pass
-
-    if terminal.get("container_disk", 51200) not in {0, 51200}:
-        print_warning("Vercel Sandbox does not support custom disk sizing; resetting container_disk to 51200.")
-    terminal["container_disk"] = 51200
-
-    print()
-    print_info("Vercel authentication:")
-    print_info("  Use a long-lived Vercel access token plus project/team IDs.")
-    linked_project = _read_nearest_vercel_project()
-    if linked_project:
-        print_info("  Found defaults in nearest .vercel/project.json.")
-
-    remove_env_value("VERCEL_OIDC_TOKEN")
-    token = prompt("    Vercel access token", get_env_value("VERCEL_TOKEN") or "", password=True)
-    project = prompt(
-        "    Vercel project ID",
-        get_env_value("VERCEL_PROJECT_ID") or linked_project.get("projectId", ""),
-    )
-    team = prompt(
-        "    Vercel team ID",
-        get_env_value("VERCEL_TEAM_ID") or linked_project.get("orgId", ""),
-    )
-    if token:
-        save_env_value("VERCEL_TOKEN", token)
-    if project:
-        save_env_value("VERCEL_PROJECT_ID", project)
-    if team:
-        save_env_value("VERCEL_TEAM_ID", team)
-
-
-def _read_nearest_vercel_project(start: Path | None = None) -> dict[str, str]:
-    """Read project/team defaults from the nearest Vercel link file."""
-    current = (start or Path.cwd()).resolve()
-    if current.is_file():
-        current = current.parent
-
-    for directory in (current, *current.parents):
-        project_file = directory / ".vercel" / "project.json"
-        if not project_file.exists():
-            continue
-        try:
-            data = json.loads(project_file.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return {}
-        if not isinstance(data, dict):
-            return {}
-        return {
-            key: value
-            for key, value in {
-                "projectId": data.get("projectId"),
-                "orgId": data.get("orgId"),
-            }.items()
-            if isinstance(value, str) and value.strip()
-        }
-    return {}
-
-
 # Tool categories and provider config are now in tools_config.py (shared
 # between `hermes tools` and `hermes setup tools`).
 
@@ -911,12 +760,17 @@ def setup_model_provider(config: dict, *, quick: bool = False):
     config.clear()
     config.update(_refreshed)
 
+    # Derive the selected provider for downstream steps (vision setup).
+    selected_provider = None
+    _m = config.get("model")
+    if isinstance(_m, dict):
+        selected_provider = _m.get("provider")
+
     # Credential rotation, vision-backend selection, and TTS provider are no
     # longer prompted here. They have safe defaults (rotation off, vision
     # auto-detected from the main provider, TTS = Edge) and are configurable
     # on demand via `hermes auth add`, `hermes setup` vision, and
     # `hermes setup tts`. This keeps both quick and full setup thin.
-
 
     # Tool Gateway prompt is already shown by _model_flow_nous() above.
     save_config(config)
@@ -969,28 +823,23 @@ def _install_neutts_deps() -> bool:
     print_info("Installing neutts Python package...")
     print_info("This will also download the TTS model (~300MB) on first use.")
     print()
-
-    # Route through the canonical uv → pip → ensurepip ladder so pip-less
-    # venvs (Ubuntu 25.10 `python -m venv`, `uv venv`) work out of the box.
-    from hermes_cli.tools_config import _pip_install
-
     try:
-        result = _pip_install(["-U", "neutts[all]", "--quiet"], timeout=300)
-    except Exception as e:
-        print_error(f"Failed to install neutts: {e}")
-        print_info("Try manually: uv pip install -U 'neutts[all]'")
-        return False
-    if result.returncode == 0:
+        subprocess.run(
+            [sys.executable, "-m", "pip", "install", "-U", "neutts[all]", "--quiet"],
+            check=True, timeout=300,
+        )
         print_success("neutts installed successfully")
         return True
-    err = (result.stderr or "").strip()
-    print_error(f"Failed to install neutts: {err[:300] if err else 'install failed'}")
-    print_info("Try manually: uv pip install -U 'neutts[all]'")
-    return False
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+        print_error(f"Failed to install neutts: {e}")
+        print_info("Try manually: python -m pip install -U neutts[all]")
+        return False
 
 
 def _install_kittentts_deps() -> bool:
     """Install KittenTTS dependencies with user approval. Returns True on success."""
+    import subprocess
+    import sys
 
     wheel_url = (
         "https://github.com/KittenML/KittenTTS/releases/download/"
@@ -999,22 +848,17 @@ def _install_kittentts_deps() -> bool:
     print()
     print_info("Installing kittentts Python package (~25-80MB model downloaded on first use)...")
     print()
-
-    from hermes_cli.tools_config import _pip_install
-
     try:
-        result = _pip_install(["-U", wheel_url, "soundfile", "--quiet"], timeout=300)
-    except Exception as e:
-        print_error(f"Failed to install kittentts: {e}")
-        print_info(f"Try manually: uv pip install -U '{wheel_url}' soundfile")
-        return False
-    if result.returncode == 0:
+        subprocess.run(
+            [sys.executable, "-m", "pip", "install", "-U", wheel_url, "soundfile", "--quiet"],
+            check=True, timeout=300,
+        )
         print_success("kittentts installed successfully")
         return True
-    err = (result.stderr or "").strip()
-    print_error(f"Failed to install kittentts: {err[:300] if err else 'install failed'}")
-    print_info(f"Try manually: uv pip install -U '{wheel_url}' soundfile")
-    return False
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+        print_error(f"Failed to install kittentts: {e}")
+        print_info(f"Try manually: python -m pip install -U '{wheel_url}' soundfile")
+        return False
 
 
 def _xai_oauth_logged_in_for_setup() -> bool:
@@ -1032,21 +876,18 @@ def _xai_oauth_logged_in_for_setup() -> bool:
 
 
 def _run_xai_oauth_login_from_setup() -> bool:
-    """Run the xAI Grok OAuth device-code login from inside the setup wizard.
-
-    Saves OAuth tokens only. Does **not** switch the active inference
-    provider or rewrite ``model.provider`` — callers (TTS setup, tools
-    config) only need credentials for side tools.
+    """Run the xAI Grok OAuth loopback login from inside the setup wizard.
 
     Returns True on success, False on any failure (the caller falls back
     to whatever the user picked next, e.g. Edge TTS).
     """
     try:
         from hermes_cli.auth import (
+            DEFAULT_XAI_OAUTH_BASE_URL,
             _is_remote_session,
             _save_xai_oauth_tokens,
-            _xai_oauth_device_code_login,
-            unsuppress_credential_source,
+            _update_config_for_provider,
+            _xai_oauth_loopback_login,
         )
     except Exception as exc:
         print_warning(f"xAI Grok OAuth helpers unavailable: {exc}")
@@ -1056,18 +897,16 @@ def _run_xai_oauth_login_from_setup() -> bool:
     print()
     print_info("Signing in to xAI Grok OAuth (SuperGrok / Premium+)...")
     try:
-        creds = _xai_oauth_device_code_login(open_browser=open_browser)
+        creds = _xai_oauth_loopback_login(open_browser=open_browser)
         _save_xai_oauth_tokens(
             creds["tokens"],
             discovery=creds.get("discovery"),
             redirect_uri=creds.get("redirect_uri", ""),
             last_refresh=creds.get("last_refresh"),
-            auth_mode="oauth_device_code",
-            set_active=False,
         )
-        # Mirror model/dashboard re-login: clear device_code suppression so
-        # the pool can seed from the singleton after a prior `auth remove`.
-        unsuppress_credential_source("xai-oauth", "device_code")
+        _update_config_for_provider(
+            "xai-oauth", creds.get("base_url", DEFAULT_XAI_OAUTH_BASE_URL)
+        )
         return True
     except Exception as exc:
         print_warning(f"xAI Grok OAuth login failed: {exc}")
@@ -1339,12 +1178,11 @@ def setup_terminal_backend(config: dict):
         "Modal - serverless cloud sandbox",
         "SSH - run on a remote machine",
         "Daytona - persistent cloud development environment",
-        "Vercel Sandbox - cloud microVM with snapshot filesystem persistence",
     ]
-    idx_to_backend = {0: "local", 1: "docker", 2: "modal", 3: "ssh", 4: "daytona", 5: "vercel_sandbox"}
-    backend_to_idx = {"local": 0, "docker": 1, "modal": 2, "ssh": 3, "daytona": 4, "vercel_sandbox": 5}
+    idx_to_backend = {0: "local", 1: "docker", 2: "modal", 3: "ssh", 4: "daytona"}
+    backend_to_idx = {"local": 0, "docker": 1, "modal": 2, "ssh": 3, "daytona": 4}
 
-    next_idx = 6
+    next_idx = 5
     if is_linux:
         terminal_choices.append("Singularity/Apptainer - HPC-friendly container")
         idx_to_backend[next_idx] = "singularity"
@@ -1390,28 +1228,6 @@ def setup_terminal_backend(config: dict):
         config["terminal"].setdefault(
             "docker_image", "nikolaik/python-nodejs:python3.11-nodejs20"
         )
-        print()
-        print_info("Docker sandboxes can be protected with the egress credential firewall.")
-        print_info(
-            "It routes sandbox traffic through iron-proxy so containers receive "
-            "proxy tokens instead of real API keys."
-        )
-        print_info(
-            "   Docker only for now; Modal, SSH, Daytona, and Singularity are not wired yet."
-        )
-        if prompt_yes_no("  Enable egress firewall for Docker sandboxes?", False):
-            proxy_cfg = config.setdefault("proxy", {})
-            proxy_cfg["enabled"] = True
-            proxy_cfg.setdefault("enforce_on_docker", True)
-            print_success("Egress firewall enabled in config")
-            print_info(
-                "Run `hermes egress setup` then `hermes egress start` to mint "
-                "tokens and launch the proxy."
-            )
-        else:
-            print_info(
-                "Skipping egress firewall. You can enable it later with `hermes egress setup`."
-            )
 
     elif selected_backend == "singularity":
         print_success("Terminal backend: Singularity/Apptainer")
@@ -1480,13 +1296,32 @@ def setup_terminal_backend(config: dict):
                 __import__("modal")
             except ImportError:
                 print_info("Installing modal SDK...")
-                from hermes_cli.tools_config import _pip_install
+                import subprocess
 
-                result = _pip_install(["modal"])
+                uv_bin = shutil.which("uv")
+                if uv_bin:
+                    result = subprocess.run(
+                        [
+                            uv_bin,
+                            "pip",
+                            "install",
+                            "--python",
+                            sys.executable,
+                            "modal",
+                        ],
+                        capture_output=True,
+                        text=True,
+                    )
+                else:
+                    result = subprocess.run(
+                        [sys.executable, "-m", "pip", "install", "modal"],
+                        capture_output=True,
+                        text=True,
+                    )
                 if result.returncode == 0:
                     print_success("modal SDK installed")
                 else:
-                    print_warning("Install failed — run manually: uv pip install modal")
+                    print_warning("Install failed — run manually: pip install modal")
 
             # Modal token
             print()
@@ -1521,13 +1356,25 @@ def setup_terminal_backend(config: dict):
             __import__("daytona")
         except ImportError:
             print_info("Installing daytona SDK...")
-            from hermes_cli.tools_config import _pip_install
+            import subprocess
 
-            result = _pip_install(["daytona"])
+            uv_bin = shutil.which("uv")
+            if uv_bin:
+                result = subprocess.run(
+                    [uv_bin, "pip", "install", "--python", sys.executable, "daytona"],
+                    capture_output=True,
+                    text=True,
+                )
+            else:
+                result = subprocess.run(
+                    [sys.executable, "-m", "pip", "install", "daytona"],
+                    capture_output=True,
+                    text=True,
+                )
             if result.returncode == 0:
                 print_success("daytona SDK installed")
             else:
-                print_warning("Install failed — run manually: uv pip install daytona")
+                print_warning("Install failed — run manually: pip install daytona")
                 if result.stderr:
                     print_info(f"  Error: {result.stderr.strip().splitlines()[-1]}")
 
@@ -1551,46 +1398,6 @@ def setup_terminal_backend(config: dict):
         config["terminal"].setdefault(
             "daytona_image", "nikolaik/python-nodejs:python3.11-nodejs20"
         )
-
-    elif selected_backend == "vercel_sandbox":
-        print_success("Terminal backend: Vercel Sandbox")
-        print_info("Cloud microVM sandboxes with snapshot-backed filesystem persistence.")
-        print_info("Requires the optional SDK: pip install 'hermes-agent[vercel]'")
-
-        try:
-            __import__("vercel")
-        except ImportError:
-            print_info("Installing vercel SDK...")
-            import subprocess
-
-            # Managed uv first: $HERMES_HOME/bin is never on PATH, so a bare
-            # which() misses the uv Hermes installed. Bootstrapping one is
-            # welcome here — this is the interactive setup wizard, already
-            # mid-install, and the alternative tier is a pip that a `uv venv`
-            # venv may not even have.
-            from hermes_cli.managed_uv import ensure_uv
-
-            uv_bin = ensure_uv()
-            if uv_bin:
-                result = subprocess.run(
-                    [uv_bin, "pip", "install", "--python", sys.executable, "vercel"],
-                    capture_output=True,
-                    text=True,
-                )
-            else:
-                result = subprocess.run(
-                    [sys.executable, "-m", "pip", "install", "vercel"],
-                    capture_output=True,
-                    text=True,
-                )
-            if result.returncode == 0:
-                print_success("vercel SDK installed")
-            else:
-                print_warning("Install failed — run manually: pip install 'hermes-agent[vercel]'")
-                if result.stderr:
-                    print_info(f"  Error: {result.stderr.strip().splitlines()[-1]}")
-
-        _prompt_vercel_sandbox_settings(config)
 
     elif selected_backend == "ssh":
         print_success("Terminal backend: SSH")
@@ -1633,7 +1440,7 @@ def setup_terminal_backend(config: dict):
                 ssh_cmd.extend(["-p", port])
             ssh_cmd.append(f"{user}@{host}" if user else host)
             ssh_cmd.append("echo ok")
-            result = subprocess.run(ssh_cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10)
+            result = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=10)
             if result.returncode == 0:
                 print_success("  SSH connection successful!")
             else:
@@ -1645,8 +1452,6 @@ def setup_terminal_backend(config: dict):
     save_env_value("TERMINAL_ENV", selected_backend)
     if selected_backend == "modal":
         save_env_value("TERMINAL_MODAL_MODE", config["terminal"].get("modal_mode", "auto"))
-    if selected_backend == "vercel_sandbox":
-        save_env_value("TERMINAL_VERCEL_RUNTIME", config["terminal"].get("vercel_runtime", "node24"))
     save_config(config)
     print()
     print_success(f"Terminal backend set to: {selected_backend}")
@@ -1671,9 +1476,9 @@ def _apply_default_agent_settings(config: dict):
     config.setdefault("compression", {})["enabled"] = True
     config["compression"]["threshold"] = 0.50
 
-    # Default: never auto-reset sessions. This matches the gateway's own
-    # default (SessionResetPolicy.mode = "none"); we still write it
-    # explicitly so the choice is visible/editable in config.yaml.
+    # Default to never auto-resetting sessions. The gateway treats absent
+    # session_reset as "both", so we must write "none" explicitly to make
+    # the no-auto-reset default actually take effect.
     config.setdefault("session_reset", {})["mode"] = "none"
 
     save_config(config)
@@ -1726,11 +1531,10 @@ def setup_agent_settings(config: dict):
     print_info("  new     — Show tool name only when it changes (less noise)")
     print_info("  all     — Show every tool call with a short preview")
     print_info("  verbose — Full args, results, and debug logs")
-    print_info("  log     — Silent in chat; write every tool call to ~/.hermes/logs/tool_calls.log (gateway only)")
 
     current_mode = cfg_get(config, "display", "tool_progress", default="all")
     mode = prompt("Tool progress mode", current_mode)
-    if mode.lower() in {"off", "new", "all", "verbose", "log"}:
+    if mode.lower() in {"off", "new", "all", "verbose"}:
         if "display" not in config:
             config["display"] = {}
         config["display"]["tool_progress"] = mode.lower()
@@ -1784,19 +1588,19 @@ def setup_agent_settings(config: dict):
     print_info("")
 
     reset_choices = [
-        "Inactivity + daily reset (reset whichever comes first)",
+        "Inactivity + daily reset (recommended - reset whichever comes first)",
         "Inactivity only (reset after N minutes of no messages)",
         "Daily only (reset at a fixed hour each day)",
-        "Never auto-reset (recommended - context lives until /reset or context compression)",
+        "Never auto-reset (context lives until /reset or context compression)",
         "Keep current settings",
     ]
 
     current_policy = config.get("session_reset", {})
-    current_mode = current_policy.get("mode", "none")
+    current_mode = current_policy.get("mode", "both")
     current_idle = current_policy.get("idle_minutes", 1440)
     current_hour = current_policy.get("at_hour", 4)
 
-    default_reset = {"both": 0, "idle": 1, "daily": 2, "none": 3}.get(current_mode, 3)
+    default_reset = {"both": 0, "idle": 1, "daily": 2, "none": 3}.get(current_mode, 0)
 
     reset_idx = prompt_choice("Session reset mode:", reset_choices, default_reset)
 
@@ -2175,9 +1979,10 @@ def setup_gateway(config: dict):
 
     if not selected:
         print_info("No platforms selected. Run 'hermes setup gateway' later to configure.")
-    else:
-        for idx in selected:
-            _configure_platform(platforms[idx])
+        return
+
+    for idx in selected:
+        _configure_platform(platforms[idx])
 
     # ── Gateway Service Setup ──
     # Count any platform (built-in or plugin) the user configured during this
@@ -2229,67 +2034,160 @@ def setup_gateway(config: dict):
                     f"     hermes config set {plat.upper()}_HOME_CHANNEL <channel_id>"
                 )
 
-    # ── Gateway Service Setup ──
-    # Runs UNCONDITIONALLY — even with zero platforms configured. A gateway
-    # without platforms is a supported mode (cron scheduler keeps running,
-    # and adapters come up automatically once tokens are added later, e.g.
-    # via `hermes import` or `hermes setup gateway`). Gating this on
-    # messaging config was the bug that left install-then-import machines
-    # with registered cron jobs and restored bot tokens but no process to
-    # serve them.
-    from hermes_cli.gateway import (
-        _is_service_running,
-        supports_systemd_services,
-        ensure_gateway_service,
-        systemd_restart,
-        launchd_restart,
-        UserSystemdUnavailableError,
-        SystemScopeRequiresRootError,
-        _system_scope_wizard_would_need_root,
-        _print_system_scope_remediation,
-    )
-    import platform as _platform
+        # Offer to install the gateway as a system service
+        import platform as _platform
 
-    _is_macos = _platform.system() == "Darwin"
-    _is_windows = _platform.system() == "Windows"
-    supports_systemd = supports_systemd_services()
+        _is_linux = _platform.system() == "Linux"
+        _is_macos = _platform.system() == "Darwin"
+        _is_windows = _platform.system() == "Windows"
 
-    print()
-    if _is_service_running():
-        # Already running: only offer a restart when this setup pass may
-        # have changed platform config — a restart interrupts any active
-        # session, so it stays behind a prompt.
-        if supports_systemd and _system_scope_wizard_would_need_root():
-            _print_system_scope_remediation("restart")
-        elif any_messaging and prompt_yes_no(
-            "  Restart the gateway to pick up changes?", True
-        ):
-            try:
-                if supports_systemd:
-                    systemd_restart()
-                elif _is_macos:
-                    launchd_restart()
-                elif _is_windows:
-                    from hermes_cli import gateway_windows
-                    gateway_windows.restart()
-            except UserSystemdUnavailableError as e:
-                print_error("  Restart failed — user systemd not reachable:")
-                for line in str(e).splitlines():
-                    print(f"  {line}")
-            except SystemScopeRequiresRootError as e:
-                # Defense in depth: the pre-check above should have
-                # caught this, but a race (unit file appearing mid-run)
-                # could still land here. Previously this exited the
-                # whole wizard via sys.exit(1).
-                print_error(f"  Restart failed: {e}")
+        from hermes_cli.gateway import (
+            _is_service_installed,
+            _is_service_running,
+            supports_systemd_services,
+            has_conflicting_systemd_units,
+            has_legacy_hermes_units,
+            install_linux_gateway_from_setup,
+            print_systemd_scope_conflict_warning,
+            print_legacy_unit_warning,
+            systemd_start,
+            systemd_restart,
+            launchd_install,
+            launchd_start,
+            launchd_restart,
+            UserSystemdUnavailableError,
+            SystemScopeRequiresRootError,
+            _system_scope_wizard_would_need_root,
+            _print_system_scope_remediation,
+        )
+
+        service_installed = _is_service_installed()
+        service_running = _is_service_running()
+        supports_systemd = supports_systemd_services()
+        supports_service_manager = supports_systemd or _is_macos or _is_windows
+
+        print()
+        if supports_systemd and has_conflicting_systemd_units():
+            print_systemd_scope_conflict_warning()
+            print()
+
+        if supports_systemd and has_legacy_hermes_units():
+            print_legacy_unit_warning()
+            print()
+
+        if service_running:
+            if supports_systemd and _system_scope_wizard_would_need_root():
                 _print_system_scope_remediation("restart")
-            except Exception as e:
-                print_error(f"  Restart failed: {e}")
-    else:
-        # Not running: install (if needed) and start, no questions asked.
-        ensure_gateway_service(context="setup")
+            elif prompt_yes_no("  Restart the gateway to pick up changes?", True):
+                try:
+                    if supports_systemd:
+                        systemd_restart()
+                    elif _is_macos:
+                        launchd_restart()
+                    elif _is_windows:
+                        from hermes_cli import gateway_windows
+                        gateway_windows.restart()
+                except UserSystemdUnavailableError as e:
+                    print_error("  Restart failed — user systemd not reachable:")
+                    for line in str(e).splitlines():
+                        print(f"  {line}")
+                except SystemScopeRequiresRootError as e:
+                    # Defense in depth: the pre-check above should have
+                    # caught this, but a race (unit file appearing mid-run)
+                    # could still land here. Previously this exited the
+                    # whole wizard via sys.exit(1).
+                    print_error(f"  Restart failed: {e}")
+                    _print_system_scope_remediation("restart")
+                except Exception as e:
+                    print_error(f"  Restart failed: {e}")
+        elif service_installed:
+            if supports_systemd and _system_scope_wizard_would_need_root():
+                _print_system_scope_remediation("start")
+            elif prompt_yes_no("  Start the gateway service?", True):
+                try:
+                    if supports_systemd:
+                        systemd_start()
+                    elif _is_macos:
+                        launchd_start()
+                    elif _is_windows:
+                        from hermes_cli import gateway_windows
+                        gateway_windows.start()
+                except UserSystemdUnavailableError as e:
+                    print_error("  Start failed — user systemd not reachable:")
+                    for line in str(e).splitlines():
+                        print(f"  {line}")
+                except SystemScopeRequiresRootError as e:
+                    print_error(f"  Start failed: {e}")
+                    _print_system_scope_remediation("start")
+                except Exception as e:
+                    print_error(f"  Start failed: {e}")
+        elif supports_service_manager:
+            if supports_systemd:
+                svc_name = "systemd"
+            elif _is_macos:
+                svc_name = "launchd"
+            else:
+                svc_name = "Scheduled Task"
+            if prompt_yes_no(
+                f"  Install the gateway as a {svc_name} service? (runs in background, starts on boot)",
+                True,
+            ):
+                try:
+                    installed_scope = None
+                    did_install = False
+                    started_inline = False
+                    if supports_systemd:
+                        installed_scope, did_install = install_linux_gateway_from_setup(force=False)
+                    elif _is_macos:
+                        launchd_install(force=False)
+                        did_install = True
+                    else:
+                        # gateway_windows.install() registers the Scheduled
+                        # Task AND starts it immediately (via schtasks /Run
+                        # or a direct spawn fallback), so no separate start
+                        # prompt is needed here.
+                        from hermes_cli import gateway_windows
+                        gateway_windows.install(force=False)
+                        did_install = True
+                        started_inline = True
+                    print()
+                    if did_install and not started_inline and prompt_yes_no("  Start the service now?", True):
+                        try:
+                            if supports_systemd:
+                                systemd_start(system=installed_scope == "system")
+                            elif _is_macos:
+                                launchd_start()
+                        except UserSystemdUnavailableError as e:
+                            print_error("  Start failed — user systemd not reachable:")
+                            for line in str(e).splitlines():
+                                print(f"  {line}")
+                        except SystemScopeRequiresRootError as e:
+                            print_error(f"  Start failed: {e}")
+                            _print_system_scope_remediation("start")
+                        except Exception as e:
+                            print_error(f"  Start failed: {e}")
+                except Exception as e:
+                    print_error(f"  Install failed: {e}")
+                    print_info("  You can try manually: hermes gateway install")
+            else:
+                print_info("  You can install later: hermes gateway install")
+                if supports_systemd and os.geteuid() == 0:  # windows-footgun: ok — guarded by supports_systemd (Linux only)
+                    print_info("  Or as a boot-time service: hermes gateway install --system")
+                print_info("  Or run in foreground:  hermes gateway")
+        else:
+            from hermes_constants import is_container
+            if is_container():
+                print_info("Start the gateway to bring your bots online:")
+                print_info("   hermes gateway run          # Run as container main process")
+                print_info("")
+                print_info("For automatic restarts, use a Docker restart policy:")
+                print_info("   docker run --restart unless-stopped ...")
+                print_info("   docker restart <container>  # Manual restart")
+            else:
+                print_info("Start the gateway to bring your bots online:")
+                print_info("   hermes gateway              # Run in foreground")
 
-    print_info("━" * 50)
+        print_info("━" * 50)
 
 
 # =============================================================================
@@ -2310,37 +2208,6 @@ def setup_tools(config: dict, first_install: bool = False):
     from hermes_cli.tools_config import tools_command
 
     tools_command(first_install=first_install, config=config)
-
-
-# =============================================================================
-# Shared Metrics
-# =============================================================================
-
-
-def setup_telemetry(config: dict):
-    """Configure the local, privacy-safe shared-metrics subscriber."""
-    print_header("Shared Metrics")
-    print_info("Shared metrics contain only bounded counters and histograms.")
-    print_info("Packages stay under this Hermes profile and are not uploaded.")
-
-    telemetry = config.get("telemetry")
-    if not isinstance(telemetry, dict):
-        telemetry = {}
-        config["telemetry"] = telemetry
-    shared_metrics = telemetry.get("shared_metrics")
-    if not isinstance(shared_metrics, dict):
-        shared_metrics = {}
-        telemetry["shared_metrics"] = shared_metrics
-
-    current = shared_metrics.get("enabled") is True
-    shared_metrics["enabled"] = prompt_yes_no(
-        "Enable local shared metrics?",
-        default=current,
-    )
-    if shared_metrics["enabled"]:
-        print_success("Local shared metrics enabled.")
-    else:
-        print_info("Local shared metrics disabled.")
 
 
 # =============================================================================
@@ -2742,6 +2609,197 @@ def _offer_openclaw_migration(hermes_home: Path) -> bool:
 
 
 # =============================================================================
+# Section: Multimodal (voice / deep-research / memory / tracking)
+# =============================================================================
+
+
+def _mm_print_report(report: dict) -> None:
+    """Print the current readiness of each multimodal capability."""
+    from agent.multimodal.readiness import BROKEN, MISSING, OK, UNKNOWN
+
+    mark = {
+        OK: color("✓", Colors.GREEN),
+        MISSING: color("✗", Colors.RED),
+        BROKEN: color("✗", Colors.RED),
+        UNKNOWN: color("?", Colors.YELLOW),
+    }
+    for cap in report["capabilities"]:
+        tag = "" if cap["required"] else color(" (可选)", Colors.DIM)
+        print(f"  {mark.get(cap['status'], '?')} {cap['label']}{tag}")
+        if cap["status"] != OK and cap["reason"]:
+            print(f"      {color('→', Colors.DIM)} {cap['reason']}")
+
+
+def setup_multimodal(config: dict):
+    """Configure the multimodal subsystem (voice / deep-research / memory /
+    tracking) so it's actually usable, then re-check and report.
+
+    Writes keys to the config paths ``flatten_mm_config`` reads
+    (``audio.dashscope_api_key``, the ``model.*.anysearch`` block,
+    ``settings.ocr_use_local``). For install/download steps that we can't do
+    safely inline, prints the exact command. Env-var keys the runtime already
+    prefers (DASHSCOPE_API_KEY / ANYSEARCH_API_KEY) are honored — if one is set
+    we don't nag for it.
+    """
+    from agent.multimodal.readiness import OK, probe_mm_readiness
+
+    print_header("Multimodal (voice / deep-research / memory / tracking)")
+    print_info("配置多模态能力,让语音 / 深研 / 记忆 / 追踪真正可用。")
+    print()
+
+    # Build the real Config so the probe reflects on-disk state + this session's
+    # env. Fall back to the raw config dict if the engine can't be imported.
+    try:
+        from agent.multimodal.hermes_glue import build_config
+        cfg_obj = build_config(config)
+    except Exception:
+        cfg_obj = None
+
+    print_info("当前状态:")
+    _mm_print_report(probe_mm_readiness(cfg_obj, config))
+    print()
+
+    # ---- 语音 (DashScope realtime ASR/TTS) --------------------------------
+    import os as _os
+    if not _os.environ.get("DASHSCOPE_API_KEY", "").strip():
+        audio = config.setdefault("audio", {})
+        cur = str(audio.get("dashscope_api_key", "") or "")
+        if prompt_yes_no("配置语音 (DashScope 百炼 ASR/TTS)?", default=not cur):
+            key = prompt(
+                "  DashScope API key (留空跳过)",
+                default=cur or None, password=True)
+            if key:
+                audio["dashscope_api_key"] = key
+                print_success("  已写入 audio.dashscope_api_key")
+            else:
+                print_info("  跳过 — 实时语音将保持关闭。")
+    else:
+        print_info("语音: 检测到 env DASHSCOPE_API_KEY,已就绪。")
+
+    # ---- 深研搜索 (AnySearch) --------------------------------------------
+    print()
+    if not _os.environ.get("ANYSEARCH_API_KEY", "").strip():
+        # anysearch lives under a nested model.<role>.anysearch block; write
+        # into it if present, else guide toward the env var (which the runtime
+        # prefers anyway) to avoid guessing the deep path.
+        block = _find_anysearch_block(config)
+        cur = str(block.get("api_key", "") or "") if block is not None else ""
+        if prompt_yes_no("配置深研搜索 (AnySearch)?", default=not cur):
+            key = prompt(
+                "  AnySearch API key (as_sk_...,留空跳过)",
+                default=cur or None, password=True)
+            if key:
+                if block is not None:
+                    block["api_key"] = key
+                    print_success("  已写入 anysearch.api_key")
+                else:
+                    print_info("  未找到 anysearch 配置块 — 请设 env "
+                               "ANYSEARCH_API_KEY,或在 config.yaml 补 anysearch 段。")
+    else:
+        print_info("深研: 检测到 env ANYSEARCH_API_KEY,已就绪。")
+
+    # ---- 记忆 (本地 OCR: rapidocr) --------------------------------------
+    print()
+    from agent.multimodal.readiness import _module_installed  # cheap probe
+    if not _module_installed("rapidocr"):
+        print_warning("记忆后端需要 rapidocr,但未安装 — 未装时记忆功能会拒绝启动。")
+        if prompt_yes_no("现在安装 rapidocr?", default=True):
+            _mm_pip_install(['.[web,ocr]'])
+    else:
+        print_info("记忆: rapidocr 已安装。")
+
+    # ---- 本地权重 (Qwen2.5-0.5B-Instruct) --------------------------------
+    print()
+    from agent.multimodal.readiness import _probe_local_models
+    if _probe_local_models(cfg_obj, config)["status"] != OK:
+        print_info("本地语音意图模型权重缺失 (可选 — 缺失时回退云端/启发式)。")
+        if prompt_yes_no("现在下载权重 (python download_weights.py)?", default=False):
+            _mm_run_download_weights()
+    else:
+        print_info("本地权重: 已就绪。")
+
+    # ---- 采集权限 (OS 级,只能指引) -------------------------------------
+    print()
+    from agent.multimodal.readiness import _probe_capture_perms
+    perm = _probe_capture_perms()
+    print_info(f"采集权限 (麦/摄/屏): {perm['fix']}")
+    print_info("  (OS 权限无法自动授予,请在系统设置中确认已开启。)")
+
+    # ---- 复检 -----------------------------------------------------------
+    print()
+    try:
+        cfg_obj2 = build_config(config)
+    except Exception:
+        cfg_obj2 = cfg_obj
+    print_info("配置后状态:")
+    final = probe_mm_readiness(cfg_obj2, config)
+    _mm_print_report(final)
+    print()
+    if final["ready"]:
+        print_success("多模态必需能力已就绪。")
+    else:
+        print_warning("仍有必需能力未就绪 — 见上方 ✗ 项,可稍后 `hermes mm doctor` 复查。")
+
+
+def _find_anysearch_block(config: dict):
+    """Locate the existing ``anysearch`` mapping anywhere under ``model.*`` so we
+    can write api_key into it without hardcoding the deep path. Returns the dict
+    or None if not present."""
+    model = config.get("model")
+    if not isinstance(model, dict):
+        return None
+    # Search one/two levels down for a dict literally named 'anysearch'.
+    for v in model.values():
+        if isinstance(v, dict):
+            if isinstance(v.get("anysearch"), dict):
+                return v["anysearch"]
+            for vv in v.values():
+                if isinstance(vv, dict) and isinstance(vv.get("anysearch"), dict):
+                    return vv["anysearch"]
+    if isinstance(model.get("anysearch"), dict):
+        return model["anysearch"]
+    return None
+
+
+def _mm_pip_install(targets: list) -> None:
+    """Best-effort ``pip install`` of extras; prints the command either way so a
+    failure still leaves the user with a copy-pasteable fix."""
+    import subprocess
+    import sys
+    cmd = [sys.executable, "-m", "pip", "install", "-e", *targets]
+    print_info(f"  运行: {' '.join(cmd)}")
+    try:
+        rc = subprocess.call(cmd)
+        if rc == 0:
+            # Invalidate import caches so the end-of-section re-check (find_spec)
+            # sees the freshly-installed package in THIS process instead of
+            # wrongly reporting it still missing.
+            import importlib
+            importlib.invalidate_caches()
+            print_success("  rapidocr 安装完成。")
+        else:
+            print_error(f"  安装失败 (exit {rc}) — 请手动运行上面的命令。")
+    except Exception as exc:
+        print_error(f"  安装出错: {exc} — 请手动运行上面的命令。")
+
+
+def _mm_run_download_weights() -> None:
+    """Best-effort weight download using the CURRENT interpreter (sys.executable
+    → same venv the CLI runs in), so weights land where the runtime looks."""
+    import subprocess
+    import sys
+    print_info(f"  运行: {sys.executable} download_weights.py")
+    try:
+        rc = subprocess.call([sys.executable, "download_weights.py"])
+        if rc == 0:
+            print_success("  权重下载完成。")
+        else:
+            print_error(f"  下载失败 (exit {rc}) — 请手动运行: {sys.executable} download_weights.py")
+    except Exception as exc:
+        print_error(f"  下载出错: {exc} — 请手动运行 python download_weights.py。")
+
+
+# =============================================================================
 # Main Wizard Orchestrator
 # =============================================================================
 
@@ -2751,7 +2809,7 @@ SETUP_SECTIONS = [
     ("terminal", "Terminal Backend", setup_terminal_backend),
     ("gateway", "Messaging Platforms (Gateway)", setup_gateway),
     ("tools", "Tools", setup_tools),
-    ("telemetry", "Shared Metrics", setup_telemetry),
+    ("multimodal", "Multimodal (voice/vision/memory)", setup_multimodal),
     ("agent", "Agent Settings", setup_agent_settings),
 ]
 
@@ -2850,7 +2908,6 @@ def run_setup_wizard(args):
       hermes setup terminal  — just terminal backend
       hermes setup gateway   — just messaging platforms
       hermes setup tools     — just tool configuration
-      hermes setup telemetry — just local shared metrics
       hermes setup agent     — just agent settings
     """
     from hermes_cli.config import is_managed, managed_error
@@ -3062,11 +3119,6 @@ def run_setup_wizard(args):
     # Section 4: Messaging Platforms
     if not (migration_ran and _skip_configured_section(config, "gateway", "Messaging Platforms")):
         setup_gateway(config)
-    else:
-        # Section skipped (migrated config) — still make sure the gateway
-        # service exists so cron jobs and migrated platforms actually run.
-        from hermes_cli.gateway import ensure_gateway_service
-        ensure_gateway_service(context="setup")
 
     # Section 5: Tools
     if not (migration_ran and _skip_configured_section(config, "tools", "Tools")):
@@ -3142,12 +3194,6 @@ def _run_first_time_quick_setup(config: dict, hermes_home, is_existing: bool):
     if gateway_choice == 0:
         setup_gateway(config)
         save_config(config)
-    else:
-        # Messaging skipped — still install/start the gateway service so cron
-        # jobs run and platforms come alive as soon as tokens are added later
-        # (e.g. via `hermes import` from another machine).
-        from hermes_cli.gateway import ensure_gateway_service
-        ensure_gateway_service(context="setup")
 
     print()
     print_success("Setup complete! You're ready to go.")
@@ -3193,12 +3239,6 @@ def _blank_slate_minimal_toolsets(config: dict):
                 continue  # platform composites — not user-facing toolsets
             if isinstance(tdef, dict) and tdef.get("includes"):
                 continue  # composite groupings, not leaf toolsets
-            if isinstance(tdef, dict) and tdef.get("posture"):
-                continue  # posture toolsets (e.g. coding) are session-level
-                # selections made by agent/coding_context.py — not permanent
-                # user-facing disables. Adding them here causes model_tools
-                # to subtract their tools (terminal, read_file, …) from the
-                # minimal Blank Slate surface (#57315).
             all_keys.add(k)
 
         disabled = sorted(all_keys - keep)
@@ -3246,6 +3286,7 @@ def _run_blank_slate_setup(config: dict, hermes_home, is_existing: bool):
 
     Either way nothing is enabled that the user did not explicitly choose.
     """
+    from hermes_cli.config import load_config
 
     print()
     print_header("Blank Slate Setup")

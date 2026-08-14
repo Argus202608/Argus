@@ -50,7 +50,7 @@ export const ko: Translations = {
   },
 
   app: {
-    brand: "Hermes Agent",
+    brand: "Argus Agent",
     brandShort: "HA",
     closeNavigation: "내비게이션 닫기",
     closeModelTools: "모델 및 도구 닫기",
@@ -120,8 +120,8 @@ export const ko: Translations = {
     starting: "시작 중",
     startedInBackground: "백그라운드에서 시작됨 — 진행 상황은 로그를 확인하세요",
     stopped: "중지됨",
-    updateHermes: "Hermes 업데이트",
-    updatingHermes: "Hermes 업데이트 중…",
+    updateHermes: "Argus 업데이트",
+    updatingHermes: "Argus 업데이트 중…",
     waitingForOutput: "출력 대기 중…",
   },
 
@@ -129,14 +129,8 @@ export const ko: Translations = {
     title: "세션",
     history: "기록",
     overview: "개요",
-    filterChats: "채팅",
-    filterAutomation: "자동화",
-    filterAll: "전체",
-    sourceFilter: "세션 소스",
-    anySource: "모든 소스",
     searchPlaceholder: "메시지 내용 검색...",
     noSessions: "아직 세션이 없습니다",
-    noSessionsInFilter: "이 필터에 세션이 없습니다",
     noMatch: "검색과 일치하는 세션이 없습니다",
     startConversation: "대화를 시작하면 여기에 표시됩니다",
     noMessages: "메시지가 없습니다",
@@ -325,7 +319,7 @@ export const ko: Translations = {
     enableRuntime: "활성화",
     forceReinstall: "강제 재설치 (기존 폴더를 먼저 삭제)",
     headline:
-      "Hermes 플러그인을 검색, 설치, 활성화 및 업데이트합니다 (`hermes plugins` 동등).",
+      "Argus 플러그인을 검색, 설치, 활성화 및 업데이트합니다 (`hermes plugins` 동등).",
     identifierLabel: "Git URL 또는 owner/repo",
     inactive: "비활성",
     installBtn: "설치",
@@ -391,7 +385,7 @@ export const ko: Translations = {
     rawYaml: "원본 YAML 설정",
     searchResults: "검색 결과",
     fields: "개 필드",
-    noFieldsMatch: '"{query}"와(과) 일치하는 필드가 없습니다',
+    noFieldsMatch: '\"{query}\"와(과) 일치하는 필드가 없습니다',
     configSaved: "설정이 저장되었습니다",
     yamlConfigSaved: "YAML 설정이 저장되었습니다",
     failedToSave: "저장에 실패했습니다",
@@ -438,32 +432,21 @@ export const ko: Translations = {
     replaceCurrentValue: "현재 값 교체 ({preview})",
     showValue: "실제 값 표시",
     hideValue: "값 숨기기",
-    customTitle: "사용자 지정 키",
-    customHint: "Hermes가 인식하지 못하는, .env에 저장된 임의의 환경 변수입니다. 스킬, MCP 서버 또는 자체 도구를 위한 환경 변수를 주입하는 데 사용하세요.",
-    customConfigured: "사용자 지정 키 {count}개 설정됨",
-    addCustomKey: "사용자 지정 키 추가",
-    customKeyName: "변수 이름",
-    customKeyNamePlaceholder: "예: MY_SERVICE_API_KEY",
-    add: "추가",
-    invalidKeyName: "문자, 숫자, 밑줄만 사용하세요(문자 또는 밑줄로 시작해야 합니다).",
   },
 
   oauth: {
     title: "제공자 로그인 (OAuth)",
     providerLogins: "제공자 로그인 (OAuth)",
-    description:
-      "{connected}/{total} OAuth 제공자가 연결되었습니다. 대시보드에서 지원되는 흐름에는 로그인을 사용하세요. 외부 또는 대체 설정에는 CLI 명령을 계속 사용할 수 있습니다.",
+    description: "{connected}/{total} OAuth 제공자가 연결되었습니다. 로그인 흐름은 현재 CLI를 통해 실행됩니다. 명령 복사를 클릭하고 터미널에 붙여넣어 설정하세요.",
     connected: "연결됨",
     expired: "만료됨",
-    notConnected: "연결되지 않음. 가능하면 로그인을 사용하거나 터미널에서 {command}을(를) 실행하세요.",
+    notConnected: "연결되지 않음. 터미널에서 {command}을(를) 실행하세요.",
     runInTerminal: "터미널에서.",
     noProviders: "OAuth를 지원하는 제공자가 감지되지 않았습니다.",
     login: "로그인",
     disconnect: "연결 해제",
     managedExternally: "외부에서 관리됨",
     copied: "복사됨 ✓",
-    copyCode: "코드 복사",
-    copyFailed: "자동으로 복사할 수 없습니다. 코드를 선택하여 직접 복사하세요.",
     cli: "복사",
     copyCliCommand: "CLI 명령 복사 (외부 / 대체용)",
     connect: "연결",
@@ -502,11 +485,11 @@ export const ko: Translations = {
   achievements: {
     hero: {
       kicker: "Agentic Gamerscore",
-      title: "Hermes Achievements",
+      title: "Argus Achievements",
       subtitle:
-        "실제 세션 기록에서 획득하는 Hermes 컬렉터블 배지입니다. 알려져 있지만 아직 달성되지 않은 업적은 Discovered로 표시되며, Secret 업적은 일치하는 동작이 처음 나타날 때까지 숨겨집니다.",
+        "실제 세션 기록에서 획득하는 Argus 컬렉터블 배지입니다. 알려져 있지만 아직 달성되지 않은 업적은 Discovered로 표시되며, Secret 업적은 일치하는 동작이 처음 나타날 때까지 숨겨집니다.",
       scan_subtitle:
-        "Hermes 세션 기록을 스캔하고 있습니다. 기록이 많으면 첫 스캔에 5~10초가 걸릴 수 있습니다.",
+        "Argus 세션 기록을 스캔하고 있습니다. 기록이 많으면 첫 스캔에 5~10초가 걸릴 수 있습니다.",
     },
     actions: {
       rescan: "다시 스캔",
@@ -521,7 +504,7 @@ export const ko: Translations = {
       highest_tier: "최고 등급",
       highest_tier_hint: "Copper → Silver → Gold → Diamond → Olympian",
       latest: "최근",
-      latest_hint_empty: "Hermes를 더 사용해 보세요",
+      latest_hint_empty: "Argus를 더 사용해 보세요",
       none_yet: "아직 없음",
     },
     state: {
@@ -552,10 +535,10 @@ export const ko: Translations = {
       tiers_header: "등급",
       secret_header: "시크릿 업적",
       secret_body:
-        "시크릿은 정확한 트리거 조건을 숨깁니다. Hermes가 관련 신호를 감지하면 카드가 Discovered로 바뀌고 요건이 표시됩니다.",
+        "시크릿은 정확한 트리거 조건을 숨깁니다. Argus가 관련 신호를 감지하면 카드가 Discovered로 바뀌고 요건이 표시됩니다.",
       scan_status_header: "스캔 상태",
       scan_status_body:
-        "Hermes는 로컬 기록을 한 번 스캔한 뒤 카드를 자동으로 표시합니다. 몇 초 걸리더라도 멈춘 것이 아닙니다.",
+        "Argus는 로컬 기록을 한 번 스캔한 뒤 카드를 자동으로 표시합니다. 몇 초 걸리더라도 멈춘 것이 아닙니다.",
       what_scanned_header: "스캔 대상",
       what_scanned_body:
         "세션, 도구 호출, 모델 메타데이터, 오류, 업적 및 로컬 해제 상태입니다.",
@@ -602,7 +585,7 @@ export const ko: Translations = {
         "X에 공유를 누르면 새 탭에서 미리 작성된 게시물이 열립니다. 1200×630 배지를 첨부하려면 먼저 이미지 복사를 누르세요 — X 작성기에서 바로 붙여넣을 수 있습니다. PNG 다운로드는 파일을 저장하여 어디서나 사용할 수 있게 합니다.",
       clipboard_unsupported:
         "이 브라우저에서는 클립보드 이미지 복사를 지원하지 않습니다 — 대신 다운로드를 이용하세요.",
-      tweet_text: "Just unlocked {tier_part}\"{name}\" in Hermes Agent ☤",
+      tweet_text: "Just unlocked {tier_part}\"{name}\" in Argus Agent ☤",
     },
   },
   kanban: {

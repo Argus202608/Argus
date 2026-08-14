@@ -1,16 +1,15 @@
-import { useStore } from '@nanostores/react'
-import { FileText, RefreshCw } from 'lucide-react'
 import { type CSSProperties } from 'react'
-
+import { useStore } from '@nanostores/react'
 import { Button } from '../components/button'
 import {
   $logPath,
   $mode,
-  type BootstrapStateModel,
   openLogDir,
   startInstall,
-  startUpdate
+  startUpdate,
+  type BootstrapStateModel
 } from '../store'
+import { RefreshCw, FileText } from 'lucide-react'
 
 interface FailureProps {
   bootstrap: BootstrapStateModel
@@ -20,8 +19,8 @@ interface FailureProps {
  * Failure screen. Same hero treatment as Welcome/Success — the wordmark
  * carries the brand, so we keep it across every terminal state.
  *
- * The actual error message lives below in muted text. Two affordances on
- * shared Button tokens: Retry (primary) and Open logs (quiet text link).
+ * The actual error message lives below in muted text. Two clear
+ * affordances: Retry (primary) and Open log folder (secondary).
  */
 export default function Failure({ bootstrap }: FailureProps) {
   const logPath = useStore($logPath)
@@ -56,13 +55,22 @@ export default function Failure({ bootstrap }: FailureProps) {
       </div>
 
       <div className="flex items-center gap-3">
-        <Button className="gap-1.5" onClick={() => void (isUpdate ? startUpdate() : startInstall())}>
-          <RefreshCw />
+        <Button
+          onClick={() => void (isUpdate ? startUpdate() : startInstall())}
+          size="lg"
+          className="inline-flex items-center gap-2 px-6"
+        >
+          <RefreshCw size={16} />
           {isUpdate ? 'Retry update' : 'Retry install'}
         </Button>
-        <Button className="gap-1.5" onClick={() => void openLogDir()} variant="text">
-          <FileText />
-          Open logs
+        <Button
+          variant="outline"
+          size="lg"
+          onClick={() => void openLogDir()}
+          className="inline-flex items-center gap-2"
+        >
+          <FileText size={16} />
+          Open log folder
         </Button>
       </div>
 

@@ -20,7 +20,9 @@ logger = logging.getLogger(__name__)
 
 def _print_aiohttp_missing() -> None:
     print(
-        "hermes proxy requires aiohttp. Run `hermes setup` to install it.",
+        "hermes proxy requires aiohttp. Install one of:\n"
+        "  pip install 'hermes-agent[messaging]'\n"
+        "  pip install aiohttp",
         file=sys.stderr,
     )
 

@@ -51,67 +51,22 @@ from plugins.platforms.wecom.wecom_crypto import WXBizMsgCrypt, WeComCryptoError
 
 logger = logging.getLogger(__name__)
 
-# ``None`` → aiohttp/asyncio ``create_server`` binds one listening socket per
-# address family (IPv4 + IPv6). The old "0.0.0.0" default bound IPv4 ONLY and
-# was unreachable over IPv6-only private networks (e.g. Fly.io 6PN) — same
-# bug as the LINE adapter (NS-603) and gateway/platforms/webhook.py
-# (d542894ad). Pin a host via WECOM_CALLBACK_HOST or extra.host.
-DEFAULT_HOST = None
+DEFAULT_HOST = "0.0.0.0"
 DEFAULT_PORT = 8645
 DEFAULT_PATH = "/wecom/callback"
-# Cap pre-auth request bodies. WeCom callbacks are small encrypted XML
-# envelopes (media is delivered out-of-band via MediaId, never inline), so
-# 64 KB is ample for any legitimate message while bounding the work an
-# unauthenticated POST can force before signature verification.
-_MAX_BODY = 65_536
 ACCESS_TOKEN_TTL_SECONDS = 7200
 MESSAGE_DEDUP_TTL_SECONDS = 300
 
 
 def check_wecom_callback_requirements() -> bool:
-    """PASSIVE probe: are aiohttp/httpx/defusedxml importable right now?
-
-    Registry ``check_fn`` — must never install anything.  The ACTIVE
-    lazy-installer is ``ensure_wecom_callback_requirements`` below.
-    """
     return AIOHTTP_AVAILABLE and HTTPX_AVAILABLE and DEFUSEDXML_AVAILABLE
-
-
-def ensure_wecom_callback_requirements() -> bool:
-    """ACTIVE lazy-installer for the ``platform.wecom_callback`` feature.
-
-    Registered as ``ensure_deps_fn``: the registry's ``create_adapter()``
-    runs it when the passive probe fails, right before the gateway connects
-    the platform (#79812).  Installs ``defusedxml`` (the only non-core dep;
-    aiohttp/httpx ship with every messaging install) and rebinds the module
-    globals.  Before this hook existed, the passive ``check_fn`` returned
-    False forever on installs without the ``wecom`` extra and the
-    ``platform.wecom_callback`` LAZY_DEPS entry was never exercised.
-    """
-    if check_wecom_callback_requirements():
-        return True
-
-    def _import() -> dict:
-        import defusedxml.ElementTree as _ET
-
-        return {"ET": _ET, "DEFUSEDXML_AVAILABLE": True}
-
-    try:
-        from tools.lazy_deps import ensure_and_bind
-    except Exception:  # pragma: no cover — defensive
-        return False
-    if not ensure_and_bind("platform.wecom_callback", _import, globals(), prompt=False):
-        return False
-    return check_wecom_callback_requirements()
 
 
 class WecomCallbackAdapter(BasePlatformAdapter):
     def __init__(self, config: PlatformConfig):
         super().__init__(config, Platform.WECOM_CALLBACK)
         extra = config.extra or {}
-        # Falsy host (None/"") collapses to the dual-stack default.
-        _raw_host = extra.get("host") or DEFAULT_HOST
-        self._host = str(_raw_host) if _raw_host else None
+        self._host = str(extra.get("host") or DEFAULT_HOST)
         self._port = int(extra.get("port") or DEFAULT_PORT)
         self._path = str(extra.get("path") or DEFAULT_PATH)
         self._apps: List[Dict[str, Any]] = self._normalize_apps(extra)
@@ -155,13 +110,7 @@ class WecomCallbackAdapter(BasePlatformAdapter):
     # Lifecycle
     # ------------------------------------------------------------------
 
-    async def connect(self, *, is_reconnect: bool = False) -> bool:
-        # ``is_reconnect`` is forwarded by GatewayRunner on every retry per
-        # the BasePlatformAdapter.connect contract. Callback adapters have
-        # no server-side queue to preserve, so the flag is accepted-and-
-        # ignored — but the kwarg MUST be present or the reconnect watcher
-        # dies with TypeError and the platform silently stays offline.
-        del is_reconnect
+    async def connect(self) -> bool:
         if not self._apps:
             logger.warning("[WecomCallback] No callback apps configured")
             return False
@@ -183,9 +132,7 @@ class WecomCallbackAdapter(BasePlatformAdapter):
             # Tighter keepalive so idle CLOSE_WAIT drains promptly (#18451).
             from gateway.platforms._http_client_limits import platform_httpx_limits
             self._http_client = httpx.AsyncClient(timeout=20.0, limits=platform_httpx_limits())
-            # client_max_size rejects oversized bodies at the aiohttp layer
-            # (413) before our handler — and before any signature work — runs.
-            self._app = web.Application(client_max_size=_MAX_BODY)
+            self._app = web.Application()
             self._app.router.add_get("/health", self._handle_health)
             self._app.router.add_get(self._path, self._handle_verify)
             self._app.router.add_post(self._path, self._handle_callback)
@@ -326,13 +273,7 @@ class WecomCallbackAdapter(BasePlatformAdapter):
         msg_signature = request.query.get("msg_signature", "")
         timestamp = request.query.get("timestamp", "")
         nonce = request.query.get("nonce", "")
-        # Explicit guard in addition to client_max_size: rejects oversized
-        # payloads before any XML parse / signature check (DoS, zip bombs).
-        body_bytes = await request.read()
-        if len(body_bytes) > _MAX_BODY:
-            logger.warning("[WecomCallback] Payload too large (%d bytes) — rejected", len(body_bytes))
-            return web.Response(status=413, text="payload too large")
-        body = body_bytes.decode("utf-8", errors="replace")
+        body = await request.text()
 
         for app in self._apps:
             try:

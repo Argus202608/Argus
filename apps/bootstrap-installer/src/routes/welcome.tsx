@@ -1,7 +1,7 @@
 import { type CSSProperties } from 'react'
-
-import { HackeryButton } from '../components/hackery-button'
+import { Button } from '../components/button'
 import { startInstall } from '../store'
+import { ArrowRight } from 'lucide-react'
 
 /*
  * Welcome screen.
@@ -31,9 +31,9 @@ export default function Welcome() {
           }
         >
           <span>
-            <span>HERMES AGENT</span>
+            <span>ARGUS AGENT</span>
           </span>
-          <span aria-hidden="true">HERMES AGENT</span>
+          <span aria-hidden="true">ARGUS AGENT</span>
         </p>
 
         <p className="m-0 text-center text-base leading-normal tracking-tight text-muted-foreground">
@@ -42,7 +42,17 @@ export default function Welcome() {
         </p>
       </div>
 
-      <HackeryButton label="Install" onClick={() => void startInstall()} />
+      <Button
+        onClick={() => void startInstall()}
+        size="lg"
+        className="group inline-flex items-center gap-2 px-6"
+      >
+        Install Argus
+        <ArrowRight
+          size={18}
+          className="transition-transform group-hover:translate-x-0.5"
+        />
+      </Button>
     </div>
   )
 }

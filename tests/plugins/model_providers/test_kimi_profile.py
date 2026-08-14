@@ -45,24 +45,12 @@ class TestKimiReasoningWireShape:
         assert extra_body == {"thinking": {"type": "enabled"}}
         assert top_level == {}
 
-    @pytest.mark.parametrize(
-        "effort,expected",
-        [
-            ("low", "low"),
-            ("minimal", "low"),
-            ("medium", "high"),
-            ("high", "high"),
-            ("xhigh", "max"),
-            ("max", "max"),
-            ("ultra", "max"),
-        ],
-    )
-    def test_effort_mapped_to_k3_vocabulary(self, kimi_profile, effort, expected):
-        """Hermes' wider effort vocabulary is mapped onto K3's low/high/max."""
+    @pytest.mark.parametrize("effort", ["low", "medium", "high"])
+    def test_explicit_effort_sends_effort_only(self, kimi_profile, effort):
         extra_body, top_level = kimi_profile.build_api_kwargs_extras(
             reasoning_config={"enabled": True, "effort": effort}
         )
-        assert top_level == {"reasoning_effort": expected}
+        assert top_level == {"reasoning_effort": effort}
         assert "thinking" not in extra_body
 
     def test_enabled_without_effort_falls_back_to_thinking(self, kimi_profile):
@@ -72,10 +60,10 @@ class TestKimiReasoningWireShape:
         assert extra_body == {"thinking": {"type": "enabled"}}
         assert top_level == {}
 
-    @pytest.mark.parametrize("effort", ["", "garbage"])
+    @pytest.mark.parametrize("effort", ["", "garbage", "xhigh", "max"])
     def test_unrecognized_effort_falls_back_to_thinking(self, kimi_profile, effort):
-        """Unknown efforts drop to the thinking toggle rather than sending
-        an invalid effort."""
+        """Unknown/strong efforts aren't in Moonshot's low|medium|high set, so
+        we drop to the thinking toggle rather than sending an invalid effort."""
         extra_body, top_level = kimi_profile.build_api_kwargs_extras(
             reasoning_config={"enabled": True, "effort": effort}
         )
@@ -89,6 +77,12 @@ class TestKimiReasoningWireShape:
         assert extra_body == {"thinking": {"type": "disabled"}}
         assert top_level == {}
 
+    def test_disabled_ignores_effort(self, kimi_profile):
+        extra_body, top_level = kimi_profile.build_api_kwargs_extras(
+            reasoning_config={"enabled": False, "effort": "high"}
+        )
+        assert extra_body == {"thinking": {"type": "disabled"}}
+        assert top_level == {}
 
     @pytest.mark.parametrize(
         "reasoning_config",
@@ -109,26 +103,6 @@ class TestKimiReasoningWireShape:
         assert not ("thinking" in extra_body and "reasoning_effort" in top_level)
 
 
-class TestKimiModelDiscovery:
-    def test_malformed_base_url_is_unconfirmed_and_filters_k3(self, kimi_profile):
-        """Malformed user URLs must fall through safely, never authorize K3."""
-        from unittest.mock import patch
-
-        from providers.base import ProviderProfile
-
-        with patch.object(
-            ProviderProfile,
-            "fetch_models",
-            return_value=["k3", "kimi-k2.6"],
-        ):
-            models = kimi_profile.fetch_models(
-                api_key="test-key",
-                base_url="https://[api.kimi.com/coding",
-            )
-
-        assert models == ["kimi-k2.6"]
-
-
 class TestKimiFullKwargsIntegration:
     """The transport's full kwargs carry at most one reasoning knob."""
 
@@ -145,4 +119,12 @@ class TestKimiFullKwargsIntegration:
             provider_name="kimi-coding",
         )
 
+    def test_explicit_effort_omits_thinking(self, kimi_profile):
+        kwargs = self._build(kimi_profile, {"enabled": True, "effort": "high"})
+        assert kwargs["reasoning_effort"] == "high"
+        assert "thinking" not in kwargs.get("extra_body", {})
 
+    def test_no_config_omits_effort(self, kimi_profile):
+        kwargs = self._build(kimi_profile, None)
+        assert "reasoning_effort" not in kwargs
+        assert kwargs["extra_body"] == {"thinking": {"type": "enabled"}}

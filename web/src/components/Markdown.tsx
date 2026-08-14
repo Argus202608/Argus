@@ -1,4 +1,4 @@
-import { useMemo, type ReactNode } from "react";
+import { memo, useEffect, useMemo, useState, type ReactNode } from "react";
 
 /**
  * Lightweight markdown renderer for LLM output.
@@ -9,7 +9,7 @@ import { useMemo, type ReactNode } from "react";
  * appears to hug the final character instead of wrapping onto a new line
  * after a block element (paragraph/list/code/…).
  */
-export function Markdown({
+function MarkdownInner({
   content,
   highlightTerms,
   streaming,
@@ -18,23 +18,52 @@ export function Markdown({
   highlightTerms?: string[];
   streaming?: boolean;
 }) {
-  const blocks = useMemo(() => parseBlocks(content), [content]);
-  const caret = streaming ? <StreamingCaret /> : null;
+  // ★ 性能(治大表格流式硬卡死): 流式期间【降级为纯文本】, 不跑 parseBlocks/parseInline。
+  //   parseBlocks 每次 content 变(每 80ms flush)都全量重扫整串, 对增长中的大 GFM 表格
+  //   是 O(n²)+每格重建, 单 flush 超帧预算 → 连续 flush livelock 卡死。流式期间用户只需
+  //   看到文字在长出来, 纯文本 whitespace-pre-wrap 渲染是 O(1) diff; 完成(streaming=false)
+  //   后再跑一次完整 Markdown。这样表格/代码/公式最终仍完整渲染, 但生成期不再卡。
+  if (streaming) {
+    return (
+      <div className="text-sm text-foreground leading-snug whitespace-pre-wrap break-words">
+        {content}
+        <StreamingCaret />
+      </div>
+    );
+  }
+  return <ParsedMarkdown content={content} highlightTerms={highlightTerms} />;
+}
 
+// Full-parse render path (non-streaming / completed messages).
+function ParsedMarkdown({
+  content, highlightTerms,
+}: { content: string; highlightTerms?: string[] }) {
+  const blocks = useMemo(() => parseBlocks(content), [content]);
+  // space-y-1 (was space-y-2) + snugger leading: model answers stacked too much
+  // whitespace between paragraphs/headings/---. Tightened without touching the
+  // model's \n\n (which drives the block split).
   return (
-    <div className="text-sm text-foreground leading-relaxed space-y-2">
+    <div className="text-sm text-foreground leading-snug space-y-1">
       {blocks.map((block, i) => (
-        <Block
-          key={i}
-          block={block}
-          highlightTerms={highlightTerms}
-          caret={caret && i === blocks.length - 1 ? caret : null}
-        />
+        <Block key={i} block={block} highlightTerms={highlightTerms} caret={null} />
       ))}
-      {blocks.length === 0 && caret}
     </div>
   );
 }
+
+/**
+ * Memoized wrapper. In the multimodal chat page, ANY setState (e.g. one
+ * assistant bubble streaming, or eventLog updating, or ctx panel refreshing)
+ * re-renders the parent, and without memo every completed assistant bubble
+ * re-parses its whole content each time. `memo` skips that when props are
+ * identical. Uses a custom shallow compare that treats `highlightTerms` by
+ * reference (callers pass a stable ref or undefined).
+ */
+export const Markdown = memo(MarkdownInner, (a, b) => (
+  a.content === b.content &&
+  a.streaming === b.streaming &&
+  a.highlightTerms === b.highlightTerms
+));
 
 function StreamingCaret() {
   return (
@@ -53,8 +82,35 @@ type BlockNode =
   | { type: "code"; lang: string; content: string }
   | { type: "heading"; level: number; content: string }
   | { type: "hr" }
-  | { type: "list"; ordered: boolean; items: string[] }
+  | { type: "list"; ordered: boolean; items: string[]; start?: number }
+  | { type: "table"; header: string[]; rows: string[][] }
   | { type: "paragraph"; content: string };
+
+/** Split a GFM table row "| a | b |" into cells (trim outer pipes, respect
+ *  escaped \| ). Returns trimmed cell strings. */
+function _splitTableRow(line: string): string[] {
+  let s = line.trim();
+  if (s.startsWith("|")) s = s.slice(1);
+  if (s.endsWith("|")) s = s.slice(0, -1);
+  // Split on unescaped pipes.
+  const cells: string[] = [];
+  let buf = "";
+  for (let k = 0; k < s.length; k++) {
+    if (s[k] === "\\" && s[k + 1] === "|") { buf += "|"; k++; continue; }
+    if (s[k] === "|") { cells.push(buf.trim()); buf = ""; continue; }
+    buf += s[k];
+  }
+  cells.push(buf.trim());
+  return cells;
+}
+
+/** A line is a GFM table separator if every cell is like ---, :--, --:, :-:. */
+function _isTableSeparator(line: string): boolean {
+  if (!line.includes("|") && !line.includes("-")) return false;
+  const cells = _splitTableRow(line);
+  if (cells.length === 0) return false;
+  return cells.every((c) => /^:?-{1,}:?$/.test(c.replace(/\s/g, "")));
+}
 
 /* ------------------------------------------------------------------ */
 /*  Block parser                                                       */
@@ -114,13 +170,36 @@ function parseBlocks(text: string): BlockNode[] {
     }
 
     // Ordered list
-    if (/^\d+[.)]\s/.test(line)) {
+    const _olm = line.match(/^(\d+)[.)]\s/);
+    if (_olm) {
+      // ★ 记住这一段有序列表的【起始序号】(原文第一项的真实数字)。lightweight 解析器
+      //   会把"1. 标题 + 子项(-) + 1. 标题…"拆成多个单项 <ol>, 若都靠 CSS list-decimal
+      //   自动编号, 每段都从 1 开始 → 界面出现一堆 "1."。用 <ol start> 保住真实序号。
+      const start = parseInt(_olm[1], 10) || 1;
       const items: string[] = [];
       while (i < lines.length && /^\d+[.)]\s/.test(lines[i])) {
         items.push(lines[i].replace(/^\d+[.)]\s/, ""));
         i++;
       }
-      blocks.push({ type: "list", ordered: true, items });
+      blocks.push({ type: "list", ordered: true, items, start });
+      continue;
+    }
+
+    // GFM table: a header row (contains a pipe) immediately followed by a
+    // separator row (|---|:--:|...). Rows continue until a non-pipe/blank line.
+    if (
+      line.includes("|") &&
+      i + 1 < lines.length &&
+      _isTableSeparator(lines[i + 1])
+    ) {
+      const header = _splitTableRow(line);
+      i += 2; // consume header + separator
+      const rows: string[][] = [];
+      while (i < lines.length && lines[i].trim() !== "" && lines[i].includes("|")) {
+        rows.push(_splitTableRow(lines[i]));
+        i++;
+      }
+      blocks.push({ type: "table", header, rows });
       continue;
     }
 
@@ -139,7 +218,9 @@ function parseBlocks(text: string): BlockNode[] {
       !lines[i].match(/^#{1,4}\s/) &&
       !lines[i].match(/^[-*+]\s/) &&
       !lines[i].match(/^\d+[.)]\s/) &&
-      !lines[i].match(/^[-*_]{3,}\s*$/)
+      !lines[i].match(/^[-*_]{3,}\s*$/) &&
+      // stop if a GFM table starts here (pipe header + separator next line)
+      !(lines[i].includes("|") && i + 1 < lines.length && _isTableSeparator(lines[i + 1]))
     ) {
       paraLines.push(lines[i]);
       i++;
@@ -156,7 +237,7 @@ function parseBlocks(text: string): BlockNode[] {
 /*  Block renderer                                                     */
 /* ------------------------------------------------------------------ */
 
-function Block({
+function BlockInner({
   block,
   highlightTerms,
   caret,
@@ -205,6 +286,9 @@ function Block({
       const last = block.items.length - 1;
       return (
         <Tag
+          // ★ start: 保住有序列表的真实起始序号 (拆成多个 <ol> 时才不会都从 1 开始)。
+          {...(block.ordered && block.start && block.start !== 1
+            ? { start: block.start } : {})}
           className={`space-y-0.5 ${block.ordered ? "list-decimal" : "list-disc"} pl-5 text-sm`}
         >
           {block.items.map((item, i) => (
@@ -217,6 +301,38 @@ function Block({
       );
     }
 
+    case "table":
+      return (
+        <div className="overflow-x-auto">
+          <table className="my-1 w-full border-collapse text-xs">
+            <thead>
+              <tr>
+                {block.header.map((h, i) => (
+                  <th
+                    key={i}
+                    className="border border-border bg-secondary/50 px-2 py-1 text-left font-semibold"
+                  >
+                    <InlineContent text={h} highlightTerms={highlightTerms} />
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {block.rows.map((row, r) => (
+                <tr key={r}>
+                  {block.header.map((_, c) => (
+                    <td key={c} className="border border-border px-2 py-1 align-top">
+                      <InlineContent text={row[c] ?? ""} highlightTerms={highlightTerms} />
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {caret}
+        </div>
+      );
+
     case "paragraph":
       return (
         <p>
@@ -226,6 +342,50 @@ function Block({
       );
   }
 }
+
+/** Cheap structural equality for two parsed blocks. parseBlocks 每次流式重解析都会
+ *  产出【全新的 block 对象】(引用必变), 所以裸 React.memo 命中不了 —— 必须按值比较。
+ *  流式追加时只有【最后一个 block】在长, 前面所有 block 值不变 → memo 命中、跳过重渲,
+ *  否则一份 4 表 600 格的报告每 80ms flush 全量 reconcile 600+ 节点, 叠加面板输出直接
+ *  撑爆主线程 (livelock)。 */
+function _blockEq(a: BlockNode, b: BlockNode): boolean {
+  if (a.type !== b.type) return false;
+  switch (a.type) {
+    case "code":
+      return a.content === (b as typeof a).content && a.lang === (b as typeof a).lang;
+    case "heading":
+      return a.level === (b as typeof a).level && a.content === (b as typeof a).content;
+    case "hr":
+      return true;
+    case "list": {
+      const bb = b as typeof a;
+      return a.ordered === bb.ordered
+        && a.start === bb.start
+        && a.items.length === bb.items.length
+        && a.items.every((it, i) => it === bb.items[i]);
+    }
+    case "table": {
+      const bb = b as typeof a;
+      if (a.header.length !== bb.header.length
+          || !a.header.every((h, i) => h === bb.header[i])) return false;
+      if (a.rows.length !== bb.rows.length) return false;
+      return a.rows.every((row, r) =>
+        row.length === bb.rows[r].length
+        && row.every((c, i) => c === bb.rows[r][i]));
+    }
+    case "paragraph":
+      return a.content === (b as typeof a).content;
+    default:
+      return false;
+  }
+}
+
+const Block = memo(BlockInner, (a, b) =>
+  // caret 只挂在最后一个 block: caret 变化 (从有到无/无到有) 必须重渲。
+  (!!a.caret === !!b.caret)
+  && a.highlightTerms === b.highlightTerms
+  && _blockEq(a.block, b.block),
+);
 
 /* ------------------------------------------------------------------ */
 /*  Inline parser + renderer                                           */
@@ -237,13 +397,16 @@ type InlineNode =
   | { type: "bold"; content: string }
   | { type: "italic"; content: string }
   | { type: "link"; text: string; href: string }
+  | { type: "math"; content: string; display: boolean }
   | { type: "br" };
 
 function parseInline(text: string): InlineNode[] {
   const nodes: InlineNode[] = [];
-  // Pattern priority: code > link > bold > italic > bare URL > line break
+  // Pattern priority: math > code > link > bold > italic > bare URL > line break.
+  // Math forms (LaTeX): $$...$$ / \[...\] (display), $...$ / \(...\) (inline).
+  // Display forms come first so $$ isn't split by the single-$ rule.
   const pattern =
-    /(`[^`]+`)|(\[([^\]]+)\]\(([^)]+)\))|(\*\*([^*]+)\*\*)|(\*([^*]+)\*)|(\bhttps?:\/\/[^\s<>)\]]+)|(\n)/g;
+    /(\$\$([\s\S]+?)\$\$)|(\\\[([\s\S]+?)\\\])|(\$(?!\s)([^$\n]+?)(?<!\s)\$)|(\\\(([\s\S]+?)\\\))|(`[^`]+`)|(\[([^\]]+)\]\(([^)]+)\))|(\*\*([^*]+)\*\*)|(\*([^*]+)\*)|(\bhttps?:\/\/[^\s<>)\]]+)|(\n)/g;
   let lastIndex = 0;
   let match: RegExpExecArray | null;
 
@@ -253,21 +416,33 @@ function parseInline(text: string): InlineNode[] {
     }
 
     if (match[1]) {
-      // Inline code
-      nodes.push({ type: "code", content: match[1].slice(1, -1) });
-    } else if (match[2]) {
-      // [text](url) link
-      nodes.push({ type: "link", text: match[3], href: match[4] });
+      // $$display math$$
+      nodes.push({ type: "math", content: match[2], display: true });
+    } else if (match[3]) {
+      // \[display math\]
+      nodes.push({ type: "math", content: match[4], display: true });
     } else if (match[5]) {
-      // **bold**
-      nodes.push({ type: "bold", content: match[6] });
+      // $inline math$
+      nodes.push({ type: "math", content: match[6], display: false });
     } else if (match[7]) {
-      // *italic*
-      nodes.push({ type: "italic", content: match[8] });
+      // \(inline math\)
+      nodes.push({ type: "math", content: match[8], display: false });
     } else if (match[9]) {
-      // Bare URL
-      nodes.push({ type: "link", text: match[9], href: match[9] });
+      // Inline code
+      nodes.push({ type: "code", content: match[9].slice(1, -1) });
     } else if (match[10]) {
+      // [text](url) link
+      nodes.push({ type: "link", text: match[11], href: match[12] });
+    } else if (match[13]) {
+      // **bold**
+      nodes.push({ type: "bold", content: match[14] });
+    } else if (match[15]) {
+      // *italic*
+      nodes.push({ type: "italic", content: match[16] });
+    } else if (match[17]) {
+      // Bare URL
+      nodes.push({ type: "link", text: match[17], href: match[17] });
+    } else if (match[18]) {
       // Line break within paragraph
       nodes.push({ type: "br" });
     }
@@ -282,7 +457,7 @@ function parseInline(text: string): InlineNode[] {
   return nodes;
 }
 
-function InlineContent({
+const InlineContent = memo(function InlineContent({
   text,
   highlightTerms,
 }: {
@@ -350,27 +525,111 @@ function InlineContent({
               </a>
             );
           }
+          case "math":
+            return <KatexMath key={i} tex={node.content} display={node.display} />;
           case "br":
             return <br key={i} />;
         }
       })}
     </>
   );
+});
+
+/**
+ * Render a LaTeX snippet with KaTeX. KaTeX is loaded lazily and cached; if the
+ * package isn't installed (run `npm install katex` in web/), we degrade to the
+ * raw TeX in a mono span rather than crash or show nothing.
+ */
+// Typed as `any` so this compiles whether or not the optional `katex` package
+// is installed (run `npm install katex` in web/ to enable rendered math).
+let _katexMod: any = null;
+let _katexLoad: Promise<void> | null = null;
+function _ensureKatex(): Promise<void> {
+  if (_katexMod) return Promise.resolve();
+  if (!_katexLoad) {
+    // @vite-ignore + variable specifier keeps the bundler from hard-failing the
+    // build when katex isn't present; the import just rejects → raw-TeX fallback.
+    const katexPkg = "katex";
+    const katexCss = "katex/dist/katex.min.css";
+    _katexLoad = import(/* @vite-ignore */ katexPkg)
+      .then((m: any) => {
+        _katexMod = m.default || m;
+        return import(/* @vite-ignore */ katexCss).catch(() => undefined);
+      })
+      .then(() => { /* css best-effort */ })
+      .catch(() => { _katexMod = null; });
+  }
+  return _katexLoad;
 }
+
+const KatexMath = memo(function KatexMath({
+  tex,
+  display,
+}: {
+  tex: string;
+  display: boolean;
+}) {
+  const [html, setHtml] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    _ensureKatex().then(() => {
+      if (!alive) return;
+      if (!_katexMod) { setFailed(true); return; }
+      try {
+        const out = _katexMod.renderToString(tex, {
+          displayMode: display,
+          throwOnError: false,
+          output: "html",
+        });
+        setHtml(out);
+      } catch {
+        setFailed(true);
+      }
+    });
+    return () => { alive = false; };
+  }, [tex, display]);
+
+  // Fallback: KaTeX unavailable or render error → show raw TeX (never blank).
+  if (failed || html === null) {
+    return (
+      <code className={display
+        ? "block my-1 bg-secondary/40 px-2 py-1 text-xs font-mono"
+        : "px-1 text-xs font-mono text-primary/90"}>
+        {display ? tex : `$${tex}$`}
+      </code>
+    );
+  }
+  return display ? (
+    <span className="block my-1 overflow-x-auto"
+      dangerouslySetInnerHTML={{ __html: html }} />
+  ) : (
+    <span dangerouslySetInnerHTML={{ __html: html }} />
+  );
+});
 
 /** Highlight search terms within a plain text string. */
 function HighlightedText({ text, terms }: { text: string; terms?: string[] }) {
-  if (!terms || terms.length === 0) return <>{text}</>;
+  // ★ 过滤空/纯空白 term: 空字符串会让 (a||b) 这类交替匹配到【每个位置的空串】,
+  //   既产生错误高亮又是潜在的退化匹配源。空 term 列表 → 直接原文返回。
+  const clean = (terms ?? []).filter((t) => t && t.trim() !== "");
+  if (clean.length === 0) return <>{text}</>;
 
   // Build a regex that matches any of the search terms (case-insensitive)
-  const escaped = terms.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-  const regex = new RegExp(`(${escaped.join("|")})`, "gi");
-  const parts = text.split(regex);
+  const escaped = clean.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  // split-capture regex (仅用于切分, 每次都新建避免共享 lastIndex 状态)。
+  const splitRe = new RegExp(`(${escaped.join("|")})`, "gi");
+  const parts = text.split(splitRe);
+  // ★ 判定"这一段是否命中" 不能复用带 /g 的正则做 .test() —— /g 正则是【有状态】的,
+  //   连续 .test() 会推进 lastIndex, 造成隔一个漏一个的错误高亮。改成用一个不带 /g
+  //   的整段匹配正则 (^(...)$) 逐段判定, 无状态、结果确定。
+  const isTermRe = new RegExp(`^(?:${escaped.join("|")})$`, "i");
 
   return (
     <>
       {parts.map((part, i) =>
-        regex.test(part) ? (
+        part && isTermRe.test(part) ? (
           <mark key={i} className="bg-warning/30 text-warning px-0.5">
             {part}
           </mark>

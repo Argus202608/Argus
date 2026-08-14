@@ -6,12 +6,10 @@ import { TUI_SESSION_MODEL_FLAG } from '../domain/slash.js'
 import type { GatewayClient } from '../gatewayClient.js'
 import type { ModelOptionProvider, ModelOptionsResponse } from '../gatewayTypes.js'
 import { fuzzyRank } from '../lib/fuzzy.js'
-import { modelSearchText } from '../lib/model-search-text.js'
 import { asRpcResult, rpcErrorMessage } from '../lib/rpc.js'
 import type { Theme } from '../theme.js'
 
 import { OverlayHint, useOverlayKeys, windowItems } from './overlayControls.js'
-import { chipRowProps, clampOverlayWidth } from './overlayPrimitives.js'
 
 const VISIBLE = 12
 const MIN_WIDTH = 40
@@ -21,10 +19,7 @@ type Stage = 'provider' | 'key' | 'model' | 'disconnect'
 
 type ProviderRow = { name: string; provider: ModelOptionProvider }
 
-export function providerIndexAfterClearingFilter(
-  providerRows: ProviderRow[],
-  provider: ModelOptionProvider | undefined
-) {
+export function providerIndexAfterClearingFilter(providerRows: ProviderRow[], provider: ModelOptionProvider | undefined) {
   if (!provider) {
     return -1
   }
@@ -32,16 +27,7 @@ export function providerIndexAfterClearingFilter(
   return providerRows.findIndex(row => row.provider.slug === provider.slug)
 }
 
-export function ModelPicker({
-  allowPersistGlobal = true,
-  gw,
-  initialRefresh = false,
-  maxWidth,
-  onCancel,
-  onSelect,
-  sessionId,
-  t
-}: ModelPickerProps) {
+export function ModelPicker({ allowPersistGlobal = true, gw, onCancel, onSelect, sessionId, t }: ModelPickerProps) {
   const [providers, setProviders] = useState<ModelOptionProvider[]>([])
   const [currentModel, setCurrentModel] = useState('')
   const [err, setErr] = useState('')
@@ -60,21 +46,11 @@ export function ModelPicker({
   // Pin the picker to a stable width so the FloatBox parent (which shrinks-
   // to-fit with alignSelf="flex-start") doesn't resize as long provider /
   // model names scroll into view, and so `wrap="truncate-end"` on each row
-  // has an actual constraint to truncate against. Optional maxWidth lets
-  // grid layouts hand the picker its cell budget.
-  const preferredWidth = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, (stdout?.columns ?? 80) - 6))
-  const width = clampOverlayWidth(preferredWidth, maxWidth)
+  // has an actual constraint to truncate against.
+  const width = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, (stdout?.columns ?? 80) - 6))
 
   useEffect(() => {
-    gw.request<ModelOptionsResponse>('model.options', {
-      ...(sessionId ? { session_id: sessionId } : {}),
-      ...(initialRefresh ? { refresh: true } : {}),
-      // The TUI picker shows the full provider universe with setup
-      // affordances ("paste KEY to activate"), so opt into unconfigured
-      // rows — the backend now defaults to the configured subset for
-      // desktop chat pickers (#56974).
-      include_unconfigured: true
-    })
+    gw.request<ModelOptionsResponse>('model.options', sessionId ? { session_id: sessionId } : {})
       .then(raw => {
         const r = asRpcResult<ModelOptionsResponse>(raw)
 
@@ -103,7 +79,7 @@ export function ModelPicker({
         setErr(rpcErrorMessage(e))
         setLoading(false)
       })
-  }, [gw, initialRefresh, sessionId])
+  }, [gw, sessionId])
 
   const names = useMemo(() => providerDisplayNames(providers), [providers])
 
@@ -137,9 +113,7 @@ export function ModelPicker({
       return allModels
     }
 
-    // modelSearchText adds aliases for brand-less wire ids (e.g. Kimi
-    // Coding `k3` still matches a "kimi" query).
-    return fuzzyRank(allModels, filter, modelSearchText).map(r => r.item)
+    return fuzzyRank(allModels, filter, m => m).map(r => r.item)
   }, [allModels, filter, stage])
 
   const models = filteredModels
@@ -600,8 +574,9 @@ export function ModelPicker({
 
             return row ? (
               <Text
-                color={dimmed ? t.color.label : t.color.muted}
-                {...chipRowProps(t, providerIdx === idx)}
+                bold={providerIdx === idx}
+                color={providerIdx === idx ? t.color.accent : dimmed ? t.color.label : t.color.muted}
+                inverse={providerIdx === idx}
                 key={p?.slug ?? `row-${idx}`}
                 wrap="truncate-end"
               >
@@ -672,8 +647,9 @@ export function ModelPicker({
 
         return (
           <Text
-            color={t.color.muted}
-            {...chipRowProps(t, modelIdx === idx)}
+            bold={modelIdx === idx}
+            color={modelIdx === idx ? t.color.accent : t.color.muted}
+            inverse={modelIdx === idx}
             key={`${provider?.slug ?? 'prov'}:${idx}:${row}`}
             wrap="truncate-end"
           >
@@ -701,8 +677,6 @@ export function ModelPicker({
 interface ModelPickerProps {
   allowPersistGlobal?: boolean
   gw: GatewayClient
-  initialRefresh?: boolean
-  maxWidth?: number
   onCancel: () => void
   onSelect: (value: string) => void
   sessionId: string | null

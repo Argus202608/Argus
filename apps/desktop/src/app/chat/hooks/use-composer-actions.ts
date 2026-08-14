@@ -5,15 +5,11 @@ import { droppedFileInlineRef } from '@/app/chat/composer/inline-refs'
 import { formatRefValue } from '@/components/assistant-ui/directive-text'
 import { useI18n } from '@/i18n'
 import { attachmentId, contextPath, pathLabel } from '@/lib/chat-runtime'
-import { readDesktopFileDataUrl, selectDesktopPaths } from '@/lib/desktop-fs'
-import { desktopGit } from '@/lib/desktop-git'
-import { normalize } from '@/lib/text'
 import {
   addComposerAttachment,
   type ComposerAttachment,
   removeComposerAttachment,
-  setComposerTerminalSelection,
-  updateComposerAttachment
+  setComposerTerminalSelection
 } from '@/store/composer'
 import { notify, notifyError } from '@/store/notifications'
 
@@ -33,36 +29,13 @@ const BLOB_MIME_EXTENSION: Record<string, string> = {
 }
 
 function blobExtension(blob: Blob): string {
-  const mime = normalize(blob.type.split(';')[0])
+  const mime = blob.type.split(';')[0]?.trim().toLowerCase()
 
-  return BLOB_MIME_EXTENSION[mime] || '.png'
+  return (mime && BLOB_MIME_EXTENSION[mime]) || '.png'
 }
 
 export function isImagePath(filePath: string): boolean {
   return IMAGE_EXTENSION_PATTERN.test(filePath)
-}
-
-/**
- * Read an attachment's thumbnail preview, local disk first. Paperclip picks,
- * clipboard saves, and OS drops always hand us paths on THIS machine — the
- * remote-routed fs facade would 404 them against the gateway and toast a bogus
- * "preview failed" even though the attach itself works (upload reads local
- * bytes too). In-app drags from the remote project tree are the opposite case:
- * the local read fails there, so fall back to the facade (remote fs bridge).
- * In local mode the facade IS the local bridge, so this stays a single read.
- */
-export async function attachmentPreviewDataUrl(filePath: string): Promise<string> {
-  try {
-    const local = await window.hermesDesktop?.readFileDataUrl?.(filePath)
-
-    if (local) {
-      return local
-    }
-  } catch {
-    // Not on this machine (or unreadable locally) — try the gateway.
-  }
-
-  return readDesktopFileDataUrl(filePath)
 }
 
 export interface DroppedFile {
@@ -70,8 +43,7 @@ export interface DroppedFile {
   file?: File
   /** Absolute filesystem path. Empty when an OS drop didn't carry one. */
   path: string
-  /** True if the entry is a directory. Set by in-app drags, and by OS drops via
-   * DataTransferItem.webkitGetAsEntry(). */
+  /** True if the entry is a directory. Currently only set by in-app drags. */
   isDirectory?: boolean
   /** First line number for in-app line-ref drags (source view gutter). */
   line?: number
@@ -135,50 +107,39 @@ export function extractDroppedFiles(transfer: DataTransfer): DroppedFile[] {
     // Malformed payload — fall through to native files.
   }
 
-  // Add a native OS-drop entry. A dropped directory has no byte content to
-  // upload, so it's emitted as a path-only entry with `isDirectory: true` —
-  // that routes it to a `@folder:` ref / folder attachment (like the folder
-  // picker) instead of the file-upload pipeline, which can't stage a directory
-  // (the gateway can't read its bytes and there's no data_url to send).
-  const pushNativeEntry = (file: File, isDirectory: boolean) => {
-    if (seenFiles.has(file)) {
-      return
-    }
+  const fileList = transfer.files
 
-    seenFiles.add(file)
-    let path = ''
+  if (fileList) {
+    for (let i = 0; i < fileList.length; i += 1) {
+      const file = fileList.item(i)
 
-    if (getPath) {
-      try {
-        path = getPath(file) || ''
-      } catch {
-        path = ''
+      if (!file || seenFiles.has(file)) {
+        continue
       }
-    }
 
-    if (path && seenPaths.has(path)) {
-      return
-    }
+      seenFiles.add(file)
+      let path = ''
 
-    if (path) {
-      seenPaths.add(path)
-    }
+      if (getPath) {
+        try {
+          path = getPath(file) || ''
+        } catch {
+          path = ''
+        }
+      }
 
-    if (isDirectory) {
+      if (path && seenPaths.has(path)) {
+        continue
+      }
+
       if (path) {
-        result.push({ isDirectory: true, path })
+        seenPaths.add(path)
       }
 
-      return
+      result.push({ file, path })
     }
-
-    result.push({ file, path })
   }
 
-  // Process items first: DataTransferItem.webkitGetAsEntry() is the only
-  // synchronous way to tell a dropped folder from a file, and it lives only on
-  // items (not transfer.files). Must be read here, inside the drop handler,
-  // before the DataTransfer detaches.
   const items = transfer.items
 
   if (items) {
@@ -189,39 +150,32 @@ export function extractDroppedFiles(transfer: DataTransfer): DroppedFile[] {
         continue
       }
 
-      let isDirectory = false
-
-      try {
-        const entry = typeof item.webkitGetAsEntry === 'function' ? item.webkitGetAsEntry() : null
-        isDirectory = entry?.isDirectory === true
-      } catch {
-        isDirectory = false
-      }
-
       const file = item.getAsFile()
 
-      if (!file) {
+      if (!file || seenFiles.has(file)) {
         continue
       }
 
-      pushNativeEntry(file, isDirectory)
-    }
-  }
+      seenFiles.add(file)
+      let path = ''
 
-  // Fallback for environments that populate transfer.files but not items.
-  // webkitGetAsEntry isn't available on this path, so directory detection
-  // relies on the items pass above; anything reaching here is treated as a file.
-  const fileList = transfer.files
+      if (getPath) {
+        try {
+          path = getPath(file) || ''
+        } catch {
+          path = ''
+        }
+      }
 
-  if (fileList) {
-    for (let i = 0; i < fileList.length; i += 1) {
-      const file = fileList.item(i)
-
-      if (!file) {
+      if (path && seenPaths.has(path)) {
         continue
       }
 
-      pushNativeEntry(file, false)
+      if (path) {
+        seenPaths.add(path)
+      }
+
+      result.push({ file, path })
     }
   }
 
@@ -257,47 +211,21 @@ export function partitionDroppedFiles(candidates: DroppedFile[]): {
   return { osDrops, inAppRefs }
 }
 
-/** The composer these actions feed. Defaults to the main chat's scope;
- *  session tiles pass their own so picks/drops/pastes land in THEIR chips. */
-interface ComposerActionsScope {
-  add: (attachment: ComposerAttachment) => void
-  remove: (id: string) => ComposerAttachment | null
-  update: (attachment: ComposerAttachment) => boolean
-  target: string
-}
-
-const MAIN_ACTIONS_SCOPE: ComposerActionsScope = {
-  add: addComposerAttachment,
-  remove: removeComposerAttachment,
-  update: updateComposerAttachment,
-  target: 'main'
-}
-
 interface ComposerActionsOptions {
   activeSessionId: string | null
   currentCwd: string
   requestGateway: <T>(method: string, params?: Record<string, unknown>) => Promise<T>
-  scope?: ComposerActionsScope
 }
 
-export function useComposerActions({
-  activeSessionId,
-  currentCwd,
-  requestGateway,
-  scope = MAIN_ACTIONS_SCOPE
-}: ComposerActionsOptions) {
+/** Add to the main composer and focus it. All sidebar/picker/drop attach paths funnel through here. */
+const attachToMain = (attachment: ComposerAttachment) => {
+  addComposerAttachment(attachment)
+  requestComposerFocus('main')
+}
+
+export function useComposerActions({ activeSessionId, currentCwd, requestGateway }: ComposerActionsOptions) {
   const { t } = useI18n()
   const copy = t.desktop
-
-  /** Add to this scope's composer and focus it. All sidebar/picker/drop
-   *  attach paths funnel through here. */
-  const attachToMain = useCallback(
-    (attachment: ComposerAttachment) => {
-      scope.add(attachment)
-      requestComposerFocus(scope.target)
-    },
-    [scope]
-  )
 
   const addTextToDraft = useCallback((text: string) => {
     requestComposerInsert(text, { mode: 'block' })
@@ -316,73 +244,25 @@ export function useComposerActions({
     requestComposerInsert(refText, { mode: 'inline' })
   }, [])
 
-  const addContextRefAttachment = useCallback(
-    (refText: string, label?: string, detail?: string) => {
-      const kind: ComposerAttachment['kind'] = refText.startsWith('@folder:')
-        ? 'folder'
-        : refText.startsWith('@url:')
-          ? 'url'
-          : 'file'
+  const addContextRefAttachment = useCallback((refText: string, label?: string, detail?: string) => {
+    const kind: ComposerAttachment['kind'] = refText.startsWith('@folder:')
+      ? 'folder'
+      : refText.startsWith('@url:')
+        ? 'url'
+        : 'file'
 
-      attachToMain({
-        id: attachmentId(kind, refText),
-        kind,
-        label: label || refText.replace(/^@(file|folder|url):/, ''),
-        detail,
-        refText
-      })
-    },
-    [attachToMain]
-  )
-
-  // A pasted GitHub PR-comment deep link → structured `review` attachment.
-  // Optimistic: the card lands immediately with the URL as its ref, then the
-  // background gh resolve fills in author/anchor (label + detail). If gh can't
-  // answer — offline, unauthenticated, foreign repo, remote gateway — the card
-  // downgrades to a plain `url` attachment so the paste is never lost.
-  const attachPrCommentUrl = useCallback(
-    (url: string): boolean => {
-      const id = attachmentId('review', url)
-      const refText = `@url:${formatRefValue(url)}`
-
-      attachToMain({
-        id,
-        kind: 'review',
-        label: url.replace(/^https:\/\/github\.com\//, '').replace(/#.*$/, ''),
-        refText,
-        uploadState: 'uploading'
-      })
-
-      void (async () => {
-        const comment = currentCwd
-          ? await (desktopGit()
-              ?.review.fetchPrComment(currentCwd, url)
-              .catch(() => null) ?? null)
-          : null
-
-        if (comment) {
-          scope.update({
-            id,
-            kind: 'review',
-            label: comment.path
-              ? `${pathLabel(comment.path)}${comment.line ? `:${comment.line}` : ''} — @${comment.author}`
-              : `PR #${comment.prNumber} — @${comment.author}`,
-            detail: JSON.stringify(comment),
-            refText
-          })
-        } else {
-          scope.update({ id, kind: 'url', label: pathLabel(url), refText })
-        }
-      })()
-
-      return true
-    },
-    [attachToMain, currentCwd, scope]
-  )
+    attachToMain({
+      id: attachmentId(kind, refText),
+      kind,
+      label: label || refText.replace(/^@(file|folder|url):/, ''),
+      detail,
+      refText
+    })
+  }, [])
 
   const pickContextPaths = useCallback(
     async (kind: 'file' | 'folder') => {
-      const paths = await selectDesktopPaths({
+      const paths = await window.hermesDesktop?.selectPaths({
         title: kind === 'file' ? 'Add files as context' : 'Add folders as context',
         defaultPath: currentCwd || undefined,
         directories: kind === 'folder'
@@ -405,7 +285,7 @@ export function useComposerActions({
         })
       }
     },
-    [attachToMain, currentCwd]
+    [currentCwd]
   )
 
   const insertContextPathInlineRef = useCallback(
@@ -420,12 +300,12 @@ export function useComposerActions({
         return false
       }
 
-      requestComposerInsertRefs([ref], { target: scope.target })
-      requestComposerFocus(scope.target)
+      requestComposerInsertRefs([ref])
+      requestComposerFocus('main')
 
       return true
     },
-    [currentCwd, scope.target]
+    [currentCwd]
   )
 
   const attachContextFilePath = useCallback(
@@ -447,7 +327,7 @@ export function useComposerActions({
 
       return true
     },
-    [attachToMain, currentCwd]
+    [currentCwd]
   )
 
   const attachImagePath = useCallback(
@@ -467,10 +347,10 @@ export function useComposerActions({
       attachToMain(baseAttachment)
 
       try {
-        const previewUrl = await attachmentPreviewDataUrl(filePath)
+        const previewUrl = await window.hermesDesktop?.readFileDataUrl(filePath)
 
         if (previewUrl) {
-          scope.add({ ...baseAttachment, previewUrl })
+          addComposerAttachment({ ...baseAttachment, previewUrl })
         }
 
         return true
@@ -480,7 +360,7 @@ export function useComposerActions({
         return true
       }
     },
-    [attachToMain, copy.imagePreviewFailed, scope]
+    [copy.imagePreviewFailed]
   )
 
   const attachImageBlob = useCallback(
@@ -515,7 +395,7 @@ export function useComposerActions({
   )
 
   const pickImages = useCallback(async () => {
-    const paths = await selectDesktopPaths({
+    const paths = await window.hermesDesktop?.selectPaths({
       title: copy.attachImages,
       defaultPath: currentCwd || undefined,
       filters: [
@@ -585,7 +465,7 @@ export function useComposerActions({
 
       return true
     },
-    [attachToMain, currentCwd]
+    [currentCwd]
   )
 
   const attachDroppedItems = useCallback(
@@ -644,14 +524,7 @@ export function useComposerActions({
         const isImage = file.type.startsWith('image/') || isImagePath(file.name) || (filePath && isImagePath(filePath))
 
         if (isImage) {
-          // Finder may expose a dropped screenshot through a short-lived
-          // TemporaryItems/NSIRD_screencaptureui path even when the visible
-          // file has already landed on Desktop. Reading that path for the
-          // preview can succeed, then image.attach fails after macOS removes
-          // it before submit. Persist the File bytes into Desktop's durable
-          // composer-image cache first; keep the native path as a compatibility
-          // fallback for older shells that cannot save the buffer.
-          if ((await attachImageBlob(file)) || (filePath && (await attachImagePath(filePath)))) {
+          if ((filePath && (await attachImagePath(filePath))) || (await attachImageBlob(file))) {
             attached = true
 
             continue
@@ -682,7 +555,7 @@ export function useComposerActions({
 
   const removeAttachment = useCallback(
     async (id: string) => {
-      const removed = scope.remove(id)
+      const removed = removeComposerAttachment(id)
 
       if (
         removed?.kind === 'image' &&
@@ -697,7 +570,7 @@ export function useComposerActions({
         }).catch(() => undefined)
       }
     },
-    [activeSessionId, requestGateway, scope]
+    [activeSessionId, requestGateway]
   )
 
   return {
@@ -709,7 +582,6 @@ export function useComposerActions({
     attachDroppedItems,
     attachImageBlob,
     attachImagePath,
-    attachPrCommentUrl,
     insertContextPathInlineRef,
     pasteClipboardImage,
     pickContextPaths,

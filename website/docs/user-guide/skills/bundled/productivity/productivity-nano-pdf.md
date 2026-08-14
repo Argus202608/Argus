@@ -1,14 +1,14 @@
 ---
-title: "Nano Pdf — Edit text in existing PDFs via natural-language prompts"
+title: "Nano Pdf — Edit PDF text/typos/titles via nano-pdf CLI (NL prompts)"
 sidebar_label: "Nano Pdf"
-description: "Edit text in existing PDFs via natural-language prompts"
+description: "Edit PDF text/typos/titles via nano-pdf CLI (NL prompts)"
 ---
 
 {/* This page is auto-generated from the skill's SKILL.md by website/scripts/generate-skill-docs.py. Edit the source SKILL.md, not this page. */}
 
 # Nano Pdf
 
-Edit text in existing PDFs via natural-language prompts.
+Edit PDF text/typos/titles via nano-pdf CLI (NL prompts).
 
 ## Skill metadata
 
@@ -21,7 +21,6 @@ Edit text in existing PDFs via natural-language prompts.
 | License | MIT |
 | Platforms | linux, macos, windows |
 | Tags | `PDF`, `Documents`, `Editing`, `NLP`, `Productivity` |
-| Related skills | [`pdf`](/docs/user-guide/skills/bundled/productivity/productivity-pdf), [`ocr-and-documents`](/docs/user-guide/skills/bundled/productivity/productivity-ocr-and-documents) |
 
 ## Reference: full SKILL.md
 
@@ -31,7 +30,7 @@ The following is the complete skill definition that Hermes loads when this skill
 
 # nano-pdf
 
-Edit PDFs using natural-language instructions. Point it at a page and describe what to change. For structural PDF work (merge, split, forms, watermarks, creation), see the `pdf` skill; for text extraction from scans, see `ocr-and-documents`.
+Edit PDFs using natural-language instructions. Point it at a page and describe what to change.
 
 ## Prerequisites
 

@@ -5,14 +5,15 @@ import { Spinner } from "@nous-research/ui/ui/components/spinner";
 import { Input } from "@nous-research/ui/ui/components/input";
 import { Label } from "@nous-research/ui/ui/components/label";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { ThinkingSlider } from "@/components/ThinkingSlider";
+import { getReasoningEffort, setReasoningEffort } from "@/lib/config-api";
+import { normalizeEffort, VALID_EFFORTS } from "@/lib/reasoning-effort";
 import type { GatewayClient } from "@/lib/gatewayClient";
-import { Check, RefreshCw, Search, X } from "lucide-react";
+import { Check, Search, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { cn, themedBody } from "@/lib/utils";
 import { fuzzyRank } from "@/lib/fuzzy";
-import { queryMatchesProviderOnly } from "@/lib/model-picker-filter";
-import { modelSearchText } from "@/lib/model-search-text";
 
 /**
  * Two-stage model picker modal.
@@ -73,7 +74,7 @@ interface Props {
   onSubmit?(slashCommand: string): void;
 
   /** Standalone-mode: when present (and onSubmit absent), picker calls onApply. */
-  loader?(options?: { refresh?: boolean }): Promise<ModelOptionsResponse>;
+  loader?(): Promise<ModelOptionsResponse>;
   onApply?(args: {
     confirmExpensiveModel?: boolean;
     provider: string;
@@ -113,75 +114,54 @@ export function ModelPickerDialog(props: Props) {
   const [query, setQuery] = useState("");
   const [persistGlobal, setPersistGlobal] = useState(alwaysGlobal);
   const [applying, setApplying] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
   const [pendingConfirm, setPendingConfirm] =
     useState<PendingExpensiveConfirm | null>(null);
+  // Thinking tier — mirrors ChatModelPill. Reads `agent.reasoning_effort` on
+  // open, writes it via the shared config-api helper so ChatModelPill/desktop
+  // stay in lockstep. Optimistic update; revert on failure.
+  const [effort, setEffort] = useState<string>("medium");
+  const [savingEffort, setSavingEffort] = useState(false);
   const closedRef = useRef(false);
-
-  const applyOptions = (r: ModelOptionsResponse) => {
-    const next = r?.providers ?? [];
-    setProviders(next);
-    setCurrentModel(String(r?.model ?? ""));
-    setCurrentProviderSlug(String(r?.provider ?? ""));
-    setSelectedSlug((prev) => {
-      if (prev && next.some((p) => p.slug === prev)) return prev;
-      return (next.find((p) => p.is_current) ?? next[0])?.slug ?? "";
-    });
-    setSelectedModel("");
-  };
-
-  const requestOptions = (refresh = false) =>
-    standalone
-      ? (loader as (options?: { refresh?: boolean }) => Promise<ModelOptionsResponse>)({
-          refresh,
-        })
-      : (gw as GatewayClient).request<ModelOptionsResponse>(
-          "model.options",
-          {
-            ...(sessionId ? { session_id: sessionId } : {}),
-            ...(refresh ? { refresh: true } : {}),
-            // Dashboard picker mirrors the TUI: full provider universe with
-            // setup warnings. The backend now defaults to the configured
-            // subset (#56974), so opt into unconfigured rows explicitly.
-            include_unconfigured: true,
-          },
-        );
-
-  const refreshOptions = () => {
-    setError(null);
-    setRefreshing(true);
-
-    requestOptions(true)
-      .then((r) => {
-        if (closedRef.current) return;
-        applyOptions(r);
-      })
-      .catch((e) => {
-        if (closedRef.current) return;
-        setError(e instanceof Error ? e.message : String(e));
-      })
-      .finally(() => {
-        if (closedRef.current) return;
-        setRefreshing(false);
-      });
-  };
 
   // Load providers + models on open.
   useEffect(() => {
     closedRef.current = false;
 
-    requestOptions()
+    const promise = standalone
+      ? (loader as () => Promise<ModelOptionsResponse>)()
+      : (gw as GatewayClient).request<ModelOptionsResponse>(
+          "model.options",
+          sessionId ? { session_id: sessionId } : {},
+        );
+
+    promise
       .then((r) => {
         if (closedRef.current) return;
-        applyOptions(r);
+        const next = r?.providers ?? [];
+        setProviders(next);
+        setCurrentModel(String(r?.model ?? ""));
+        setCurrentProviderSlug(String(r?.provider ?? ""));
+        setSelectedSlug(
+          (next.find((p) => p.is_current) ?? next[0])?.slug ?? "",
+        );
+        setSelectedModel("");
+        setLoading(false);
       })
       .catch((e) => {
         if (closedRef.current) return;
         setError(e instanceof Error ? e.message : String(e));
-      })
-      .finally(() => {
-        if (closedRef.current) return;
         setLoading(false);
+      });
+
+    // Seed the Thinking tier from config.yaml. Best-effort — if it fails we
+    // keep the "medium" default so the bar still has a highlighted tier.
+    void getReasoningEffort()
+      .then((e) => {
+        if (closedRef.current) return;
+        setEffort(normalizeEffort(e));
+      })
+      .catch(() => {
+        /* keep default */
       });
 
     return () => {
@@ -218,49 +198,25 @@ export function ModelPickerDialog(props: Props) {
   // Fuzzy-ranked providers: match on name + slug + the provider's model ids so
   // typing a model name surfaces its provider (preserves the prior behaviour
   // where a model match also revealed its provider).
-  //
-  // With no query, float providers that actually have models to the top
-  // (stable within each group). A fresh install lists ~40 providers and only
-  // a couple are configured — burying "OpenRouter · 37 models" under a wall
-  // of "0 models" rows made the picker feel broken.
-  const filteredProviders = useMemo(() => {
-    const ranked = fuzzyRank(
-      providers,
-      trimmedQuery,
-      (p) => `${p.name} ${p.slug} ${(p.models ?? []).join(" ")}`,
-    ).map((r) => r.item);
-    if (trimmedQuery) return ranked;
-    const withModels = ranked.filter((p) => (p.models ?? []).length > 0);
-    const withoutModels = ranked.filter((p) => (p.models ?? []).length === 0);
-    return [...withModels, ...withoutModels];
-  }, [providers, trimmedQuery]);
-
-  // A query that matched the SELECTED provider by name/slug (not its models)
-  // located that provider — it shouldn't also hide that provider's models
-  // just because their ids don't share a substring with the provider name
-  // (e.g. typing "aws" to find "AWS Build" then finding zero of its Claude
-  // model ids contain "aws"). Fall back to an unfiltered model list in that
-  // case; a query that also matches a model id keeps filtering normally.
-  const queryMatchesSelectedProviderOnly = useMemo(
-    () => queryMatchesProviderOnly(selectedProvider, models, trimmedQuery),
-    [trimmedQuery, selectedProvider, models],
+  const filteredProviders = useMemo(
+    () =>
+      fuzzyRank(
+        providers,
+        trimmedQuery,
+        (p) => `${p.name} ${p.slug} ${(p.models ?? []).join(" ")}`,
+      ).map((r) => r.item),
+    [providers, trimmedQuery],
   );
 
   // Fuzzy-ranked models carrying the matched character positions so the model
-  // list can highlight why each entry matched. modelSearchText adds aliases
-  // for brand-less wire ids (e.g. Kimi Coding `k3` ↔ search "kimi").
+  // list can highlight why each entry matched.
   const filteredModels = useMemo(
     () =>
-      fuzzyRank(
-        models,
-        queryMatchesSelectedProviderOnly ? "" : trimmedQuery,
-        modelSearchText,
-      ).map((r) => ({
+      fuzzyRank(models, trimmedQuery, (m) => m).map((r) => ({
         model: r.item,
-        // Positions may land in alias suffixes — keep only in-id highlights.
-        positions: r.positions.filter((i) => i >= 0 && i < r.item.length),
+        positions: r.positions,
       })),
-    [models, trimmedQuery, queryMatchesSelectedProviderOnly],
+    [models, trimmedQuery],
   );
 
   const canConfirm = !!selectedProvider && !!selectedModel && !applying;
@@ -342,6 +298,17 @@ export function ModelPickerDialog(props: Props) {
     void applySelection();
   };
 
+  const applyEffort = (next: string) => {
+    if (!VALID_EFFORTS.has(next)) return;
+    if (next === effort || savingEffort) return;
+    const prev = effort;
+    setEffort(next); // optimistic
+    setSavingEffort(true);
+    setReasoningEffort(next)
+      .catch(() => setEffort(prev))
+      .finally(() => setSavingEffort(false));
+  };
+
   // Portal to document.body: the main dashboard column in App.tsx is
   // `relative z-2`, which creates a stacking context that traps fixed
   // descendants below the app sidebar (z-50). Without the portal this
@@ -351,7 +318,7 @@ export function ModelPickerDialog(props: Props) {
   // Toast.tsx for the same pattern.
   return createPortal(
     <div
-      className="fixed inset-0 z-[100] flex items-center justify-center bg-background/85 p-4"
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-background/85 backdrop-blur-sm p-4"
       onClick={(e) => e.target === e.currentTarget && onClose()}
       role="dialog"
       aria-modal="true"
@@ -428,6 +395,17 @@ export function ModelPickerDialog(props: Props) {
           />
         </div>
 
+        {/* Thinking 6 档滑块 — 与 desktop 的 effort 档位/文案对齐, 换掉之前独立
+            在 ChatSidebar 里的 ReasoningPicker (Brain 图标那张 Card)。写入
+            `agent.reasoning_effort`, 后端按当前模型能力做映射。 */}
+        <div className="border-t border-border px-4 py-2">
+          <ThinkingSlider
+            onChange={applyEffort}
+            saving={savingEffort}
+            value={effort}
+          />
+        </div>
+
         <footer className="border-t border-border p-3 flex items-center justify-between gap-3 flex-wrap">
           {alwaysGlobal ? (
             <span className="text-xs text-muted-foreground">
@@ -453,14 +431,6 @@ export function ModelPickerDialog(props: Props) {
           )}
 
           <div className="flex items-center gap-2 ml-auto">
-            <Button
-              outlined
-              onClick={refreshOptions}
-              disabled={applying || loading || refreshing}
-            >
-              {refreshing ? <Spinner /> : <RefreshCw className="h-3.5 w-3.5" />}
-              Refresh Models
-            </Button>
             <Button outlined onClick={onClose} disabled={applying}>
               Cancel
             </Button>

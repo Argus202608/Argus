@@ -1,17 +1,44 @@
 import type { ThreadMessageLike } from '@assistant-ui/react'
-import { type BillingBlock, skillInvocationText } from '@hermes/shared'
 
-import { extractImageRefs } from '@/lib/embedded-images'
 import { dedupeGeneratedImageEchoesInParts } from '@/lib/generated-images'
 import { mediaDisplayLabel, mediaMarkdownHref } from '@/lib/media'
-import { normalize } from '@/lib/text'
 import { parseTodos } from '@/lib/todos'
-import type { MessageReaction, SessionMessage, UsageStats } from '@/types/hermes'
+import type { SessionMessage, ToolArgField, UsageStats } from '@/types/hermes'
 
 export type ChatMessagePart = Exclude<ThreadMessageLike['content'], string>[number]
 
+/**
+ * A `tool-call` part plus our own `argsFields` sidecar.
+ *
+ * assistant-ui's part shape is fixed, but `fromThreadMessageLike` converts a
+ * tool-call by spreading the whole part (`const { parentId, messages,
+ * ...basePart } = part`), so an extra key rides through untouched and reaches
+ * `ToolFallback` as a prop. That is the only channel available: the backend
+ * ships `args_fields` as a peer of `args`, and it must NOT be folded into
+ * `args` itself (see `toolArgFieldsFrom`).
+ */
+export type ToolCallPartWithArgFields = Extract<ChatMessagePart, { type: 'tool-call' }> & {
+  argsFields?: ToolArgField[]
+}
+
+/** Read the `argsFields` sidecar off a part, whatever its declared type. */
+export function argFieldsOfPart(part: unknown): ToolArgField[] {
+  const row = part && typeof part === 'object' ? (part as { argsFields?: unknown }) : null
+
+  return Array.isArray(row?.argsFields) ? (row.argsFields as ToolArgField[]) : []
+}
+
+/**
+ * Sub-role of an assistant message, from the gateway's message.start tag.
+ * A plain model reply has none; monitor SPEAKs and deep-research threadbacks
+ * carry one so the chat can label + color them like the web multimodal view.
+ */
+export type ChatSubRole = 'monitor' | 'router' | 'watcher_report'
+
 export type ChatMessage = {
   id: string
+  /** Stable gateway turn id used to correlate optimistic/tool/assistant items. */
+  requestId?: string
   role: SessionMessage['role']
   parts: ChatMessagePart[]
   timestamp?: number
@@ -19,16 +46,25 @@ export type ChatMessage = {
   error?: string
   branchGroupId?: string
   hidden?: boolean
-  /** Sealed mid-turn commentary (`message.interim`) — rendered without the
-   *  action footer so only the turn's final reply carries copy/refresh, and
-   *  the live view matches rehydration (which merges the turn into one bubble). */
-  interim?: boolean
   /** Composer attachment ref strings (`@file:...`, `@image:...`) sent with this user message. */
   attachmentRefs?: string[]
-  /** Durable backend `messages.id`. Absent until the row is persisted. */
-  rowId?: number
-  /** Emoji reactions on this message — one per author (see MessageReaction). */
-  reactions?: MessageReaction[]
+  /** Assistant sub-role (monitor SPEAK / deep-research threadback) for labeling + coloring. */
+  subRole?: ChatSubRole
+  /** monitor: the short event label shown instead of "Assistant". */
+  monitorLabel?: string
+  /** router (deep research): the analysis event name / brief. */
+  brief?: string
+  /** watcher_report / router: the deep-research request id (req_xxxx), so the
+   *  bubble can reopen the read-only deep window from the on-disk analyse file. */
+  deepReportRid?: string
+  /** watcher_report: 本段的画面时段区间 (mm:ss–mm:ss), 展示在正文卡头。 */
+  deepRange?: string
+  /** watcher_report: 段序号 (第N段), 展示在正文卡头 (与 web 对齐)。 */
+  deepRound?: number
+  /** Model name for the header badge (resolved at capture time). */
+  model?: string
+  /** This assistant turn was a spoken (voice) reply. */
+  voice?: boolean
 }
 
 export type GatewayEventPayload = {
@@ -42,6 +78,8 @@ export type GatewayEventPayload = {
   tool_call_id?: string
   args?: unknown
   arguments?: unknown
+  /** Classified call-side args (see ToolArgField). Present on tool.start. */
+  args_fields?: unknown
   context?: string
   input?: unknown
   preview?: string
@@ -56,78 +94,48 @@ export type GatewayEventPayload = {
   reasoning_effort?: string
   service_tier?: string
   fast?: boolean
-  approval_mode?: string
   yolo?: boolean
   running?: boolean
   cwd?: string
   branch?: string
-  terminal_backend?: string
   credential_warning?: string
-  install_warning?: string
   personality?: string
   usage?: Partial<UsageStats>
-  // agent.terminal.output — live chunk for a read-only agent terminal tab
-  process_id?: string
-  chunk?: string
   // clarify.request
   request_id?: string
   question?: string
   choices?: string[] | null
-  // mcp.setup.request (setup_mcp tool — inline MCP consent card)
-  server?: string
-  action?: string
-  reason?: string
   // approval.request (dangerous command / execute_code) — session-keyed
   command?: string
   description?: string
   // False when a tirith content-security warning forbids a permanent allow.
   allow_permanent?: boolean
-  smart_denied?: boolean
   // secret.request (skill credential capture)
   env_var?: string
   prompt?: string
-  // terminal.read.request / preview.read.request (GUI agent reading the
-  // in-app terminal pane or the browser/preview pane)
+  // terminal.read.request (GUI agent reading the in-app terminal pane)
   start?: number
   count?: number
   // status.update (kind=process → background process completion/watch-match)
   kind?: string
-  // pane.reveal (agent focusing a desktop pane via the focus_pane tool)
-  pane?: string
-  // message.reaction (agent reacting via the react_to_message tool) — the
-  // durable messages.id, that row's full reaction list after the write, and
-  // the row's role so a live (not-yet-round-tripped) message can be matched.
-  row_id?: number
-  reactions?: MessageReaction[]
-  role?: string
   // session.title (live auto-title push) — stored session id + generated title
   session_id?: string
   title?: string
-  // session.info — the stored (durable) session id for this runtime session.
-  // Lets the desktop app map runtime→stored for background sessions it hasn't
-  // opened, so the sidebar working indicator updates without opening the chat.
-  stored_session_id?: string
   // moa.reference / moa.aggregating (Mixture of Agents per-model relay)
   label?: string
   index?: number
   aggregator?: string
-  // moa.progress / moa.phase (Mixture of Agents fan-out progress relay)
-  refs_done?: number
-  refs_total?: number
-  phase?: string
-  // message.complete — signals the final text was already previewed via
-  // interim_assistant_callback, so the UI can settle instead of duplicating.
-  response_previewed?: boolean
-  // message.complete with status "error" — `text` is streamed partial output
-  // (keep it visible), not the error string.
-  partial?: boolean
-  // message.complete with status "error" — the failed turn was retained
-  // backend-side and will replay through session.resume's inflight payload.
-  recoverable?: boolean
-  // Structured billing wall forwarded on message.complete when a turn fails
-  // with FailoverReason.billing (shape mirrors @hermes/shared BillingBlock).
-  billing?: BillingBlock
-  failure_reason?: string
+  // message.start/.delta/.complete sub-role tag (monitor SPEAK / deep-research
+  // threadback) — drives web-style per-type labeling + coloring in the chat.
+  source?: string
+  monitor_id?: string
+  monitor_label?: string
+  brief?: string
+  voice?: boolean
+  /** Pure control turns live in the multimodal registry, not center chat. */
+  history_policy?: unknown
+  ephemeral_control?: unknown
+  ephemeral?: unknown
 }
 
 export function textPart(text: string): ChatMessagePart {
@@ -177,102 +185,20 @@ export function chatMessageText(message: ChatMessage): string {
     .join('')
 }
 
-export interface UnspokenTurnSpeech {
-  /** First unspoken assistant bubble — stable for the turn, the live speech session binds to it. */
-  id: string
-  /** Whether the newest assistant bubble is still streaming. */
-  pending: boolean
-  /** All unspoken assistant text in message order, bubbles joined on a blank line. */
-  text: string
-}
-
-/**
- * Collect every unspoken assistant bubble after `lastSpokenId`, in order.
- *
- * A turn with tool calls produces several assistant bubbles — narration
- * ("Let me check…") sealed as interims, then the final answer as a fresh
- * bubble. Voice conversation speaks a turn through ONE live session bound to
- * one response id, so it needs all of that text as a single growing string;
- * selecting only one bubble silently drops everything after it. The blank-line
- * join is a sentence boundary for the server's cutter, so a sealed bubble's
- * tail is flushed as soon as the next bubble starts.
- */
-export function collectUnspokenTurnSpeech(
-  messages: ChatMessage[],
-  lastSpokenId: string | null
-): UnspokenTurnSpeech | null {
-  const spokenIndex = lastSpokenId ? messages.findLastIndex(m => m.id === lastSpokenId) : -1
-
-  let id: string | null = null
-  let pending = false
-  const parts: string[] = []
-
-  for (const message of messages.slice(spokenIndex + 1)) {
-    if (message.role !== 'assistant' || message.hidden) {
-      continue
-    }
-
-    pending = Boolean(message.pending)
-    const text = chatMessageText(message).trim()
-
-    if (!text) {
-      continue
-    }
-
-    id ??= message.id
-    parts.push(text)
-  }
-
-  if (!id) {
-    return null
-  }
-
-  return { id, pending, text: parts.join('\n\n') }
-}
-
-const normalizeWs = (value: string) => value.replace(/\s+/g, ' ').trim()
-
-/**
- * Merge the final assistant text into a message's parts.
- *
- * - Removes all existing `text` parts (they were streamed deltas, now superseded
- *   by the authoritative final response).
- * - Keeps `reasoning` parts, but drops one that the final text fully covers
- *   (reasoning ⊆ final) — the final restates it. A short final ("Done.") must
- *   NOT swallow a longer reasoning block that merely starts with it (#61447).
- * - Keeps all other part types (tool-call, image, etc.).
- * - Appends the final text as a new text part.
- */
-export function mergeFinalAssistantText(parts: ChatMessagePart[], finalText: string): ChatMessagePart[] {
-  const dedupeReference = normalizeWs(finalText)
-
-  const kept = parts.filter(part => {
-    if (part.type === 'text') {
-      // Sealed text parts were already finalized into their own bubbles —
-      // this filter only runs on the LAST streaming bubble, so there are no
-      // sealed parts here. All text parts are streamed deltas that get
-      // replaced by the authoritative final text.
-      return false
-    }
-
-    if (part.type !== 'reasoning' || !dedupeReference) {
-      return true
-    }
-
-    // Reasoning is a restatement only when the final FULLY covers it.
-    // The reverse direction is not considered — a short final must not
-    // swallow a longer reasoning block (#61447).
-    const r = normalizeWs(part.text)
-
-    return !(r && dedupeReference.startsWith(r))
-  })
-
-  return finalText ? [...kept, assistantTextPart(finalText)] : kept
-}
-
 const ATTACHED_CONTEXT_MARKER_RE = /(?:^|\n)--- Attached Context ---\s*\n/
 const CONTEXT_WARNINGS_MARKER_RE = /(?:^|\n)--- Context Warnings ---[\s\S]*$/
 const CONTEXT_REF_RE = /@(file|folder|url|image|tool|terminal):(?:"[^"\n]+"|'[^'\n]+'|`[^`\n]+`|\S+)/g
+
+// The multimodal vision layer prepends a "[These are a few snapshot frames …]"
+// framing marker to the LLM payload and appends the live frames as image parts
+// (which serialize to "[screenshot]" / "[image]" placeholders in history text).
+// Those are for the model, not the user — web never shows them because it renders
+// its own optimistic text. Desktop replays server history, so strip them here so
+// a user turn (typed OR a monitor-hook trigger) shows only the real content.
+const VISION_SNAPSHOT_MARKER_RE = /\[These are a few snapshot frames[\s\S]*?do not assume you can keep watching yourself\.\]\s*/g
+// Match one-or-more consecutive [screenshot]/[image] placeholders (each on its
+// own line) as a single run, so back-to-back frames all strip in one pass.
+const IMAGE_PLACEHOLDER_RE = /\s*(?:\[(?:screenshot|image)\]\s*)+/gi
 
 function textFromUnknown(value: unknown, depth = 0): string {
   if (typeof value === 'string') {
@@ -310,6 +236,12 @@ function textFromUnknown(value: unknown, depth = 0): string {
   return String(value)
 }
 
+// Drop the multimodal vision framing marker + injected frame placeholders from a
+// user turn's text so they never render (matches web, which shows its own text).
+function stripVisionInjection(text: string): string {
+  return text.replace(VISION_SNAPSHOT_MARKER_RE, '').replace(IMAGE_PLACEHOLDER_RE, ' ').trim()
+}
+
 function displayContentForMessage(role: SessionMessage['role'], content: unknown): string {
   const textContent = textFromUnknown(content)
 
@@ -317,93 +249,19 @@ function displayContentForMessage(role: SessionMessage['role'], content: unknown
     return textContent
   }
 
-  // A `/skill` turn is stored expanded (the whole skill body). Current
-  // gateways project it to the invocation before it ever reaches us; this is
-  // the fallback for an older backend that still ships the raw payload.
-  const invocation = skillInvocationText(textContent)
+  const cleaned = stripVisionInjection(textContent)
 
-  if (invocation) {
-    return invocation
-  }
-
-  const marker = textContent.match(ATTACHED_CONTEXT_MARKER_RE)
+  const marker = cleaned.match(ATTACHED_CONTEXT_MARKER_RE)
 
   if (!marker || marker.index === undefined) {
-    return textContent.replace(CONTEXT_WARNINGS_MARKER_RE, '').trim()
+    return cleaned.replace(CONTEXT_WARNINGS_MARKER_RE, '').trim()
   }
 
-  const visibleText = textContent.slice(0, marker.index).replace(CONTEXT_WARNINGS_MARKER_RE, '').trim()
-  const attachedContext = textContent.slice(marker.index + marker[0].length)
+  const visibleText = cleaned.slice(0, marker.index).replace(CONTEXT_WARNINGS_MARKER_RE, '').trim()
+  const attachedContext = cleaned.slice(marker.index + marker[0].length)
   const refs = [...new Set(Array.from(attachedContext.matchAll(CONTEXT_REF_RE)).map(match => match[0]))]
 
-  // The prose keeps the `@file:` token the user typed, so it already chips in
-  // place. Only hoist a ref the prose is missing — a turn persisted by an older
-  // backend that stripped the tokens. Re-listing an inline ref would chip twice.
-  const missing = refs.filter(ref => !visibleText.includes(ref))
-
-  return [missing.join('\n'), visibleText].filter(Boolean).join('\n\n') || visibleText
-}
-
-function transcriptContent(displayKind: SessionMessage['display_kind'], content: string): string | null {
-  return displayKind === 'hidden' ? null : content
-}
-
-// A remote backend older than this app serves display_metadata as raw JSON text,
-// and `in` throws on a primitive — which used to fail the whole session resume.
-function parseDisplayMetadata(metadata: SessionMessage['display_metadata']): null | Record<string, unknown> {
-  let parsed: unknown = metadata
-
-  if (typeof parsed === 'string') {
-    try {
-      parsed = JSON.parse(parsed)
-    } catch {
-      return null
-    }
-  }
-
-  return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : null
-}
-
-function timelineTaskCount(metadata: SessionMessage['display_metadata']): number | undefined {
-  const count = parseDisplayMetadata(metadata)?.task_count
-
-  return typeof count === 'number' ? count : undefined
-}
-
-export function messageReactions(metadata: SessionMessage['display_metadata']): MessageReaction[] {
-  const reactions = parseDisplayMetadata(metadata)?.reactions
-
-  if (!Array.isArray(reactions)) {
-    return []
-  }
-
-  return reactions.filter(
-    (r): r is MessageReaction => Boolean(r) && typeof r === 'object' && typeof (r as MessageReaction).emoji === 'string'
-  )
-}
-
-function timelineDisplayContent(message: SessionMessage, content: string): string {
-  if (message.display_kind === 'model_switch') {
-    return 'model changed'
-  }
-
-  if (message.display_kind === 'auto_continue') {
-    return 'resumed interrupted turn'
-  }
-
-  if (message.display_kind === 'personality_switch') {
-    return 'personality changed'
-  }
-
-  if (message.display_kind === 'async_delegation_complete') {
-    const count = timelineTaskCount(message.display_metadata)
-
-    return count === undefined
-      ? 'background agent work finished'
-      : `${count} background agent${count === 1 ? '' : 's'} finished`
-  }
-
-  return content
+  return [refs.join('\n'), visibleText].filter(Boolean).join('\n\n') || visibleText
 }
 
 const STREAM_PART: Record<'reasoning' | 'text', (text: string) => ChatMessagePart> = {
@@ -503,7 +361,7 @@ function firstStringField(record: Record<string, unknown>, keys: readonly string
 }
 
 function normalizeToolMatchValue(value: string): string {
-  return normalize(value)
+  return value.trim().toLowerCase()
 }
 
 function collectToolMatchValues(query: string, context: string, preview: string): string[] {
@@ -512,12 +370,7 @@ function collectToolMatchValues(query: string, context: string, preview: string)
 
 function toolPayloadMatchValues(payload: GatewayEventPayload | undefined): string[] {
   const payloadArgs = liveToolArgs(payload)
-  // `question` is clarify's identifying arg: a synthetic row hydrated from
-  // `clarify.request` (a fresh request id) must correlate with the `tool.start`
-  // row (the model's tool_call_id) so the two ids don't produce a duplicate
-  // clarify card — same correlation ClarifyToolPending uses for request↔args.
-  // `server` is setup_mcp's identifying arg, for the identical reason.
-  const query = firstStringField(payloadArgs, ['search_term', 'query', 'question', 'server', 'command', 'code', 'path'])
+  const query = firstStringField(payloadArgs, ['search_term', 'query'])
   const context = typeof payload?.context === 'string' ? payload.context.trim() : ''
   const preview = typeof payload?.preview === 'string' ? payload.preview.trim() : ''
 
@@ -530,7 +383,7 @@ function toolPartMatchValues(part: ChatMessagePart): string[] {
   }
 
   const args = part.args as Record<string, unknown>
-  const query = firstStringField(args, ['search_term', 'query', 'question', 'server', 'command', 'code', 'path'])
+  const query = firstStringField(args, ['search_term', 'query'])
   const context = typeof args.context === 'string' ? args.context.trim() : ''
   const preview = typeof args.preview === 'string' ? args.preview.trim() : ''
 
@@ -692,14 +545,21 @@ export function upsertToolPart(
     (prev && 'toolCallId' in prev && typeof prev.toolCallId === 'string' ? prev.toolCallId : '') ||
     nextLiveToolId(name)
 
+  // Only `tool.start` carries args_fields; the later progress/complete events
+  // for the same row don't, so carry the first non-empty list forward rather
+  // than letting a bare tool.complete blank the panel mid-turn.
+  const argFields = toolArgFieldsFrom(payload?.args_fields)
+  const carriedArgFields = argFields.length ? argFields : argFieldsOfPart(prev)
+
   const base = {
     type: 'tool-call' as const,
     toolCallId: id,
     toolName: name,
     args: args as never,
     argsText: JSON.stringify(args),
+    ...(carriedArgFields.length ? { argsFields: carriedArgFields } : {}),
     ...(phase === 'complete' && { result: toolResult(payload, prevResult, prevArgs), isError: Boolean(payload?.error) })
-  } satisfies ChatMessagePart
+  } satisfies ToolCallPartWithArgFields
 
   if (index === -1) {
     return [...next, base]
@@ -766,6 +626,68 @@ function liveToolArgs(payload: GatewayEventPayload | undefined): Record<string, 
   }
 }
 
+const TOOL_ARG_FIELD_KINDS = new Set<ToolArgField['kind']>([
+  'credential',
+  'elided',
+  'freeform',
+  'literal',
+  'shape'
+])
+
+/**
+ * Normalize the backend's `args_fields` into a typed list, dropping anything
+ * malformed.
+ *
+ * Two deliberate choices:
+ *
+ * 1. An unrecognized `kind` is DROPPED, not passed through as a literal. A
+ *    future backend kind is far more likely to be a new privacy class (whose
+ *    whole point is withholding something) than a new safe-to-show one, so an
+ *    older desktop build must fail closed.
+ *
+ * 2. These stay a SEPARATE field and are never merged back into `args`. The
+ *    values here are display projections — truncated to 40 chars and passed
+ *    through the redactor — so feeding them to the card heuristics would make
+ *    them lie: `fileEditPath` would report a clipped filename as the real one
+ *    and `toolPreviewTarget` would try to open a truncated URL. Real args
+ *    (live `tool.complete`) keep flowing through `args` untouched; this list is
+ *    render-only, and is the only arg data a RESUMED row has.
+ */
+export function toolArgFieldsFrom(value: unknown): ToolArgField[] {
+  if (!Array.isArray(value)) {
+    return []
+  }
+
+  const fields: ToolArgField[] = []
+
+  for (const entry of value) {
+    const row = recordFromUnknown(entry)
+    const kind = row?.kind
+
+    if (!row || typeof kind !== 'string' || !TOOL_ARG_FIELD_KINDS.has(kind as ToolArgField['kind'])) {
+      continue
+    }
+
+    const key = typeof row.key === 'string' ? row.key : ''
+
+    // Every kind except the synthetic `elided` tail is keyed by an arg name;
+    // without one there is nothing to label the row with.
+    if (!key && kind !== 'elided') {
+      continue
+    }
+
+    fields.push({
+      key,
+      kind: kind as ToolArgField['kind'],
+      ...(typeof row.value === 'string' ? { value: row.value } : {}),
+      ...(typeof row.chars === 'number' ? { chars: row.chars } : {}),
+      ...(typeof row.count === 'number' ? { count: row.count } : {})
+    })
+  }
+
+  return fields
+}
+
 function parseStoredToolResult(content: unknown): unknown {
   if (content && typeof content === 'object') {
     return content
@@ -807,7 +729,11 @@ function toolPartFromStoredCall(call: unknown, fallbackIndex: number): ChatMessa
 function applyStoredToolResult(messages: ChatMessage[], toolMessage: SessionMessage): boolean {
   const toolCallId = toolMessage.tool_call_id || undefined
   const toolName = toolMessage.tool_name || toolMessage.name || 'tool'
-  const content = toolMessage.content || toolMessage.text || toolMessage.context || toolMessage.name
+  // Result = the tool's own output only. `context` (args preview) and `name`
+  // must not stand in for it — doing so filled the card body with the command
+  // that ran, or literally the tool's name, and made a resumed session look
+  // like every tool had returned nothing useful.
+  const content = toolMessage.content ?? toolMessage.text ?? ''
 
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const message = messages[i]
@@ -828,8 +754,11 @@ function applyStoredToolResult(messages: ChatMessage[], toolMessage: SessionMess
 
     const parts = [...message.parts]
     const existing = parts[partIndex]
+    const argsFields = toolArgFieldsFrom(toolMessage.args_fields)
     parts[partIndex] = {
       ...existing,
+      // See applyStoredToolResultToParts: fill in only, never overwrite.
+      ...(argsFields.length && !argFieldsOfPart(existing).length ? { argsFields } : {}),
       result: parseStoredToolResult(content),
       isError: false
     } as ChatMessagePart
@@ -844,7 +773,8 @@ function applyStoredToolResult(messages: ChatMessage[], toolMessage: SessionMess
 function applyStoredToolResultToParts(parts: ChatMessagePart[], toolMessage: SessionMessage): ChatMessagePart[] | null {
   const toolCallId = toolMessage.tool_call_id || undefined
   const toolName = toolMessage.tool_name || toolMessage.name || 'tool'
-  const content = toolMessage.content || toolMessage.text || toolMessage.context || toolMessage.name
+  // See applyStoredToolResult: output only, never the args preview or the name.
+  const content = toolMessage.content ?? toolMessage.text ?? ''
 
   const partIndex = parts.findIndex(
     part =>
@@ -858,8 +788,13 @@ function applyStoredToolResultToParts(parts: ChatMessagePart[], toolMessage: Ses
 
   const next = [...parts]
   const existing = next[partIndex]
+  const argsFields = toolArgFieldsFrom(toolMessage.args_fields)
   next[partIndex] = {
     ...existing,
+    // The call-side row may predate the classified args (it can come from a
+    // stored `tool_calls` entry, which carries raw arguments instead). Only
+    // fill the sidecar in — never overwrite a list already on the row.
+    ...(argsFields.length && !argFieldsOfPart(existing).length ? { argsFields } : {}),
     result: parseStoredToolResult(content),
     isError: false
   } as ChatMessagePart
@@ -869,13 +804,21 @@ function applyStoredToolResultToParts(parts: ChatMessagePart[], toolMessage: Ses
 
 function storedToolMessagePart(toolMessage: SessionMessage, fallbackIndex: number): ChatMessagePart {
   const name = toolMessage.tool_name || toolMessage.name || 'tool'
-  const context = textFromUnknown(toolMessage.context || toolMessage.text || toolMessage.content || '')
-  // Prefer the full arguments when the gateway projection carries them:
-  // `context` is an 80-char display preview, and the expanded tool row
-  // rebuilds the real command from args. Keep `context` alongside as the
-  // title-side placeholder.
-  const storedArgs = parseMaybeJsonObject(toolMessage.args)
-  const args = { ...storedArgs, ...(context ? { context } : {}) }
+  // `context` is the CALL side (args preview — the command that ran); `content`
+  // is the tool's own RETURN value. Collapsing them into one string made
+  // args.context === result.context, so fallbackDetailText() saw
+  // `resultContext === argContext`, fell through to the arg preview, and the
+  // card's body showed the command echoed back instead of its output. Keep them
+  // as separate fields so the tool renderer can extract a real detail (and, for
+  // terminal/execute_code, split stdout/stderr out of the JSON envelope).
+  const context = textFromUnknown(toolMessage.context || '')
+  const body = toolMessage.content ?? toolMessage.text ?? ''
+  const args = context ? { context } : {}
+  const result = parseStoredToolResult(body)
+  // A resumed row has NO raw args (history ships only the classified
+  // projection), so without this the reopened card's inputs were simply empty
+  // while the live stream that produced it had shown them.
+  const argsFields = toolArgFieldsFrom(toolMessage.args_fields)
 
   return {
     type: 'tool-call',
@@ -883,7 +826,10 @@ function storedToolMessagePart(toolMessage: SessionMessage, fallbackIndex: numbe
     toolName: name,
     args: args as never,
     argsText: Object.keys(args).length ? JSON.stringify(args) : '',
-    result: context ? { context } : {},
+    ...(argsFields.length ? { argsFields } : {}),
+    // An absent result means "still running" to the renderer, so fall back to
+    // the arg preview only when there is genuinely no stored output.
+    result: result === '' ? (context ? { context } : {}) : result,
     isError: false
   }
 }
@@ -972,7 +918,37 @@ export function toChatMessages(messages: SessionMessage[]): ChatMessage[] {
     clearPendingTools()
   }
 
+  // ★ 功能1: 从恢复的历史里把 monitor/watcher 通知元素 (后端 _history_to_messages
+  //   已带上 subRole) 重建成气泡, 形状与实时 _emit 注入的一致 (见 store/multimodal.ts)。
+  //   放在 forEach 顶部先处理, 且不参与 pending-tool 合并逻辑。
+  const reconstructMmNotice = (message: SessionMessage): ChatMessage | null => {
+    // Monitor + watcher_report used to be reconstructed as center-chat bubbles
+    // here. They are now sidechannel-only — hydrated into the right multimodal
+    // panel via list_monitor_alerts / list_watcher_content on session enter
+    // (see fetchMmSidechannel). Detect legacy rows in EITHER payload shape
+    //   (1) resume-RPC form: message.subRole == "monitor"/"watcher_report"
+    //   (2) raw REST form:   content = {type:"mm_notice", mm_kind:"monitor"|"watcher", ...}
+    // and drop them so we don't render duplicates.
+    const rawContent = message.content
+    const notice = rawContent && typeof rawContent === 'object' && !Array.isArray(rawContent)
+      ? (rawContent as Record<string, unknown>) : null
+    const rawKind = notice?.type === 'mm_notice' ? String(notice.mm_kind ?? '') : ''
+    const sub = message.subRole
+      ?? (rawKind === 'watcher' ? 'watcher_report'
+          : rawKind ? 'monitor' : undefined)
+    if (sub === 'monitor' || sub === 'watcher_report') return null
+    return null
+  }
+
   messages.forEach((message, index) => {
+    const mmBubble = reconstructMmNotice(message)
+    if (mmBubble) {
+      flushPendingTools(index)
+      result.push(mmBubble)
+      // monitor/watcher 气泡不作为可续写的 activeAssistant (它是独立通知)。
+      activeAssistantIndex = null
+      return
+    }
     if (message.role === 'tool') {
       const updatedPendingToolParts = applyStoredToolResultToParts(pendingToolParts, message)
 
@@ -993,31 +969,7 @@ export function toChatMessages(messages: SessionMessage[]): ChatMessage[] {
     }
 
     const content = message.content || message.text || message.context || message.name
-
-    const rawDisplayContent = transcriptContent(
-      message.display_kind,
-      timelineDisplayContent(message, displayContentForMessage(message.role, content))
-    )
-
-    const displayRole =
-      message.display_kind === 'model_switch' ||
-      message.display_kind === 'async_delegation_complete' ||
-      message.display_kind === 'auto_continue' ||
-      message.display_kind === 'personality_switch'
-        ? 'system'
-        : message.role
-
-    // Persisted user turns carry `@image:<path>` directive lines inline in
-    // the text (see tui_gateway/server.py's persist-time rewrite). The
-    // read-only bubble clamps its body to ~2 lines, and a large inline image
-    // thumbnail pushes any caption text below the clamp's visible area — so
-    // pull image refs out into `attachmentRefs` (same shape the local
-    // optimistic composer already uses) and render them via the dedicated
-    // attachments row below the bubble instead.
-    const imageRefExtraction = displayRole === 'user' && rawDisplayContent ? extractImageRefs(rawDisplayContent) : null
-    const displayContent = imageRefExtraction ? imageRefExtraction.cleanedText : rawDisplayContent
-    const extractedAttachmentRefs = imageRefExtraction?.refs.length ? imageRefExtraction.refs : undefined
-
+    const displayContent = displayContentForMessage(message.role, content)
     const parts: ChatMessagePart[] = []
 
     const reasoning =
@@ -1030,14 +982,14 @@ export function toChatMessages(messages: SessionMessage[]): ChatMessage[] {
     }
 
     if (displayContent) {
-      parts.push(displayRole === 'assistant' ? assistantTextPart(displayContent) : textPart(displayContent))
+      parts.push(message.role === 'assistant' ? assistantTextPart(displayContent) : textPart(displayContent))
     }
 
     if (message.role === 'assistant' && Array.isArray(message.tool_calls)) {
       parts.push(...message.tool_calls.map((call, callIndex) => toolPartFromStoredCall(call, callIndex)))
     }
 
-    if (!parts.length && !extractedAttachmentRefs?.length) {
+    if (!parts.length) {
       if (message.role !== 'assistant') {
         flushPendingTools(index)
         activeAssistantIndex = null
@@ -1083,20 +1035,11 @@ export function toChatMessages(messages: SessionMessage[]): ChatMessage[] {
       flushPendingTools(index)
     }
 
-    const reactions = messageReactions(message.display_metadata)
-    // Gateway resume names the durable row id `row_id`; the REST transcript
-    // prefetch ships the same messages.id as a numeric `id`. Either one lets
-    // reactions address this exact row later.
-    const rowId = message.row_id ?? (typeof message.id === 'number' ? message.id : undefined)
-
     result.push({
-      id: `${message.timestamp || Date.now()}-${index}-${displayRole}`,
-      role: displayRole,
+      id: `${message.timestamp || Date.now()}-${index}-${message.role}`,
+      role: message.role,
       parts,
-      timestamp: message.timestamp,
-      ...(rowId !== undefined ? { rowId } : {}),
-      ...(reactions.length ? { reactions } : {}),
-      ...(extractedAttachmentRefs ? { attachmentRefs: extractedAttachmentRefs } : {})
+      timestamp: message.timestamp
     })
 
     activeAssistantIndex = message.role === 'assistant' ? result.length - 1 : null
@@ -1108,9 +1051,7 @@ export function toChatMessages(messages: SessionMessage[]): ChatMessage[] {
   )
 
   return withUniqueToolCallIds(
-    withoutGeneratedImageEchoes.filter(
-      m => chatMessageText(m).trim() || m.parts.some(part => part.type !== 'text') || m.attachmentRefs?.length
-    )
+    withoutGeneratedImageEchoes.filter(m => chatMessageText(m).trim() || m.parts.some(part => part.type !== 'text'))
   )
 }
 

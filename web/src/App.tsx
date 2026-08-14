@@ -1,6 +1,4 @@
 import {
-  lazy,
-  Suspense,
   useCallback,
   useEffect,
   useMemo,
@@ -19,11 +17,14 @@ import {
   Navigate,
   useLocation,
   useNavigate,
-} from "react-router";
+  useSearchParams,
+} from "react-router-dom";
 import {
   Activity,
   BarChart3,
   BookOpen,
+  ChevronDown,
+  ChevronRight,
   Clock,
   Code,
   Cpu,
@@ -41,6 +42,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Plug,
+  Plus,
   Puzzle,
   Radio,
   RotateCw,
@@ -60,8 +62,9 @@ import { Button } from "@nous-research/ui/ui/components/button";
 import { SelectionSwitcher } from "@nous-research/ui/ui/components/selection-switcher";
 import { Spinner } from "@nous-research/ui/ui/components/spinner";
 import { Typography } from "@nous-research/ui/ui/components/typography/index";
-import { ConfirmDialog } from "@nous-research/ui/ui/components/confirm-dialog";
 import { cn } from "@/lib/utils";
+import { Backdrop } from "@/components/Backdrop";
+import { ChatSessionList } from "@/components/ChatSessionList";
 import { SidebarFooter } from "@/components/SidebarFooter";
 import { SidebarStatusStrip, gatewayLine } from "@/components/SidebarStatusStrip";
 import { useBelowBreakpoint } from "@nous-research/ui/hooks/use-below-breakpoint";
@@ -74,27 +77,26 @@ import { ProfileSwitcher } from "@/components/ProfileSwitcher";
 import { ProfileScopeBanner } from "@/components/ProfileScopeBanner";
 import { useSystemActions } from "@/contexts/useSystemActions";
 import type { SystemAction } from "@/contexts/system-actions-context";
-// Route pages are lazy-loaded so the initial dashboard shell does not pay for
-// every admin surface (and heavy deps like xterm) up front.
-const ConfigPage = lazy(() => import("@/pages/ConfigPage"));
-const DocsPage = lazy(() => import("@/pages/DocsPage"));
-const EnvPage = lazy(() => import("@/pages/EnvPage"));
-const FilesPage = lazy(() => import("@/pages/FilesPage"));
-const SessionsPage = lazy(() => import("@/pages/SessionsPage"));
-const LogsPage = lazy(() => import("@/pages/LogsPage"));
-const AnalyticsPage = lazy(() => import("@/pages/AnalyticsPage"));
-const ModelsPage = lazy(() => import("@/pages/ModelsPage"));
-const CronPage = lazy(() => import("@/pages/CronPage"));
-const ProfilesPage = lazy(() => import("@/pages/ProfilesPage"));
-const ProfileBuilderPage = lazy(() => import("@/pages/ProfileBuilderPage"));
-const SkillsPage = lazy(() => import("@/pages/SkillsPage"));
-const PluginsPage = lazy(() => import("@/pages/PluginsPage"));
-const McpPage = lazy(() => import("@/pages/McpPage"));
-const PairingPage = lazy(() => import("@/pages/PairingPage"));
-const ChannelsPage = lazy(() => import("@/pages/ChannelsPage"));
-const WebhooksPage = lazy(() => import("@/pages/WebhooksPage"));
-const SystemPage = lazy(() => import("@/pages/SystemPage"));
-const ChatPage = lazy(() => import("@/pages/ChatPage"));
+import ConfigPage from "@/pages/ConfigPage";
+import DocsPage from "@/pages/DocsPage";
+import EnvPage from "@/pages/EnvPage";
+import FilesPage from "@/pages/FilesPage";
+import SessionsPage from "@/pages/SessionsPage";
+import LogsPage from "@/pages/LogsPage";
+import AnalyticsPage from "@/pages/AnalyticsPage";
+import ModelsPage from "@/pages/ModelsPage";
+import CronPage from "@/pages/CronPage";
+import ProfilesPage from "@/pages/ProfilesPage";
+import ProfileBuilderPage from "@/pages/ProfileBuilderPage";
+import SkillsPage from "@/pages/SkillsPage";
+import PluginsPage from "@/pages/PluginsPage";
+import McpPage from "@/pages/McpPage";
+import PairingPage from "@/pages/PairingPage";
+import ChannelsPage from "@/pages/ChannelsPage";
+import WebhooksPage from "@/pages/WebhooksPage";
+import SystemPage from "@/pages/SystemPage";
+import ChatPage from "@/pages/ChatPage";
+import MultimodalChatPage from "@/pages/MultimodalChatPage";
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { ThemeSwitcher } from "@/components/ThemeSwitcher";
 import { useI18n } from "@/i18n";
@@ -103,27 +105,11 @@ import { PluginPage, PluginSlot, usePlugins } from "@/plugins";
 import type { PluginManifest } from "@/plugins";
 import { useTheme } from "@/themes";
 import { isDashboardEmbeddedChatEnabled } from "@/lib/dashboard-flags";
-import { latchChatActivation } from "@/lib/chat-activation";
 import { api } from "@/lib/api";
-import type { StatusResponse, UpdateCheckResponse } from "@/lib/api";
-
-function RouteFallback({ label = "Loading…" }: { label?: string }) {
-  return (
-    <div
-      className="flex min-h-[12rem] flex-1 items-center justify-center"
-      aria-busy="true"
-      aria-live="polite"
-    >
-      <div className="flex items-center gap-2 text-sm text-muted-foreground">
-        <Spinner />
-        <span>{label}</span>
-      </div>
-    </div>
-  );
-}
+import type { StatusResponse } from "@/lib/api";
 
 function RootRedirect() {
-  return <Navigate to="/sessions" replace />;
+  return <Navigate to="/multimodal" replace />;
 }
 
 function UnknownRouteFallback({ pluginsLoading }: { pluginsLoading: boolean }) {
@@ -131,7 +117,7 @@ function UnknownRouteFallback({ pluginsLoading }: { pluginsLoading: boolean }) {
     // Render nothing during the plugin-load window — a spinner here would just flash.
     return null;
   }
-  return <Navigate to="/sessions" replace />;
+  return <Navigate to="/multimodal" replace />;
 }
 
 const CHAT_NAV_ITEM: NavItem = {
@@ -147,14 +133,13 @@ const CHAT_NAV_ITEM: NavItem = {
  * inline near the bottom of this file — so the PTY child, WebSocket,
  * and xterm instance survive when the user visits another tab and comes
  * back.  A `display:none` toggle hides the terminal without unmounting.
- * The host itself is still deferred until the first /chat visit so the
- * xterm chunk is not downloaded on unrelated pages.  Routing still owns
- * the URL so /chat deep-links, browser back/forward, and nav highlight
- * keep working.
+ * Routing still owns the URL so /chat deep-links, browser back/forward,
+ * and nav highlight keep working.
  */
 const BUILTIN_ROUTES_CORE: Record<string, ComponentType> = {
   "/": RootRedirect,
   "/sessions": SessionsPage,
+  "/multimodal": MultimodalChatPage,
   "/files": FilesPage,
   "/analytics": AnalyticsPage,
   "/models": ModelsPage,
@@ -189,6 +174,7 @@ const BUILTIN_NAV_REST: NavItem[] = [
     label: "Sessions",
     icon: MessageSquare,
   },
+  { path: "/multimodal", label: "Multimodal", icon: Eye },
   { path: "/files", label: "Files", icon: FolderOpen },
   {
     path: "/analytics",
@@ -367,6 +353,8 @@ function buildRoutes(
 }
 
 const SIDEBAR_COLLAPSED_KEY = "hermes-sidebar-collapsed";
+const NAV_SECTION_COLLAPSED_KEY = "hermes-sidebar-nav-collapsed";
+const SESSION_LIST_COLLAPSED_KEY = "hermes-sidebar-sessions-collapsed";
 
 export default function App() {
   const { t } = useI18n();
@@ -392,6 +380,32 @@ export default function App() {
       return next;
     });
   }, []);
+  // Independent collapse for the nav block + the session list (both live in the
+  // expanded sidebar). Persisted so the layout choice survives reloads.
+  const [navSectionOpen, setNavSectionOpen] = useState(() => {
+    try { return localStorage.getItem(NAV_SECTION_COLLAPSED_KEY) !== "true"; }
+    catch { return true; }
+  });
+  const [sessionListOpen, setSessionListOpen] = useState(() => {
+    try { return localStorage.getItem(SESSION_LIST_COLLAPSED_KEY) !== "true"; }
+    catch { return true; }
+  });
+  const toggleNavSection = useCallback(() => {
+    setNavSectionOpen((prev) => {
+      const next = !prev;
+      try { localStorage.setItem(NAV_SECTION_COLLAPSED_KEY, String(!next)); }
+      catch { /* noop */ }
+      return next;
+    });
+  }, []);
+  const toggleSessionList = useCallback(() => {
+    setSessionListOpen((prev) => {
+      const next = !prev;
+      try { localStorage.setItem(SESSION_LIST_COLLAPSED_KEY, String(!next)); }
+      catch { /* noop */ }
+      return next;
+    });
+  }, []);
   const isMobile = useBelowBreakpoint(1024);
   const isDesktopCollapsed = collapsed && !isMobile;
   const tooltipWarmRef = useRef(0);
@@ -399,14 +413,10 @@ export default function App() {
   const isDocsRoute = pathname === "/docs" || pathname === "/docs/";
   const normalizedPath = pathname.replace(/\/$/, "") || "/";
   const isChatRoute = normalizedPath === "/chat";
+  // Multimodal is a full-height app-like surface (video + chat + panels), so it
+  // needs the same flex-fill treatment as chat instead of a scrolling page.
+  const isMultimodalRoute = normalizedPath === "/multimodal";
   const embeddedChat = isDashboardEmbeddedChatEnabled();
-  // Defer mounting the persistent chat host (and its xterm chunk) until the
-  // user has actually opened /chat at least once. Sticky after that so the
-  // PTY survives later tab switches.
-  const [chatHostMounted, setChatHostMounted] = useState(isChatRoute);
-  useEffect(() => {
-    setChatHostMounted((prev) => latchChatActivation(prev, isChatRoute));
-  }, [isChatRoute]);
 
   // `dashboard.show_token_analytics` gates the Analytics nav item.  The
   // page itself remains reachable by URL (it renders an explanation when
@@ -512,23 +522,18 @@ export default function App() {
     <ProfileProvider>
     <div
       data-layout-variant={layoutVariant}
-      className="flex h-dvh max-h-dvh min-h-0 flex-col overflow-hidden bg-background-base text-text-primary antialiased"
+      className="flex h-dvh max-h-dvh min-h-0 flex-col overflow-hidden bg-black text-text-primary antialiased"
     >
       <SelectionSwitcher />
-
-      <div
-        aria-hidden
-        className="pointer-events-none fixed inset-0 z-0"
-      >
-        <PluginSlot name="backdrop" />
-      </div>
+      <Backdrop />
+      <PluginSlot name="backdrop" />
 
       <header
         className={cn(
           "lg:hidden fixed top-0 left-0 right-0 z-40 min-h-14",
           "flex items-center gap-2 px-4 py-2",
           "border-b border-current/20",
-          "bg-background-base",
+          "bg-background-base/90 backdrop-blur-sm",
         )}
         style={{
           background: "var(--component-header-background)",
@@ -548,7 +553,10 @@ export default function App() {
           <Menu />
         </Button>
 
-        <Typography className="font-bold text-[0.95rem] leading-[0.95] tracking-[0.05em] text-midground">
+        <Typography
+          className="font-bold text-[0.95rem] leading-[0.95] tracking-[0.05em] text-midground"
+          style={{ mixBlendMode: "plus-lighter" }}
+        >
           {t.app.brand}
         </Typography>
       </header>
@@ -560,7 +568,7 @@ export default function App() {
           onClick={closeMobile}
           className={cn(
             "lg:hidden fixed inset-0 z-40 p-0 block",
-            "bg-black/70",
+            "bg-black/60 backdrop-blur-sm",
           )}
         />
       )}
@@ -574,13 +582,13 @@ export default function App() {
             id="app-sidebar"
             aria-label={t.app.navigation}
             className={cn(
-              "fixed top-0 left-0 z-50 flex h-dvh max-h-dvh w-64 min-h-0 flex-col font-sans",
+              "fixed top-0 left-0 z-50 flex h-dvh max-h-dvh w-64 min-h-0 flex-col",
               "border-r border-current/20",
-              "bg-background-base",
-              "transition-[transform] duration-200 ease-[cubic-bezier(0.23,1,0.32,1)]",
+              "bg-background-base/95 backdrop-blur-sm",
+              "transition-[transform] duration-200 ease-out",
               mobileOpen ? "translate-x-0" : "-translate-x-full",
               "lg:sticky lg:top-0 lg:translate-x-0 lg:shrink-0 lg:overflow-hidden",
-              "lg:transition-[width] lg:duration-300 lg:ease-[cubic-bezier(0.23,1,0.32,1)]",
+              "lg:transition-[width] lg:duration-[600ms] lg:ease-[cubic-bezier(0.33,1.35,0.62,1)]",
               collapsed && "lg:w-14",
             )}
             style={{
@@ -604,8 +612,11 @@ export default function App() {
               >
                 <PluginSlot name="header-left" />
 
-                <Typography className="font-bold text-[1.125rem] leading-[0.95] tracking-[0.0525rem] text-midground uppercase">
-                  Hermes
+                <Typography
+                  className="font-bold text-[1.125rem] leading-[0.95] tracking-[0.0525rem] text-midground uppercase"
+                  style={{ mixBlendMode: "plus-lighter" }}
+                >
+                  Argus
                   <br />
                   Agent
                 </Typography>
@@ -641,9 +652,24 @@ export default function App() {
             <ProfileSwitcher collapsed={isDesktopCollapsed} />
 
             <nav
-              className="min-h-0 w-full flex-1 overflow-y-auto overflow-x-hidden border-t border-current/10 py-2"
+              className="min-h-0 w-full flex-1 flex flex-col overflow-hidden border-t border-current/10 py-2"
               aria-label={t.app.navigation}
             >
+              {/* Nav block — independently collapsible (only in expanded sidebar). */}
+              {!isDesktopCollapsed && (
+                <button
+                  type="button"
+                  onClick={toggleNavSection}
+                  className="flex items-center gap-1 px-4 py-1 text-[0.6875rem] font-medium uppercase tracking-wider text-text-tertiary hover:text-foreground"
+                >
+                  {navSectionOpen
+                    ? <ChevronDown className="h-3 w-3" />
+                    : <ChevronRight className="h-3 w-3" />}
+                  <span>{t.app.navigation}</span>
+                </button>
+              )}
+              {(navSectionOpen || isDesktopCollapsed) && (
+              <div className="min-h-0 max-h-[40%] shrink overflow-y-auto overflow-x-hidden">
               <ul className="flex flex-col">
                 {sidebarNav.coreItems.map((item) => (
                   <SidebarNavLink
@@ -666,7 +692,7 @@ export default function App() {
                   <span
                     className={cn(
                       "px-5 pt-2.5 pb-1",
-                      "font-sans text-display text-xs tracking-[0.12em] text-text-tertiary",
+                      "font-mondwest text-display text-xs tracking-[0.12em] text-text-tertiary",
                       isDesktopCollapsed && "lg:hidden",
                     )}
                     id="hermes-sidebar-plugin-nav-heading"
@@ -687,6 +713,19 @@ export default function App() {
                     ))}
                   </ul>
                 </div>
+              )}
+              </div>
+              )}
+
+              {/* Session list — merged from the old ChatPage right rail. Owns
+                  its own collapsible section header (chevron + label + new/refresh).
+                  Hidden when the whole sidebar is collapsed (needs width). */}
+              {!isDesktopCollapsed && (
+                <SidebarSessionList
+                  closeMobile={closeMobile}
+                  open={sessionListOpen}
+                  onToggle={toggleSessionList}
+                />
               )}
             </nav>
 
@@ -759,35 +798,42 @@ export default function App() {
               <div
                 className={cn(
                   "w-full min-w-0",
-                  !isChatRoute &&
+                  !isChatRoute && !isMultimodalRoute &&
                     "pb-[calc(2rem+env(safe-area-inset-bottom,0px))] lg:pb-8",
-                  (isDocsRoute || isChatRoute) &&
+                  (isDocsRoute || isChatRoute || isMultimodalRoute) &&
                     "min-h-0 flex flex-1 flex-col",
                 )}
               >
                 <ProfileKeyedRoutes>
-                  <Suspense fallback={<RouteFallback />}>
-                    <Routes>
-                      {routes.map(({ key, path, element }) => (
-                        <Route key={key} path={path} element={element} />
-                      ))}
-                      <Route
-                        path="*"
-                        element={
-                          <UnknownRouteFallback pluginsLoading={pluginsLoading} />
-                        }
-                      />
-                    </Routes>
-                  </Suspense>
+                  <Routes>
+                    {routes.map(({ key, path, element }) => (
+                      <Route key={key} path={path} element={element} />
+                    ))}
+                    <Route
+                      path="*"
+                      element={
+                        <UnknownRouteFallback pluginsLoading={pluginsLoading} />
+                      }
+                    />
+                  </Routes>
                 </ProfileKeyedRoutes>
 
                 {embeddedChat &&
                   !chatOverriddenByPlugin &&
                   (pluginsLoading ? (
                     isChatRoute ? (
-                      <RouteFallback label="Loading chat…" />
+                      <div
+                        className="flex min-h-0 min-w-0 flex-1 items-center justify-center"
+                        aria-busy="true"
+                        aria-live="polite"
+                      >
+                        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                          <Spinner />
+                          <span>Loading chat…</span>
+                        </div>
+                      </div>
                     ) : null
-                  ) : chatHostMounted ? (
+                  ) : (
                     <div
                       data-chat-active={isChatRoute ? "true" : "false"}
                       className={cn(
@@ -796,19 +842,9 @@ export default function App() {
                       )}
                       aria-hidden={!isChatRoute}
                     >
-                      <Suspense
-                        fallback={
-                          isChatRoute ? (
-                            <RouteFallback label="Loading chat…" />
-                          ) : null
-                        }
-                      >
-                        <ChatPage isActive={isChatRoute} />
-                      </Suspense>
+                      <ChatPage isActive={isChatRoute} />
                     </div>
-                  ) : isChatRoute ? (
-                    <RouteFallback label="Loading chat…" />
-                  ) : null)}
+                  ))}
               </div>
               <PluginSlot name="post-main" />
             </div>
@@ -835,6 +871,83 @@ export default function App() {
 function ProfileKeyedRoutes({ children }: { children: ReactNode }) {
   const { profile } = useProfileScope();
   return <div key={profile || "__own__"} className="contents">{children}</div>;
+}
+
+/**
+ * Sidebar session list — the recent-sessions switcher merged into the left
+ * sidebar (below the nav block). Owns its collapsible section header: a
+ * chevron + "SESSIONS" label, with new-chat (+) and refresh (↻) actions
+ * right-aligned on the same row. Picking a row navigates to
+ * `/multimodal?mm=<id>`, which the Multimodal chat page resumes + restores
+ * history for. Rendered inside ProfileProvider so it can scope by profile.
+ */
+function SidebarSessionList({
+  closeMobile,
+  open,
+  onToggle,
+}: {
+  closeMobile: () => void;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  const { t } = useI18n();
+  const { profile } = useProfileScope();
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const activeMm = searchParams.get("mm");
+  const reloadRef = useRef<(() => void) | null>(null);
+  const onSelect = useCallback(
+    (id: string) => {
+      navigate(`/multimodal?mm=${encodeURIComponent(id)}`);
+    },
+    [navigate],
+  );
+  return (
+    <div className="mt-3 flex min-h-0 flex-1 flex-col border-t border-current/10 pt-2">
+      {/* Section header: chevron + label (toggles), then +/↻ actions right. */}
+      <div className="mb-1.5 flex items-center gap-1 px-4 py-1.5">
+        <button
+          type="button"
+          onClick={onToggle}
+          className="flex flex-1 items-center gap-1 text-[0.6875rem] font-medium uppercase tracking-wider text-text-tertiary hover:text-foreground"
+        >
+          {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+          <span>{t.sessions.title}</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => navigate("/multimodal?mm=new")}
+          aria-label={t.sessions.newChat}
+          title={t.sessions.newChat}
+          className="flex h-6 w-6 cursor-pointer items-center justify-center rounded-md text-text-tertiary transition-colors hover:bg-current/10 hover:text-foreground active:bg-current/15"
+        >
+          <Plus className="h-3.5 w-3.5" />
+        </button>
+        <button
+          type="button"
+          onClick={() => reloadRef.current?.()}
+          aria-label={t.common.refresh}
+          title={t.common.refresh}
+          className="flex h-6 w-6 cursor-pointer items-center justify-center rounded-md text-text-tertiary transition-colors hover:bg-current/10 hover:text-foreground active:bg-current/15"
+        >
+          <RotateCw className="h-3.5 w-3.5" />
+        </button>
+      </div>
+      {open && (
+        <div className="min-h-0 flex-1 overflow-hidden">
+          <ChatSessionList
+            activeSessionId={activeMm}
+            profile={profile}
+            onSelect={onSelect}
+            onPicked={closeMobile}
+            onNewChat={() => navigate("/multimodal?mm=new")}
+            hideHeader
+            reloadRef={reloadRef}
+          />
+        </div>
+      )}
+    </div>
+  );
 }
 
 function SidebarNavLink({
@@ -876,7 +989,7 @@ function SidebarNavLink({
           cn(
             "group/nav relative flex items-center gap-3",
             "px-5 py-2.5",
-            "font-sans text-display uppercase text-sm tracking-[0.12em]",
+            "font-mondwest text-display uppercase text-sm tracking-[0.12em]",
             "whitespace-nowrap transition-colors cursor-pointer",
             "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-midground",
             isActive
@@ -910,6 +1023,7 @@ function SidebarNavLink({
               <span
                 aria-hidden
                 className="absolute left-0 top-0 bottom-0 w-px bg-midground"
+                style={{ mixBlendMode: "plus-lighter" }}
               />
             )}
           </>
@@ -934,47 +1048,6 @@ function SidebarSystemActions({
   const { activeAction, isBusy, isRunning, pendingAction, runAction } =
     useSystemActions();
   const canUpdateHermes = status?.can_update_hermes === true;
-  const [restartConfirmOpen, setRestartConfirmOpen] = useState(false);
-  const [updateConfirmOpen, setUpdateConfirmOpen] = useState(false);
-  const [updateConfirmInfo, setUpdateConfirmInfo] =
-    useState<UpdateCheckResponse | null>(null);
-  const [updateConfirmChecking, setUpdateConfirmChecking] = useState(false);
-
-  useEffect(() => {
-    if (!updateConfirmOpen) {
-      setUpdateConfirmInfo(null);
-      return;
-    }
-    let cancelled = false;
-    setUpdateConfirmChecking(true);
-    api
-      .checkHermesUpdate(false)
-      .then((info) => {
-        if (!cancelled) setUpdateConfirmInfo(info);
-      })
-      .catch(() => {
-        if (!cancelled) setUpdateConfirmInfo(null);
-      })
-      .finally(() => {
-        if (!cancelled) setUpdateConfirmChecking(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [updateConfirmOpen]);
-
-  const updateConfirmDescription = useMemo(() => {
-    if (updateConfirmInfo?.behind && updateConfirmInfo.behind > 0) {
-      const cmd = updateConfirmInfo.update_command;
-      const n = updateConfirmInfo.behind;
-      return `This will run 'hermes update' (${cmd}) and pull ${n} new commit${n === 1 ? "" : "s"}. The gateway restarts when the update finishes; the current session keeps its prompt cache until then.`;
-    }
-    const cmd = updateConfirmInfo?.update_command ?? "hermes update";
-    return (
-      t.status.updateHermesConfirmMessage ??
-      `This will run 'hermes update' (${cmd}) and restart the gateway when it finishes.`
-    );
-  }, [t.status.updateHermesConfirmMessage, updateConfirmInfo]);
 
   const items: SystemActionItem[] = [
     {
@@ -997,35 +1070,12 @@ function SidebarSystemActions({
 
   const handleClick = (action: SystemAction) => {
     if (isBusy) return;
-    if (action === "restart") {
-      setRestartConfirmOpen(true);
-      return;
-    }
-    if (action === "update") {
-      setUpdateConfirmOpen(true);
-      return;
-    }
     void runAction(action);
     navigate("/sessions");
     onNavigate();
   };
 
-  const confirmRestart = () => {
-    setRestartConfirmOpen(false);
-    void runAction("restart");
-    navigate("/sessions");
-    onNavigate();
-  };
-
-  const confirmUpdate = () => {
-    setUpdateConfirmOpen(false);
-    void runAction("update");
-    navigate("/sessions");
-    onNavigate();
-  };
-
   return (
-    <>
     <div
       className={cn(
         "shrink-0 flex flex-col",
@@ -1036,7 +1086,7 @@ function SidebarSystemActions({
       <span
         className={cn(
           "px-5 pt-0.5 pb-0.5",
-          "font-sans text-display text-xs tracking-[0.12em] text-text-tertiary",
+          "font-mondwest text-display text-xs tracking-[0.12em] text-text-tertiary",
           collapsed && "lg:hidden",
         )}
       >
@@ -1064,36 +1114,6 @@ function SidebarSystemActions({
         ))}
       </ul>
     </div>
-
-    <ConfirmDialog
-      cancelLabel={t.common.cancel}
-      confirmLabel={t.status.restartGateway}
-      description={
-        t.status.restartGatewayConfirmMessage ??
-        "This restarts the Hermes gateway process. Connected channels and active sessions will reconnect afterward."
-      }
-      loading={pendingAction === "restart"}
-      onCancel={() => setRestartConfirmOpen(false)}
-      onConfirm={confirmRestart}
-      open={restartConfirmOpen}
-      title={
-        t.status.restartGatewayConfirmTitle ?? `${t.status.restartGateway}?`
-      }
-    />
-
-    <ConfirmDialog
-      cancelLabel={t.common.cancel}
-      confirmLabel={t.status.updateHermesConfirmNow ?? "Update now"}
-      description={
-        updateConfirmChecking ? t.common.loading : updateConfirmDescription
-      }
-      loading={pendingAction === "update" || updateConfirmChecking}
-      onCancel={() => setUpdateConfirmOpen(false)}
-      onConfirm={confirmUpdate}
-      open={updateConfirmOpen}
-      title={t.status.updateHermesConfirmTitle ?? `${t.status.updateHermes}?`}
-    />
-    </>
   );
 }
 
@@ -1136,7 +1156,7 @@ function SystemActionButton({
         className={cn(
           "group/action relative flex w-full items-center gap-3",
           "px-5 py-2.5",
-          "font-sans text-display text-xs tracking-[0.1em]",
+          "font-mondwest text-display text-xs tracking-[0.1em]",
           "whitespace-nowrap transition-colors cursor-pointer",
           "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-midground",
           busy
@@ -1174,6 +1194,7 @@ function SystemActionButton({
           <span
             aria-hidden
             className="absolute left-0 top-0 bottom-0 w-px bg-midground"
+            style={{ mixBlendMode: "plus-lighter" }}
           />
         )}
       </button>
@@ -1309,8 +1330,8 @@ function SidebarTooltip({ anchor, label, warmRef }: SidebarTooltipProps) {
       className={cn(
         "fixed z-[100] pointer-events-none",
         "px-2 py-1",
-        "bg-background-base border border-current/20 shadow-lg",
-        "font-sans text-display text-xs tracking-[0.1em] text-midground uppercase",
+        "bg-background-base/95 border border-current/20 backdrop-blur-sm shadow-lg",
+        "font-mondwest text-display text-xs tracking-[0.1em] text-midground uppercase",
       )}
       style={{
         top: rect.top + rect.height / 2,

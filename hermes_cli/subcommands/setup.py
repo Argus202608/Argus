@@ -16,23 +16,15 @@ def build_setup_parser(subparsers, *, cmd_setup: Callable) -> None:
     # =========================================================================
     setup_parser = subparsers.add_parser(
         "setup",
-        help="Interactive setup wizard",
+        aliases=["onboarding"],
+        help="Interactive setup wizard (alias: onboarding)",
         description="Configure Hermes Agent with an interactive wizard. "
-        "Run a specific section: "
-        "hermes setup model|tts|terminal|gateway|tools|telemetry|agent",
+        "Run a specific section: hermes setup model|tts|terminal|gateway|tools|multimodal|agent",
     )
     setup_parser.add_argument(
         "section",
         nargs="?",
-        choices=[
-            "model",
-            "tts",
-            "terminal",
-            "gateway",
-            "tools",
-            "telemetry",
-            "agent",
-        ],
+        choices=["model", "tts", "terminal", "gateway", "tools", "multimodal", "agent"],
         default=None,
         help="Run a specific setup section instead of the full wizard",
     )

@@ -6,14 +6,12 @@ import { rpcErrorMessage } from '../lib/rpc.js'
 import type { Theme } from '../theme.js'
 
 import { OverlayHint, useOverlayKeys, windowItems, windowOffset } from './overlayControls.js'
-import { chipRowProps } from './overlayPrimitives.js'
-import { clampOverlayWidth } from './overlayPrimitives.js'
 
 const VISIBLE = 12
 const MIN_WIDTH = 40
 const MAX_WIDTH = 90
 
-export function SkillsHub({ gw, maxWidth, onClose, t }: SkillsHubProps) {
+export function SkillsHub({ gw, onClose, t }: SkillsHubProps) {
   const [skillsByCat, setSkillsByCat] = useState<Record<string, string[]>>({})
   const [selectedCat, setSelectedCat] = useState('')
   const [catIdx, setCatIdx] = useState(0)
@@ -25,9 +23,7 @@ export function SkillsHub({ gw, maxWidth, onClose, t }: SkillsHubProps) {
   const [loading, setLoading] = useState(true)
 
   const { stdout } = useStdout()
-  const terminalWidth = Math.max(1, (stdout?.columns ?? 80) - 6)
-  const preferredWidth = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, terminalWidth))
-  const width = clampOverlayWidth(preferredWidth, maxWidth)
+  const width = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, (stdout?.columns ?? 80) - 6))
 
   useEffect(() => {
     gw.request<{ skills?: Record<string, string[]> }>('skills.manage', { action: 'list' })
@@ -221,7 +217,13 @@ export function SkillsHub({ gw, maxWidth, onClose, t }: SkillsHubProps) {
           const idx = offset + i
 
           return (
-            <Text color={t.color.muted} {...chipRowProps(t, catIdx === idx)} key={row} wrap="truncate-end">
+            <Text
+              bold={catIdx === idx}
+              color={catIdx === idx ? t.color.accent : t.color.muted}
+              inverse={catIdx === idx}
+              key={row}
+              wrap="truncate-end"
+            >
               {catIdx === idx ? '▸ ' : '  '}
               {i + 1}. {row}
             </Text>
@@ -251,7 +253,13 @@ export function SkillsHub({ gw, maxWidth, onClose, t }: SkillsHubProps) {
           const idx = offset + i
 
           return (
-            <Text color={t.color.muted} {...chipRowProps(t, skillIdx === idx)} key={row} wrap="truncate-end">
+            <Text
+              bold={skillIdx === idx}
+              color={skillIdx === idx ? t.color.accent : t.color.muted}
+              inverse={skillIdx === idx}
+              key={row}
+              wrap="truncate-end"
+            >
               {skillIdx === idx ? '▸ ' : '  '}
               {i + 1}. {row}
             </Text>
@@ -295,7 +303,6 @@ interface SkillInfo {
 
 interface SkillsHubProps {
   gw: GatewayClient
-  maxWidth?: number
   onClose: () => void
   t: Theme
 }

@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 
-import type { SubmitTextOptions } from '@/app/session/hooks/use-prompt-actions/utils'
 import type { HermesGateway } from '@/hermes'
+import type { ComposerAttachment } from '@/store/composer'
 
 import type { DroppedFile } from '../hooks/use-composer-actions'
 
@@ -28,14 +28,12 @@ export interface ChatBarState {
     modelMenuContent?: ReactNode
   }
   tools: { enabled: boolean; label: string; suggestions?: ContextSuggestion[] }
-  voice: { enabled: boolean; active: boolean }
 }
 
 export interface ChatBarProps {
   busy: boolean
   disabled: boolean
   focusKey?: string | null
-  maxRecordingSeconds?: number
   state: ChatBarState
   gateway?: HermesGateway | null
   queueSessionKey?: string | null
@@ -46,23 +44,14 @@ export interface ChatBarProps {
   onAddUrl?: (url: string) => void
   onAttachImageBlob?: (blob: Blob) => Promise<boolean | void> | boolean | void
   onAttachDroppedItems?: (candidates: DroppedFile[]) => Promise<boolean | void> | boolean | void
-  /** Pasted GitHub PR-comment deep link → structured review attachment.
-   *  Returns true when the paste was consumed as an attachment. */
-  onAttachPrCommentUrl?: (url: string) => boolean
   onPasteClipboardImage?: (opts?: { silent?: boolean }) => Promise<boolean> | void
   onPickFiles?: () => void
   onPickFolders?: () => void
   onPickImages?: () => void
   onRemoveAttachment?: (id: string) => void
   onSteer?: (text: string) => Promise<boolean> | boolean
-  onSubmit: (value: string, options?: SubmitTextOptions) => Promise<boolean> | boolean
-  onTranscribeAudio?: (audio: Blob) => Promise<string>
-}
-
-export type VoiceStatus = 'idle' | 'recording' | 'transcribing'
-
-export interface VoiceActivityState {
-  elapsedSeconds: number
-  level: number
-  status: VoiceStatus
+  onSubmit: (
+    value: string,
+    options?: { attachments?: ComposerAttachment[]; fromQueue?: boolean }
+  ) => Promise<boolean> | boolean
 }

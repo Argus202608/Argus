@@ -16,11 +16,12 @@ instead of rebuilding).  Covers:
 from __future__ import annotations
 
 import logging
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from agent.conversation_loop import _restore_or_build_system_prompt
+from agent.prompt_builder import MM_QUERY_CONTRACT_MARKER
 
 
 def _make_agent(session_db=None, prebuilt_prompt: str = "BUILT_PROMPT"):
@@ -31,11 +32,8 @@ def _make_agent(session_db=None, prebuilt_prompt: str = "BUILT_PROMPT"):
     agent.model = "test-model"
     agent.provider = "openrouter"
     agent.platform = "cli"
+    agent.valid_tool_names = set()
     agent._session_db = session_db
-    # MagicMock attributes are truthy by default; the static-prefix
-    # reconstruction is gated on _use_prompt_caching, so default it off
-    # for the legacy restore tests (the reconstruction tests enable it).
-    agent._use_prompt_caching = False
     agent._build_system_prompt = MagicMock(return_value=prebuilt_prompt)
     return agent
 
@@ -71,6 +69,167 @@ class TestStoredPromptReuse:
 
         _restore_or_build_system_prompt(agent, None, [{"role": "user", "content": "hi"}])
         assert agent._cached_system_prompt == stored
+
+    def test_legacy_multimodal_tool_contract_rebuilds_once(self):
+        legacy = (
+            "Use recall_multimodal_memory for visual questions.\n"
+            "Model: test-model\nProvider: openrouter"
+        )
+        rebuilt = (
+            f"{MM_QUERY_CONTRACT_MARKER}\n"
+            "Use query_multimodal for visual questions.\n"
+            "Model: test-model\nProvider: openrouter"
+        )
+        db = MagicMock()
+        db.get_session.return_value = {"system_prompt": legacy}
+        agent = _make_agent(session_db=db, prebuilt_prompt=rebuilt)
+        agent.valid_tool_names = {"query_multimodal"}
+
+        history = [{"role": "user", "content": "hi"}]
+        _restore_or_build_system_prompt(agent, None, history)
+
+        assert agent._cached_system_prompt == rebuilt
+        agent._build_system_prompt.assert_called_once_with(None)
+        db.update_system_prompt.assert_called_once_with(agent.session_id, rebuilt)
+
+        # The persisted marker makes the next reconstructed agent reuse the
+        # rebuilt bytes verbatim instead of invalidating the prefix again.
+        db2 = MagicMock()
+        db2.get_session.return_value = {"system_prompt": rebuilt}
+        resumed = _make_agent(session_db=db2)
+        resumed.valid_tool_names = {"query_multimodal"}
+        _restore_or_build_system_prompt(resumed, None, history)
+        assert resumed._cached_system_prompt == rebuilt
+        resumed._build_system_prompt.assert_not_called()
+        db2.update_system_prompt.assert_not_called()
+
+    def test_legacy_contract_is_reused_when_new_tool_is_not_visible(self):
+        legacy = (
+            "Use recall_multimodal_memory for visual questions.\n"
+            "Model: test-model\nProvider: openrouter"
+        )
+        db = MagicMock()
+        db.get_session.return_value = {"system_prompt": legacy}
+        agent = _make_agent(session_db=db)
+
+        _restore_or_build_system_prompt(
+            agent, None, [{"role": "user", "content": "hi"}]
+        )
+
+        assert agent._cached_system_prompt == legacy
+        agent._build_system_prompt.assert_not_called()
+
+    def test_unversioned_multimodal_prompt_rebuilds_without_legacy_name(self):
+        """The marker, not a coincidental old-name substring, owns migration."""
+        unversioned = (
+            "Use visual tools for live questions.\n"
+            "Model: test-model\nProvider: openrouter"
+        )
+        rebuilt = (
+            f"{MM_QUERY_CONTRACT_MARKER}\n"
+            "Use query_multimodal for visual questions.\n"
+            "Model: test-model\nProvider: openrouter"
+        )
+        db = MagicMock()
+        db.get_session.return_value = {"system_prompt": unversioned}
+        agent = _make_agent(session_db=db, prebuilt_prompt=rebuilt)
+        agent.valid_tool_names = {"query_multimodal"}
+
+        _restore_or_build_system_prompt(
+            agent, None, [{"role": "user", "content": "hi"}]
+        )
+
+        assert agent._cached_system_prompt == rebuilt
+        agent._build_system_prompt.assert_called_once_with(None)
+        db.update_system_prompt.assert_called_once_with(agent.session_id, rebuilt)
+
+    def test_real_session_db_roundtrip_migrates_once(self, tmp_path):
+        """Exercise the append/persist boundary without a mocked DB."""
+        from hermes_state import SessionDB
+
+        legacy = (
+            "Use visual tools for live questions.\n"
+            "Model: test-model\nProvider: openrouter"
+        )
+        rebuilt = (
+            f"{MM_QUERY_CONTRACT_MARKER}\n"
+            "Use query_multimodal for visual questions.\n"
+            "Model: test-model\nProvider: openrouter"
+        )
+        db = SessionDB(db_path=tmp_path / "state.db")
+        db.create_session(
+            "test-session-id", source="multimodal", system_prompt=legacy
+        )
+        history = [{"role": "user", "content": "continue"}]
+
+        first = _make_agent(session_db=db, prebuilt_prompt=rebuilt)
+        first.valid_tool_names = {"query_multimodal"}
+        _restore_or_build_system_prompt(first, None, history)
+        assert first._cached_system_prompt == rebuilt
+        assert db.get_session("test-session-id")["system_prompt"] == rebuilt
+
+        resumed = _make_agent(session_db=db, prebuilt_prompt="must-not-build")
+        resumed.valid_tool_names = {"query_multimodal"}
+        _restore_or_build_system_prompt(resumed, None, history)
+        assert resumed._cached_system_prompt == rebuilt
+        resumed._build_system_prompt.assert_not_called()
+
+    def test_new_contract_marker_wins_over_legacy_name_in_project_context(self):
+        """A doc mentioning the old name must not invalidate a migrated prompt.
+
+        Project/context files are part of the cached system prompt and may retain
+        migration notes indefinitely.  The explicit contract marker, not a raw
+        substring search, is what proves that the runtime guidance is current.
+        """
+        stored = (
+            f"{MM_QUERY_CONTRACT_MARKER}\n"
+            "Use query_multimodal for one-shot visual questions.\n"
+            "Project migration note: recall_multimodal_memory was the old API.\n"
+            "Model: test-model\nProvider: openrouter"
+        )
+        db = MagicMock()
+        db.get_session.return_value = {"system_prompt": stored}
+        agent = _make_agent(session_db=db)
+        agent.valid_tool_names = {"query_multimodal"}
+
+        _restore_or_build_system_prompt(
+            agent, None, [{"role": "user", "content": "continue"}]
+        )
+
+        assert agent._cached_system_prompt == stored
+        agent._build_system_prompt.assert_not_called()
+        db.update_system_prompt.assert_not_called()
+
+    def test_continuation_contract_migration_does_not_fire_session_start_hook(self):
+        """Lazy prompt migration is a continuation, never a new-session event."""
+        legacy = (
+            "Use recall_multimodal_memory for visual questions.\n"
+            "Model: test-model\nProvider: openrouter"
+        )
+        rebuilt = (
+            f"{MM_QUERY_CONTRACT_MARKER}\n"
+            "Use query_multimodal for visual questions.\n"
+            "Model: test-model\nProvider: openrouter"
+        )
+        db = MagicMock()
+        db.get_session.return_value = {"system_prompt": legacy}
+        agent = _make_agent(session_db=db, prebuilt_prompt=rebuilt)
+        agent.valid_tool_names = {"query_multimodal"}
+
+        with (
+            patch("hermes_cli.plugins.invoke_hook") as invoke_hook,
+            patch("agent.credits_tracker.seed_credits_at_session_start") as seed_credits,
+        ):
+            _restore_or_build_system_prompt(
+                agent, None, [{"role": "user", "content": "continue"}]
+            )
+
+        assert agent._cached_system_prompt == rebuilt
+        db.update_system_prompt.assert_called_once_with(agent.session_id, rebuilt)
+        invoke_hook.assert_not_called()
+        # Credit seeding remains a harmless, idempotent per-build operation;
+        # only the plugin lifecycle hook is constrained to a true first turn.
+        seed_credits.assert_called_once_with(agent)
 
     def test_present_row_with_stale_runtime_identity_rebuilds(self, caplog):
         """Stored prompts are cache gold unless their runtime identity is stale.
@@ -150,8 +309,51 @@ class TestLegitimateFreshBuild:
 
 
 class TestSilentFailureWarnings:
+    def test_db_read_exception_warns_and_rebuilds(self, caplog):
+        """DB read raising → WARNING + fall through to fresh build."""
+        db = MagicMock()
+        db.get_session.side_effect = RuntimeError("disk full")
+        agent = _make_agent(session_db=db)
 
+        with caplog.at_level(logging.WARNING, logger="agent.conversation_loop"):
+            _restore_or_build_system_prompt(agent, None, [{"role": "user", "content": "hi"}])
 
+        # Built fresh
+        agent._build_system_prompt.assert_called_once()
+        assert agent._cached_system_prompt == "BUILT_PROMPT"
+        # Loud warning about the read failure
+        warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
+        assert any("get_session failed" in r.getMessage() for r in warnings), \
+            f"Expected a get_session warning, got: {[r.getMessage() for r in warnings]}"
+        assert any("disk full" in r.getMessage() for r in warnings)
+
+    def test_null_system_prompt_warns_about_unusable_stored_state(self, caplog):
+        """Row exists but system_prompt is NULL → WARNING + fresh build."""
+        db = MagicMock()
+        db.get_session.return_value = {"system_prompt": None}
+        agent = _make_agent(session_db=db)
+
+        with caplog.at_level(logging.WARNING, logger="agent.conversation_loop"):
+            _restore_or_build_system_prompt(agent, None, [{"role": "user", "content": "hi"}])
+
+        agent._build_system_prompt.assert_called_once()
+        warnings = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+        assert any("is null" in m and "rebuilding" in m for m in warnings), \
+            f"Expected null-stored-prompt warning, got: {warnings}"
+
+    def test_empty_system_prompt_warns_about_silent_persistence_bug(self, caplog):
+        """Row exists but system_prompt is '' → WARNING about silent write bug."""
+        db = MagicMock()
+        db.get_session.return_value = {"system_prompt": ""}
+        agent = _make_agent(session_db=db)
+
+        with caplog.at_level(logging.WARNING, logger="agent.conversation_loop"):
+            _restore_or_build_system_prompt(agent, None, [{"role": "user", "content": "hi"}])
+
+        agent._build_system_prompt.assert_called_once()
+        warnings = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+        assert any("is empty" in m and "rebuilding" in m for m in warnings), \
+            f"Expected empty-stored-prompt warning, got: {warnings}"
 
     def test_db_write_failure_warns_loudly(self, caplog):
         """update_system_prompt raising → WARNING (was DEBUG before)."""
@@ -220,163 +422,6 @@ class TestPromptStabilityInvariant:
         assert agent._cached_system_prompt == stored
         # Byte-level check
         assert agent._cached_system_prompt.encode("utf-8") == stored.encode("utf-8")
-
-
-# ---------------------------------------------------------------------------
-# Cross-session static prefix reconstruction (issue #68191 follow-up)
-# ---------------------------------------------------------------------------
-
-
-class TestStaticPrefixReconstructionOnRestore:
-    """The two-block cache layout must survive session restore.
-
-    Gateway surfaces construct a fresh AIAgent per turn and restore the
-    persisted prompt from the session DB; the cross-session-stable prefix
-    (``_cached_system_prompt_static``) is only set on fresh builds, so
-    without reconstruction the wire layout silently degrades to the legacy
-    single-breakpoint layout after turn 1 (flagged on PR #68258 review).
-    """
-
-    def test_restore_reconstructs_static_prefix_when_it_matches(self):
-        stable = "STATIC IDENTITY AND GUIDANCE"
-        stored = stable + "\n\nper-session context\n\nvolatile tail"
-        db = MagicMock()
-        db.get_session.return_value = {"system_prompt": stored}
-        agent = _make_agent(session_db=db)
-        agent._use_prompt_caching = True
-        agent._cached_system_prompt_static = None
-
-        from unittest.mock import patch as _patch
-
-        with _patch(
-            "agent.system_prompt.build_system_prompt_parts",
-            return_value={"stable": stable, "context": "", "volatile": ""},
-        ):
-            _restore_or_build_system_prompt(
-                agent, None, [{"role": "user", "content": "hi"}]
-            )
-
-        # Restored prompt bytes untouched; static prefix reconstructed.
-        assert agent._cached_system_prompt == stored
-        assert agent._cached_system_prompt_static == stable
-
-    def test_restore_leaves_static_unset_on_prefix_mismatch(self):
-        """Stable-tier drift (skills edited since persist) → no static prefix,
-        legacy layout, restored bytes still authoritative."""
-        stored = "OLD STATIC HEAD\n\nper-session context"
-        db = MagicMock()
-        db.get_session.return_value = {"system_prompt": stored}
-        agent = _make_agent(session_db=db)
-        agent._use_prompt_caching = True
-        agent._cached_system_prompt_static = None
-
-        from unittest.mock import patch as _patch
-
-        with _patch(
-            "agent.system_prompt.build_system_prompt_parts",
-            return_value={"stable": "NEW STATIC HEAD", "context": "", "volatile": ""},
-        ):
-            _restore_or_build_system_prompt(
-                agent, None, [{"role": "user", "content": "hi"}]
-            )
-
-        assert agent._cached_system_prompt == stored
-        assert agent._cached_system_prompt_static is None
-
-    def test_restore_survives_parts_builder_exception(self):
-        """Prefix reconstruction is fail-open: a parts-builder crash must not
-        break the byte-identical restore."""
-        stored = "Stored prompt — must survive"
-        db = MagicMock()
-        db.get_session.return_value = {"system_prompt": stored}
-        agent = _make_agent(session_db=db)
-        agent._use_prompt_caching = True
-        agent._cached_system_prompt_static = None
-
-        from unittest.mock import patch as _patch
-
-        with _patch(
-            "agent.system_prompt.build_system_prompt_parts",
-            side_effect=RuntimeError("boom"),
-        ):
-            _restore_or_build_system_prompt(
-                agent, None, [{"role": "user", "content": "hi"}]
-            )
-
-        assert agent._cached_system_prompt == stored
-        assert agent._cached_system_prompt_static is None
-
-
-class TestReconstructStaticPrefixMemoization:
-    """A failed static rebuild must not re-run the parts builder every call.
-
-    ``reconstruct_static_prefix`` sits on the retry-loop hot path via the
-    failover redecoration chokepoint (#72626); ``build_system_prompt_parts``
-    does real file I/O (SOUL.md, context files, memory), so a persistent
-    stable-tier mismatch must be checked once per stored prompt, not on
-    every attempt of every API call.
-    """
-
-    def _agent(self, stored):
-        agent = _make_agent()
-        agent._use_prompt_caching = True
-        agent._cached_system_prompt = stored
-        agent._cached_system_prompt_static = None
-        return agent
-
-    def test_failed_rebuild_is_memoized_per_stored_prompt(self):
-        from unittest.mock import patch as _patch
-
-        from agent.system_prompt import reconstruct_static_prefix
-
-        stored = "STORED PROMPT\n\ntail"
-        agent = self._agent(stored)
-        with _patch(
-            "agent.system_prompt.build_system_prompt_parts",
-            return_value={"stable": "MISMATCH", "context": "", "volatile": ""},
-        ) as build:
-            reconstruct_static_prefix(agent)
-            reconstruct_static_prefix(agent)
-            reconstruct_static_prefix(agent)
-        assert build.call_count == 1
-        assert agent._cached_system_prompt_static is None
-
-    def test_changed_stored_prompt_retries_once(self):
-        from unittest.mock import patch as _patch
-
-        from agent.system_prompt import reconstruct_static_prefix
-
-        agent = self._agent("OLD STORED")
-        with _patch(
-            "agent.system_prompt.build_system_prompt_parts",
-            return_value={"stable": "MISMATCH", "context": "", "volatile": ""},
-        ) as build:
-            reconstruct_static_prefix(agent)
-            # A new stored prompt (e.g. after compression) invalidates the
-            # failure memo and gets exactly one fresh attempt.
-            agent._cached_system_prompt = "NEW STORED"
-            reconstruct_static_prefix(agent)
-            reconstruct_static_prefix(agent)
-        assert build.call_count == 2
-
-    def test_success_clears_failure_memo_and_early_returns(self):
-        from unittest.mock import patch as _patch
-
-        from agent.system_prompt import reconstruct_static_prefix
-
-        stable = "STATIC HEAD"
-        stored = stable + "\n\nvolatile"
-        agent = self._agent(stored)
-        with _patch(
-            "agent.system_prompt.build_system_prompt_parts",
-            return_value={"stable": stable, "context": "", "volatile": ""},
-        ) as build:
-            reconstruct_static_prefix(agent)
-            reconstruct_static_prefix(agent)
-        # Second call early-returns on the already-valid static prefix.
-        assert build.call_count == 1
-        assert agent._cached_system_prompt_static == stable
-        assert getattr(agent, "_static_rebuild_failed_for", None) is None
 
 
 if __name__ == "__main__":

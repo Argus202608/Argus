@@ -50,7 +50,7 @@ export const zhHant: Translations = {
   },
 
   app: {
-    brand: "Hermes Agent",
+    brand: "Argus Agent",
     brandShort: "HA",
     closeNavigation: "關閉導覽",
     closeModelTools: "關閉模型與工具",
@@ -120,8 +120,8 @@ export const zhHant: Translations = {
     starting: "啟動中",
     startedInBackground: "已於背景啟動 — 請查看日誌以取得進度",
     stopped: "已停止",
-    updateHermes: "更新 Hermes",
-    updatingHermes: "正在更新 Hermes…",
+    updateHermes: "更新 Argus",
+    updatingHermes: "正在更新 Argus…",
     waitingForOutput: "等待輸出…",
   },
 
@@ -129,14 +129,8 @@ export const zhHant: Translations = {
     title: "工作階段",
     history: "歷史",
     overview: "總覽",
-    filterChats: "聊天",
-    filterAutomation: "自動化",
-    filterAll: "全部",
-    sourceFilter: "工作階段來源",
-    anySource: "任何來源",
     searchPlaceholder: "搜尋訊息內容...",
     noSessions: "尚無工作階段",
-    noSessionsInFilter: "此篩選條件下沒有工作階段",
     noMatch: "沒有符合的工作階段",
     startConversation: "開始對話後將顯示於此",
     noMessages: "尚無訊息",
@@ -325,7 +319,7 @@ export const zhHant: Translations = {
     enableRuntime: "啟用",
     forceReinstall: "強制重新安裝（先刪除既有資料夾）",
     headline:
-      "探索、安裝、啟用並更新 Hermes 外掛（對齊 `hermes plugins` CLI）。",
+      "探索、安裝、啟用並更新 Argus 外掛（對齊 `hermes plugins` CLI）。",
     identifierLabel: "Git 網址或 owner/repo",
     inactive: "未啟用",
     installBtn: "安裝",
@@ -438,32 +432,21 @@ export const zhHant: Translations = {
     replaceCurrentValue: "取代目前值（{preview}）",
     showValue: "顯示實際值",
     hideValue: "隱藏值",
-    customTitle: "自訂密鑰",
-    customHint: "儲存在 .env 中、Hermes 無法識別的任意環境變數。可用於為技能、MCP 伺服器或你自己的工具注入環境變數。",
-    customConfigured: "已設定 {count} 個自訂密鑰",
-    addCustomKey: "新增自訂密鑰",
-    customKeyName: "變數名稱",
-    customKeyNamePlaceholder: "例如 MY_SERVICE_API_KEY",
-    add: "新增",
-    invalidKeyName: "僅能使用字母、數字和底線（必須以字母或底線開頭）。",
   },
 
   oauth: {
     title: "提供者登入（OAuth）",
     providerLogins: "提供者登入（OAuth）",
-    description:
-      "已連線 {connected}/{total} 個 OAuth 提供者。儀表板支援的流程請使用「登入」；CLI 指令仍可用於外部或備用設定。",
+    description: "已連線 {connected}/{total} 個 OAuth 提供者。登入流程目前透過 CLI 執行；請點擊「複製指令」並貼到終端機完成設定。",
     connected: "已連線",
     expired: "已過期",
-    notConnected: "未連線。可用時請使用「登入」，或在終端機執行 {command}。",
+    notConnected: "未連線。請在終端機執行 {command}。",
     runInTerminal: "於終端機。",
     noProviders: "未偵測到支援 OAuth 的提供者。",
     login: "登入",
     disconnect: "中斷連線",
     managedExternally: "由外部管理",
     copied: "已複製 ✓",
-    copyCode: "複製代碼",
-    copyFailed: "無法自動複製。請選取代碼並手動複製。",
     cli: "複製",
     copyCliCommand: "複製 CLI 指令（外部 / 備援用）",
     connect: "連線",
@@ -502,11 +485,11 @@ export const zhHant: Translations = {
   achievements: {
     hero: {
       kicker: "Agentic Gamerscore",
-      title: "Hermes Achievements",
+      title: "Argus Achievements",
       subtitle:
-        "從真實工作階段歷史中獲得的 Hermes 可收集徽章。已知尚未達成的成就會顯示為「已發現」；秘密成就在首次出現相符行為之前保持隱藏。",
+        "從真實工作階段歷史中獲得的 Argus 可收集徽章。已知尚未達成的成就會顯示為「已發現」；秘密成就在首次出現相符行為之前保持隱藏。",
       scan_subtitle:
-        "正在掃描 Hermes 工作階段歷史。在歷史紀錄較多時，首次掃描可能需要 5–10 秒。",
+        "正在掃描 Argus 工作階段歷史。在歷史紀錄較多時，首次掃描可能需要 5–10 秒。",
     },
     actions: {
       rescan: "重新掃描",
@@ -521,7 +504,7 @@ export const zhHant: Translations = {
       highest_tier: "最高等級",
       highest_tier_hint: "Copper → Silver → Gold → Diamond → Olympian",
       latest: "最新",
-      latest_hint_empty: "多多執行 Hermes",
+      latest_hint_empty: "多多執行 Argus",
       none_yet: "尚無",
     },
     state: {
@@ -552,10 +535,10 @@ export const zhHant: Translations = {
       tiers_header: "等級",
       secret_header: "秘密成就",
       secret_body:
-        "秘密成就會隱藏其確切觸發條件。一旦 Hermes 偵測到相關訊號，卡片便會變為「已發現」並顯示其需求。",
+        "秘密成就會隱藏其確切觸發條件。一旦 Argus 偵測到相關訊號，卡片便會變為「已發現」並顯示其需求。",
       scan_status_header: "掃描狀態",
       scan_status_body:
-        "Hermes 正在對本機歷史進行一次掃描，之後卡片會自動出現。即使需要幾秒鐘，也並未卡住。",
+        "Argus 正在對本機歷史進行一次掃描，之後卡片會自動出現。即使需要幾秒鐘，也並未卡住。",
       what_scanned_header: "掃描內容",
       what_scanned_body:
         "工作階段、工具呼叫、模型中繼資料、錯誤、成就以及本機解鎖狀態。",
@@ -602,7 +585,7 @@ export const zhHant: Translations = {
         "「在 X 上分享」會在新分頁中開啟預先填寫的貼文。若想附上 1200×630 的徽章，請先點擊「複製圖片」—— X 允許你直接貼到推文編輯器中。「下載 PNG」會將檔案儲存下來，可在任何地方使用。",
       clipboard_unsupported:
         "此瀏覽器不支援剪貼簿圖片複製 —— 請改用「下載」。",
-      tweet_text: "Just unlocked {tier_part}\"{name}\" in Hermes Agent ☤",
+      tweet_text: "Just unlocked {tier_part}\"{name}\" in Argus Agent ☤",
     },
   },
   kanban: {

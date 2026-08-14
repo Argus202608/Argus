@@ -33,21 +33,13 @@ _HERMES_CORE_TOOLS = [
     "web_search", "web_extract",
     # Terminal + process management
     "terminal", "process",
-    # NOTE: the desktop GUI affordances (read_terminal, open_preview, …) are
-    # deliberately NOT here, for the same reason as the `project` tools below:
-    # they only work where a GUI renderer can answer them. They live in the
-    # `desktop_ui` toolset and are enabled solely by the GUI gateway for a
-    # session whose SOURCE is the desktop app (tui_gateway/server.py::
-    # _load_enabled_toolsets) — never keyed on a process env var, which is
-    # blind to a desktop client talking to a remote/cloud backend.
+    # Read the desktop GUI's embedded terminal pane (gated on HERMES_DESKTOP
+    # via check_fn in tools/read_terminal_tool.py — hidden outside the GUI).
+    "read_terminal",
     # File manipulation
     "read_file", "write_file", "patch", "search_files",
     # Vision + image generation
     "vision_analyze", "image_generate",
-    # BFL FLUX 3 video generation
-    "bfl_flux3_text_to_video", "bfl_flux3_image_to_video",
-    "bfl_flux3_keyframes_to_video", "bfl_flux3_video_continuation",
-    "bfl_flux3_get_result", "bfl_flux3_prompting_guide",
     # Skills
     "skills_list", "skill_view", "skill_manage",
     # Browser automation
@@ -55,8 +47,6 @@ _HERMES_CORE_TOOLS = [
     "browser_type", "browser_scroll", "browser_back",
     "browser_press", "browser_get_images",
     "browser_vision", "browser_console", "browser_cdp", "browser_dialog",
-    # replaces other tools when browser.backend is "browser-use"
-    "browser_exec",
     # Text-to-speech
     "text_to_speech",
     # Planning & memory
@@ -72,6 +62,38 @@ _HERMES_CORE_TOOLS = [
     "clarify",
     # Code execution + delegation
     "execute_code", "delegate_task",
+    # Multimodal tools. The main agent uses these on the /multimodal page.
+    # set_live_watcher → RouterEngine (deep VQA/search/recall);
+    # set_monitor → the independent MonitorAgent (own prompt + event-file log +
+    # periodic LLM-merged reports), decoupled from RouterEngine. Both degrade
+    # gracefully on non-multimodal sessions (their handlers return actionable
+    # tool errors when the required live backend is absent), so it's safe
+    # to expose them by default across CLI / cron / messaging platforms.
+    # query_multimodal → one-shot QueryWorker entry for current/historical
+    # visual questions. QueryWorker chooses direct VQA vs Recall/Search and
+    # replies to the original turn; it is the cheap companion to
+    # set_live_watcher's heavy background re-watch.
+    # get_live_watcher → read a background research run's on-disk progress.
+    # ALL delegation-toolset tools must be here: the per-platform toolset
+    # resolver keeps a configurable toolset only if its tools are a subset of the
+    # platform composite (_HERMES_CORE_TOOLS). Omitting one (get_live_watcher)
+    # made the whole `delegation` toolset fail the subset check and get dropped,
+    # so set_live_watcher vanished from the dashboard schema.
+    "set_live_watcher", "list_live_watcher", "get_live_watcher",
+    "query_multimodal",
+    "set_monitor",
+    # Main-agent live-frame access. get_current_frame = one-shot "看当前画面"
+    # (send-time anchor frame + neighbors, 3 images). Main-agent-only
+    # (MonitorAgent/WatcherAgent don't load this registry) and self-gates to
+    # sessions with a live FrameBuffer (tool_error otherwise).
+    # check_video_stream = 无参, 返回视频流是否开启 (True/False), 仅用于明确的
+    # 状态查询/真实指代歧义；set_monitor/set_live_watcher/get_current_frame 会自行
+    # 校验前置条件，不应例行先查 (同为主 agent 核心工具)。
+    "get_current_frame", "check_video_stream",
+    # show_memory_frame = 从历史多模态记忆 (entity_rep_frames + FrameStore 磁盘)
+    # 取出关键帧真图给用户看。用户问"给我看看当时那个 X"时的必备工具, 与
+    # get_current_frame (只看当前 buffer) 互补: 前者查历史, 后者查现在。
+    "show_memory_frame",
     # Cronjob management
     "cronjob",
     # Home Assistant smart home control (gated on HASS_TOKEN via check_fn)
@@ -81,12 +103,9 @@ _HERMES_CORE_TOOLS = [
     # profile explicitly enables the kanban toolset. Gated via check_fn in
     # tools/kanban_tools.py.
     "kanban_show", "kanban_list",
-    "kanban_complete", "kanban_block", "kanban_request_review",
-    "kanban_request_changes",
-    "kanban_heartbeat",
+    "kanban_complete", "kanban_block", "kanban_heartbeat",
     "kanban_comment", "kanban_create", "kanban_link",
     "kanban_unblock",
-    "kanban_attach", "kanban_attach_url", "kanban_attachments",
     # Computer use (macOS, gated on cua-driver being installed via check_fn)
     "computer_use",
 ]
@@ -121,11 +140,9 @@ TOOLSETS = {
     "x_search": {
         "description": (
             "Search X (Twitter) posts and threads via xAI's built-in "
-            "x_search Responses tool. Read-only public X discovery; use the "
-            "xurl skill for authenticated X API reads and account actions. "
-            "Available when xAI credentials are configured (SuperGrok OAuth "
-            "or XAI_API_KEY). Off by default; enable in `hermes tools` → "
-            "X (Twitter) Search."
+            "x_search Responses tool. Available when xAI credentials are "
+            "configured (SuperGrok OAuth or XAI_API_KEY). Off by default; "
+            "enable in `hermes tools` → X (Twitter) Search."
         ),
         "tools": ["x_search"],
         "includes": []
@@ -153,30 +170,10 @@ TOOLSETS = {
         "description": (
             "Video generation tools. Single ``video_generate`` tool covers "
             "text-to-video (prompt only) and image-to-video (prompt + "
-            "image_url), plus reference-to-video. Provider-specific edit/"
-            "extend workflows may appear as separate tools. Configure via "
+            "image_url) — the active backend auto-routes. Configure via "
             "``hermes tools`` → Video Generation."
         ),
-        "tools": ["video_generate", "xai_video_edit", "xai_video_extend"],
-        "includes": []
-    },
-
-    "bfl": {
-        "description": (
-            "Black Forest Labs FLUX 3 video generation through the Nous tool "
-            "gateway: per-mode submit tools (text, image, keyframes, "
-            "continuation), a poll tool, and a prompting guide. Generations "
-            "take minutes, so submit returns a job id and the model polls for "
-            "the result."
-        ),
-        "tools": [
-            "bfl_flux3_text_to_video",
-            "bfl_flux3_image_to_video",
-            "bfl_flux3_keyframes_to_video",
-            "bfl_flux3_video_continuation",
-            "bfl_flux3_get_result",
-            "bfl_flux3_prompting_guide",
-        ],
+        "tools": ["video_generate"],
         "includes": []
     },
 
@@ -209,7 +206,7 @@ TOOLSETS = {
             "browser_type", "browser_scroll", "browser_back",
             "browser_press", "browser_get_images",
             "browser_vision", "browser_console", "browser_cdp",
-            "browser_dialog", "browser_exec", "web_search"
+            "browser_dialog", "web_search"
         ],
         "includes": []
     },
@@ -262,27 +259,6 @@ TOOLSETS = {
         "tools": ["project_list", "project_create", "project_switch"],
         "includes": []
     },
-
-    # Affordances that only exist because a GUI renderer is on the other end of
-    # the connection: read/close the embedded terminal pane, open and read the
-    # in-app browser, focus a pane, tapback a message.
-    #
-    # Enabled by the GUI gateway for a session whose SOURCE is the desktop app
-    # (tui_gateway/server.py::_load_enabled_toolsets), NOT by a process env var.
-    # The renderer is a CLIENT — it can be driving a local, SSH, URL, or cloud
-    # backend — so "was this process spawned by Electron?" is the wrong
-    # question and silently strips these tools from every remote gateway.
-    "desktop_ui": {
-        "description": "Desktop GUI affordances — in-app terminal/browser panes, pane focus, reactions (GUI sessions only)",
-        "tools": [
-            "read_terminal", "close_terminal",
-            "open_preview", "read_preview",
-            "read_window_below",
-            "focus_pane", "react_to_message",
-            "setup_mcp",
-        ],
-        "includes": []
-    },
     
     "clarify": {
         "description": "Ask the user clarifying questions (multiple-choice or open-ended)",
@@ -302,6 +278,49 @@ TOOLSETS = {
         "includes": []
     },
 
+    # Multimodal live-stream research/recall tools. Kept as its OWN toolset
+    # (peer of `monitor`), NOT folded into `delegation`, and deliberately NOT in
+    # CONFIGURABLE_TOOLSETS — so it rides the "non-configurable platform-toolset
+    # recovery" path (hermes_cli/tools_config.py) like `monitor`, instead of the
+    # configurable "subset of the platform composite" check. That subset check is
+    # what silently dropped these when they lived under `delegation` and one
+    # member (get_live_watcher) wasn't in the platform composite.
+    "live_watcher": {
+        "description": (
+            "Multimodal live-stream tools: "
+            "set_live_watcher (create/update/delete a continuous research task), "
+            "list_live_watcher (list running tasks), get_live_watcher (read one "
+            "task's progress), query_multimodal (one-shot current/historical "
+            "visual question via QueryWorker), show_memory_frame (fetch a historic key "
+            "frame image from memory to show the user), get_current_frame (grab "
+            "the current picture from the live stream), check_video_stream "
+            "(is the camera/screen-share on?)."
+        ),
+        "tools": [
+            "set_live_watcher", "list_live_watcher", "get_live_watcher",
+            "query_multimodal", "show_memory_frame",
+            "get_current_frame", "check_video_stream",
+        ],
+        "includes": []
+    },
+
+    "monitor": {
+        "description": (
+            "Video MonitorAgent control through set_monitor. "
+            "Independent of RouterEngine: start/update/pause monitors that watch the live "
+            "video for a user-specified situation, log every observed event to a "
+            "per-monitor .md file, and either finish after one trigger or re-arm for "
+            "continuous edge-triggered alerts. The UI owns monitor-list display."
+        ),
+        "tools": ["set_monitor"],
+        "includes": []
+    },
+
+    # NOTE: the former standalone `frame_buffer` toolset was removed — its
+    # tools (get_current_frame, check_video_stream, show_memory_frame) are now
+    # main-agent core (in _HERMES_CORE_TOOLS), same as set_monitor /
+    # set_live_watcher. frame_buffer_reader was deleted (unused dead tool).
+
     # "honcho" toolset removed — Honcho is now a memory provider plugin.
     # Tools are injected via MemoryManager, not the toolset system.
 
@@ -317,18 +336,15 @@ TOOLSETS = {
             "is spawned by the kanban dispatcher (HERMES_KANBAN_TASK env "
             "set). The dispatcher runs inside the gateway by default; see "
             "`kanban.dispatch_in_gateway` in config.yaml. Lets workers mark "
-            "tasks done with structured handoffs, enter first-class review "
-            "(request_review — not a block), return review changes, block for human input, "
-            "heartbeat during long ops, comment on threads, attach files, and "
-            "(for orchestrators) list, unblock, and fan out tasks."
+            "tasks done with structured handoffs, block for human input, "
+            "heartbeat during long ops, comment on threads, and (for "
+            "orchestrators) list, unblock, and fan out tasks."
         ),
         "tools": [
             "kanban_show", "kanban_list", "kanban_complete", "kanban_block",
-            "kanban_request_review", "kanban_request_changes",
             "kanban_heartbeat", "kanban_comment",
             "kanban_create", "kanban_link",
             "kanban_unblock",
-            "kanban_attach", "kanban_attach_url", "kanban_attachments",
         ],
         "includes": [],
     },
@@ -400,16 +416,11 @@ TOOLSETS = {
     # code workspace; see agent/coding_context.py. Keeps everything you reach
     # for while pairing on code and drops the rest (messaging, tts, image_gen,
     # spotify, home-assistant, cron, computer-use).
-    #
-    # The GUI pane/browser affordances are NOT listed here: they belong to the
-    # client surface, not the posture, so the GUI gateway folds `desktop_ui`
-    # in alongside this selection for a desktop-sourced session (see
-    # tui_gateway/server.py::_load_enabled_toolsets).
     "coding": {
         "description": "Coding-focused toolset: files, terminal, search, web docs, skills, todo, delegate, vision, browser",
         "tools": [
             "web_search", "web_extract",
-            "terminal", "process",
+            "terminal", "process", "read_terminal",
             "read_file", "write_file", "patch", "search_files",
             "vision_analyze",
             "skills_list", "skill_view", "skill_manage",
@@ -417,7 +428,6 @@ TOOLSETS = {
             "browser_type", "browser_scroll", "browser_back",
             "browser_press", "browser_get_images",
             "browser_vision", "browser_console", "browser_cdp", "browser_dialog",
-            "browser_exec",
             "todo", "memory",
             "session_search", "clarify",
             "execute_code", "delegate_task",
@@ -450,7 +460,6 @@ TOOLSETS = {
             "browser_type", "browser_scroll", "browser_back",
             "browser_press", "browser_get_images",
             "browser_vision", "browser_console", "browser_cdp", "browser_dialog",
-            "browser_exec",
             "todo", "memory",
             "session_search",
             "execute_code", "delegate_task",
@@ -469,10 +478,6 @@ TOOLSETS = {
             "read_file", "write_file", "patch", "search_files",
             # Vision + image generation
             "vision_analyze", "image_generate",
-            # BFL FLUX 3 video generation
-            "bfl_flux3_text_to_video", "bfl_flux3_image_to_video",
-            "bfl_flux3_keyframes_to_video", "bfl_flux3_video_continuation",
-            "bfl_flux3_get_result", "bfl_flux3_prompting_guide",
             # Skills
             "skills_list", "skill_view", "skill_manage",
             # Browser automation
@@ -480,7 +485,6 @@ TOOLSETS = {
             "browser_type", "browser_scroll", "browser_back",
             "browser_press", "browser_get_images",
             "browser_vision", "browser_console", "browser_cdp", "browser_dialog",
-            "browser_exec",
             # Planning & memory
             "todo", "memory",
             # Session history search
@@ -652,40 +656,18 @@ TOOLSETS = {
 
 
 
-def get_toolset(name: str, *, include_registry: bool = True) -> Optional[Dict[str, Any]]:
+def get_toolset(name: str) -> Optional[Dict[str, Any]]:
     """
     Get a toolset definition by name.
-
+    
     Args:
         name (str): Name of the toolset
-        include_registry (bool): When True (default), merge in tools that
-            plugins/overlays registered into this toolset via the registry.
-            When False, return only the static ``TOOLSETS`` definition (the
-            composite-authored view). Platform reverse-mapping in
-            ``_get_platform_tools`` uses False so that a tool registered into a
-            toolset but absent from a platform's static composite does not drop
-            the whole toolset from inference. See issue #49622.
-
+        
     Returns:
         Dict: Toolset definition with description, tools, and includes
-        None: If toolset not found. With include_registry=False the static
-            view only recognizes names literally present in ``TOOLSETS``, so
-            registry/MCP-only toolsets AND registry-derived aliases return None
-            (they have no static counterpart).
+        None: If toolset not found
     """
     toolset = TOOLSETS.get(name)
-
-    if not include_registry:
-        # Static view only: return the built-in definition (copying the nested
-        # tools/includes lists so callers can't mutate TOOLSETS), or None for
-        # registry/MCP-only toolsets that have no static counterpart.
-        if not toolset:
-            return None
-        return {
-            **toolset,
-            "tools": list(toolset.get("tools", [])),
-            "includes": list(toolset.get("includes", [])),
-        }
 
     try:
         from tools.registry import registry
@@ -753,36 +735,30 @@ def bundle_non_core_tools(toolset_name: str) -> Set[str]:
     return to_remove
 
 
-def resolve_toolset(name: str, visited: Set[str] = None, *, include_registry: bool = True) -> List[str]:
+def resolve_toolset(name: str, visited: Set[str] = None) -> List[str]:
     """
     Recursively resolve a toolset to get all tool names.
-
+    
     This function handles toolset composition by recursively resolving
     included toolsets and combining all tools.
-
+    
     Args:
         name (str): Name of the toolset to resolve
         visited (Set[str]): Set of already visited toolsets (for cycle detection)
-        include_registry (bool): When True (default), include tools that
-            plugins/overlays registered into a toolset. When False, resolve only
-            the static ``TOOLSETS`` definition (includes are still resolved, but
-            statically). Platform reverse-mapping uses False so a registry-added
-            tool cannot drop the whole toolset from inference (see #49622 and
-            ``_get_platform_tools``).
-
+        
     Returns:
         List[str]: List of all tool names in the toolset
     """
     if visited is None:
         visited = set()
-
+    
     # Special aliases that represent all tools across every toolset
     # This ensures future toolsets are automatically included without changes.
     if name in {"all", "*"}:
         all_tools: Set[str] = set()
         for toolset_name in get_toolset_names():
             # Use a fresh visited set per branch to avoid cross-branch contamination
-            resolved = resolve_toolset(toolset_name, visited.copy(), include_registry=include_registry)
+            resolved = resolve_toolset(toolset_name, visited.copy())
             all_tools.update(resolved)
         return sorted(all_tools)
 
@@ -795,14 +771,12 @@ def resolve_toolset(name: str, visited: Set[str] = None, *, include_registry: bo
     visited.add(name)
 
     # Get toolset definition
-    toolset = get_toolset(name, include_registry=include_registry)
+    toolset = get_toolset(name)
     if not toolset:
         # Auto-generate a toolset for plugin platforms (hermes-<name>).
         # Gives them _HERMES_CORE_TOOLS plus any tools the plugin registered
-        # into a toolset matching the platform name. This is a registry-derived
-        # view, so it only applies when registry tools are requested; the static
-        # view (include_registry=False) has no plugin-platform definition.
-        if include_registry and name.startswith("hermes-"):
+        # into a toolset matching the platform name.
+        if name.startswith("hermes-"):
             platform_name = name[len("hermes-"):]
             try:
                 from gateway.platform_registry import platform_registry
@@ -811,7 +785,7 @@ def resolve_toolset(name: str, visited: Set[str] = None, *, include_registry: bo
                     try:
                         from tools.registry import registry
                         plugin_tools.update(
-                            e.name for e in registry.get_all_entries()
+                            e.name for e in registry._tools.values()
                             if e.toolset == platform_name
                         )
                     except Exception:
@@ -829,9 +803,9 @@ def resolve_toolset(name: str, visited: Set[str] = None, *, include_registry: bo
     # sibling includes so diamond dependencies are only resolved once and
     # cycle warnings don't fire multiple times for the same cycle.
     for included_name in toolset.get("includes", []):
-        included_tools = resolve_toolset(included_name, visited, include_registry=include_registry)
+        included_tools = resolve_toolset(included_name, visited)
         tools.update(included_tools)
-
+    
     return sorted(tools)
 
 

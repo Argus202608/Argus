@@ -8,8 +8,6 @@ import {
 import {
   type AssistantRuntime,
   type ExternalStoreAdapter,
-  fromThreadMessageLike,
-  generateId,
   type ThreadMessage,
   useRuntimeAdapters
 } from '@assistant-ui/react'
@@ -35,89 +33,64 @@ const shallowEqual = (a: object, b: object): boolean => {
 
 const getThreadListAdapter = (store: ExternalStoreAdapter) => store.adapters?.threadList ?? {}
 
-/**
- * Write only the items whose (message, parentId) pair actually moved.
- *
- * `useRuntimeMessageRepository` caches normalized ThreadMessages by source
- * identity, so a settled turn keeps the SAME object across renders. That makes
- * an identity check a sound "did this change?" test: during streaming exactly
- * one item — the growing tail — differs, and the other N-1 writes were pure
- * overhead that grew with transcript length.
- *
- * Returns false when the export is stale (an id in `existing` is gone, or an
- * incoming message has no repository entry yet), so the caller falls back to
- * the full rebuild rather than guessing.
- */
-function applyChangedMessages(
-  repository: ExternalStoreThreadRuntimeCore['repository'],
-  existing: readonly { message: ThreadMessage; parentId: string | null }[],
-  incoming: readonly { message: ThreadMessage; parentId: string | null }[]
-): boolean {
-  if (existing.length !== incoming.length) {
-    return false
-  }
-
-  const existingById = new Map(existing.map(item => [item.message.id, item]))
-
-  for (const item of incoming) {
-    const current = existingById.get(item.message.id)
-
-    if (!current) {
-      return false
-    }
-
-    // Reference identity, not deep equality: the conversion cache guarantees a
-    // stable object for an unchanged turn, and a changed turn is a new object.
-    if (current.message !== item.message || current.parentId !== item.parentId) {
-      repository.addOrUpdateMessage(item.parentId, item.message)
-    }
-  }
-
-  return true
+// Per-runtime memo of what we last applied to the repository, so a streaming
+// flush (which changes only the LAST assistant message but hands us a fresh
+// full array) doesn't re-`addOrUpdateMessage` all N messages every ~100ms.
+// ★ Perf: at 400+ turns (~800 msgs) the old "re-apply everything each flush"
+//   was O(N) per flush × ~10 flushes/s = the long-session typing/stream lag.
+//   We now only touch messages whose (message object identity, parentId) changed
+//   since the last sync — during streaming that's just the one growing bubble.
+interface _SyncMemo {
+  // id → the exact (ThreadMessage, parentId) we last pushed into the repository.
+  //   Identity compare: the upstream WeakMap in ChatViewInner returns the SAME
+  //   ThreadMessage object for an unchanged ChatMessage, so `===` is a valid
+  //   "did this message change" test.
+  applied: Map<string, { message: ThreadMessage; parentId: string | null }>
+  // The message-id order we last applied. If the order is unchanged we can skip
+  // the full export() reconcile scan entirely.
+  orderKey: string
 }
 
-export function syncRepositoryIncrementally(
+function syncRepositoryIncrementally(
   runtime: ExternalStoreThreadRuntimeCore,
   messageRepository: NonNullable<ExternalStoreAdapter['messageRepository']>
 ): readonly ThreadMessage[] {
   const repository = (runtime as unknown as { repository: ExternalStoreThreadRuntimeCore['repository'] }).repository
+  const holder = runtime as unknown as { _syncMemo?: _SyncMemo }
+  const memo: _SyncMemo = holder._syncMemo ?? { applied: new Map(), orderKey: '' }
+
   const incoming = messageRepository.messages
-  const existing = repository.export().messages
+  const nextApplied = new Map<string, { message: ThreadMessage; parentId: string | null }>()
+  const incomingIds = new Set<string>()
+  let orderKey = ''
+
+  for (const item of incoming) {
+    const id = item.message.id
+    incomingIds.add(id)
+    orderKey += id + '\n'
+    nextApplied.set(id, item)
+    const prev = memo.applied.get(id)
+    // Only push into the repository when this message is new OR its object
+    // identity / parent actually changed. Unchanged idle messages are skipped —
+    // they already live in the persistent repository from a prior sync.
+    if (!prev || prev.message !== item.message || prev.parentId !== item.parentId) {
+      repository.addOrUpdateMessage(item.parentId, item.message)
+    }
+  }
+
+  // Deletions: only scan when the id set/order changed (streaming keeps it stable
+  // → skip the O(N) export() scan entirely on the hot path).
+  if (orderKey !== memo.orderKey) {
+    for (const { message } of repository.export().messages) {
+      if (!incomingIds.has(message.id)) {
+        repository.deleteMessage(message.id)
+      }
+    }
+  }
+
+  holder._syncMemo = { applied: nextApplied, orderKey }
+
   const headId = messageRepository.headId ?? incoming.at(-1)?.message.id ?? null
-
-  // A thread switch swaps in a fully-DISJOINT transcript (no id carries over).
-  // Reconciling two unrelated trees in place — grafting the new chain onto the
-  // old one, then pruning — can strand a stale head/branch, so there's nothing
-  // to preserve: clear the tree first (leaves→root), then rebuild clean.
-  const incomingIds = new Set(incoming.map(({ message }) => message.id))
-  const disjoint = existing.length > 0 && !existing.some(({ message }) => incomingIds.has(message.id))
-
-  // Steady-state streaming: same message set, one item changed. Skip the
-  // whole-transcript rewrite, the prune scan, and the second export. resetHead
-  // deletes the head's descendants, so it only runs when the head really moved.
-  if (!disjoint && applyChangedMessages(repository, existing, incoming)) {
-    if (repository.headId !== headId) {
-      repository.resetHead(headId)
-    }
-
-    return repository.getMessages()
-  }
-
-  if (disjoint) {
-    for (const { message } of [...existing].reverse()) {
-      repository.deleteMessage(message.id)
-    }
-  }
-
-  for (const { message, parentId } of incoming) {
-    repository.addOrUpdateMessage(parentId, message)
-  }
-
-  for (const { message } of repository.export().messages) {
-    if (!incomingIds.has(message.id)) {
-      repository.deleteMessage(message.id)
-    }
-  }
 
   repository.resetHead(headId)
 
@@ -201,17 +174,11 @@ class IncrementalExternalStoreThreadRuntimeCore extends ExternalStoreThreadRunti
       self._notifyEventSubscribers(store.isRunning ? 'runStart' : 'runEnd', {})
     }
 
-    // metadata.isOptimistic keeps this placeholder ephemeral: core evicts
-    // off-branch optimistic messages on head moves and omits them from export().
     if (hasUpcomingMessage(isRunning, messages)) {
-      const optimisticId = generateId()
-      this.repository.addOrUpdateMessage(
-        messages.at(-1)?.id ?? null,
-        fromThreadMessageLike({ role: 'assistant', content: [], metadata: { isOptimistic: true } }, optimisticId, {
-          type: 'running'
-        })
-      )
-      self._assistantOptimisticId = optimisticId
+      self._assistantOptimisticId = this.repository.appendOptimisticMessage(messages.at(-1)?.id ?? null, {
+        role: 'assistant',
+        content: []
+      })
     }
 
     this.repository.resetHead(self._assistantOptimisticId ?? messages.at(-1)?.id ?? null)
@@ -243,13 +210,9 @@ export function useIncrementalExternalStoreRuntime<T extends ThreadMessage>(
 ): AssistantRuntime {
   const [runtime] = useState(() => new IncrementalExternalStoreRuntimeCore(store as ExternalStoreAdapter))
 
-  // Re-sync the adapter only when it actually changes — a dep-less effect ran
-  // on EVERY render of the chat surface. `__internal_setAdapter` early-exits
-  // when the store is unchanged, so gating on [runtime, store] is behavior-
-  // preserving while skipping the per-render call entirely.
   useEffect(() => {
     runtime.setAdapter(store as ExternalStoreAdapter)
-  }, [runtime, store])
+  })
 
   const { modelContext } = useRuntimeAdapters() ?? {}
 

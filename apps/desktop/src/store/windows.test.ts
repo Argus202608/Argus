@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { canOpenNewWindow, canOpenSessionWindow, openNewWindow, openSessionInNewWindow } from './windows'
+import { canOpenSessionWindow, openNewSessionInNewWindow, openSessionInNewWindow } from './windows'
 
 const desktopWindow = window as unknown as { hermesDesktop?: Window['hermesDesktop'] }
 const initialHermesDesktop = desktopWindow.hermesDesktop
@@ -13,11 +13,11 @@ vi.mock('./notifications', () => ({
 
 function installBridge(
   openSessionWindow?: Window['hermesDesktop']['openSessionWindow'],
-  openWindow?: Window['hermesDesktop']['openWindow']
+  openNewSessionWindow?: Window['hermesDesktop']['openNewSessionWindow']
 ) {
   desktopWindow.hermesDesktop = {
     ...(openSessionWindow ? { openSessionWindow } : {}),
-    ...(openWindow ? { openWindow } : {})
+    ...(openNewSessionWindow ? { openNewSessionWindow } : {})
   } as unknown as Window['hermesDesktop']
 }
 
@@ -106,54 +106,37 @@ describe('openSessionInNewWindow', () => {
   })
 })
 
-describe('canOpenNewWindow', () => {
-  it('is false when the desktop bridge is absent', () => {
-    delete desktopWindow.hermesDesktop
-    expect(canOpenNewWindow()).toBe(false)
-  })
-
-  it('is false when the bridge lacks openWindow', () => {
-    installBridge(vi.fn().mockResolvedValue({ ok: true }))
-    expect(canOpenNewWindow()).toBe(false)
-  })
-
-  it('is true when the bridge exposes openWindow', () => {
-    installBridge(undefined, vi.fn().mockResolvedValue({ ok: true }))
-    expect(canOpenNewWindow()).toBe(true)
-  })
-})
-
-describe('openNewWindow', () => {
+describe('openNewSessionInNewWindow', () => {
   it('no-ops gracefully when the bridge is absent (web fallback)', async () => {
     delete desktopWindow.hermesDesktop
 
-    await openNewWindow()
+    await openNewSessionInNewWindow()
 
     expect(notifyError).not.toHaveBeenCalled()
   })
 
-  it('no-ops when openWindow is missing', async () => {
+  it('no-ops when openNewSessionWindow is missing', async () => {
     installBridge(vi.fn().mockResolvedValue({ ok: true }))
 
-    await openNewWindow()
+    await openNewSessionInNewWindow()
 
     expect(notifyError).not.toHaveBeenCalled()
   })
 
   it('invokes the bridge', async () => {
-    const openWindow = vi.fn().mockResolvedValue({ ok: true })
-    installBridge(undefined, openWindow)
+    const openNew = vi.fn().mockResolvedValue({ ok: true })
+    installBridge(vi.fn().mockResolvedValue({ ok: true }), openNew)
 
-    await openNewWindow()
+    await openNewSessionInNewWindow()
 
-    expect(openWindow).toHaveBeenCalledTimes(1)
+    expect(openNew).toHaveBeenCalledTimes(1)
     expect(notifyError).not.toHaveBeenCalled()
   })
 
   it('notifies on an ok:false result', async () => {
-    installBridge(undefined, vi.fn().mockResolvedValue({ ok: false, error: 'nope' }))
+    installBridge(vi.fn().mockResolvedValue({ ok: true }), vi.fn().mockResolvedValue({ ok: false, error: 'nope' }))
 
-    await openNewWindow()
+    await openNewSessionInNewWindow()
 
     expect(notifyError).toHaveBeenCalledTimes(1)
   })

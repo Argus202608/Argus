@@ -3,7 +3,6 @@
 import { type ReactNode, useEffect, useState } from 'react'
 
 import { Dialog, DialogContent } from '@/components/ui/dialog'
-import { Tip } from '@/components/ui/tooltip'
 import { Check, Copy, Maximize, RefreshCw, X, ZoomIn, ZoomOut } from '@/lib/icons'
 import { cn } from '@/lib/utils'
 
@@ -80,8 +79,7 @@ function ZoomPanViewer({
   return (
     <Dialog onOpenChange={onOpenChange} open={open}>
       <DialogContent
-        bodyClassName="flex min-h-0 flex-col gap-0 overflow-hidden p-0"
-        className="h-[85vh] w-[90vw] max-w-[90vw]"
+        className="flex h-[85vh] w-[90vw] max-w-[90vw] flex-col gap-0 overflow-hidden p-0"
         showCloseButton={false}
       >
         <div
@@ -161,15 +159,14 @@ function Divider() {
 
 function ToolbarButton({ children, label, onClick }: { children: ReactNode; label: string; onClick: () => void }) {
   return (
-    <Tip label={label}>
-      <button
-        aria-label={label}
-        className="grid size-8 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-        onClick={onClick}
-        type="button"
-      >
-        {children}
-      </button>
-    </Tip>
+    <button
+      aria-label={label}
+      className="grid size-8 place-items-center rounded-full text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+      onClick={onClick}
+      title={label}
+      type="button"
+    >
+      {children}
+    </button>
   )
 }

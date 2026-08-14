@@ -91,12 +91,7 @@ function isUpdateToastSnoozed(): boolean {
 // against. The backend reports its own value in session runtime info; a lower
 // value (or none — a pre-GUI checkout) means GUI<->backend skew.
 // v2: requires the file.attach RPC (remote-gateway non-image file upload).
-// v3: requires approvals.mode config RPCs and session.info reconciliation.
-// v4: requires explicit Fast-off session creation and session-scoped Fast edits.
-// v5: requires raised WebSocket frame size for large one-shot file.attach.
-// v6: requires key-addressed plugins.manage rows (keyless rows render
-//     read-only in Settings → Plugins).
-const REQUIRED_BACKEND_CONTRACT = 6
+const REQUIRED_BACKEND_CONTRACT = 2
 const SKEW_TOAST_ID = 'backend-contract-skew'
 // The contract check runs on every session.resume (applyRuntimeInfo), so
 // without a snooze the warning re-popped on every thread the user opened, even
@@ -112,24 +107,6 @@ function snoozeSkewToast(): void {
 
 function isSkewToastSnoozed(): boolean {
   const until = Number(storedString(SKEW_TOAST_SNOOZE_KEY) || 0)
-
-  return Number.isFinite(until) && Date.now() < until
-}
-
-const INSTALL_METHOD_TOAST_ID = 'install-method-not-supported'
-// Same time-based snooze pattern as the update/skew toasts: the warning is
-// re-derived from every session.info (session.create/resume/activate all
-// route through applyRuntimeInfo), so without a snooze it would re-pop on
-// every session switch even right after the user dismissed it.
-const INSTALL_METHOD_TOAST_SNOOZE_KEY = 'hermes:install-method-toast-snooze-until'
-const INSTALL_METHOD_TOAST_COOLDOWN_MS = 24 * 60 * 60 * 1000
-
-function snoozeInstallMethodToast(): void {
-  persistString(INSTALL_METHOD_TOAST_SNOOZE_KEY, String(Date.now() + INSTALL_METHOD_TOAST_COOLDOWN_MS))
-}
-
-function isInstallMethodToastSnoozed(): boolean {
-  const until = Number(storedString(INSTALL_METHOD_TOAST_SNOOZE_KEY) || 0)
 
   return Number.isFinite(until) && Date.now() < until
 }
@@ -174,27 +151,6 @@ export function reportBackendContract(contract: number | undefined): void {
   })
 }
 
-export function reportInstallMethodWarning(message: string | undefined): void {
-  if (!message) {
-    dismissNotification(INSTALL_METHOD_TOAST_ID)
-
-    return
-  }
-
-  if (isInstallMethodToastSnoozed()) {
-    return
-  }
-
-  notify({
-    durationMs: 0,
-    id: INSTALL_METHOD_TOAST_ID,
-    kind: 'warning',
-    message,
-    onDismiss: () => snoozeInstallMethodToast(),
-    title: translateNow('notifications.installMethodUnsupportedTitle')
-  })
-}
-
 /**
  * Fire a toast when an update is available, at most once per cooldown window.
  * Closing the toast — dismissing it or opening the updates window from it —
@@ -229,7 +185,6 @@ export function maybeNotifyUpdateAvailable(status: DesktopUpdateStatus | null) {
       }
     },
     durationMs: 0,
-    icon: 'gift',
     id: UPDATE_TOAST_ID,
     kind: 'info',
     message: translateNow('notifications.updateReadyMessage', behind),
@@ -254,25 +209,6 @@ export function startActiveUpdate(): void {
   $updateOverlayTarget.set(target)
   $updateOverlayOpen.set(true)
   void (target === 'backend' ? applyBackendUpdate() : applyUpdates())
-}
-
-/**
- * Command-palette entry point. The About panel's "Update now" only renders once
- * we know an update is waiting; this row is always listed, so it also has to
- * handle "already current" — open the overlay for the active target and let its
- * check answer, and only apply when there's something to install.
- */
-export function requestActiveUpdate(): void {
-  const target: UpdateTarget = isRemoteMode() ? 'backend' : 'client'
-  const status = target === 'backend' ? $backendUpdateStatus.get() : $updateStatus.get()
-
-  if ((status?.behind ?? 0) > 0 || status?.updateAvailable) {
-    startActiveUpdate()
-
-    return
-  }
-
-  openUpdateOverlayFor(target)
 }
 
 /** Re-read the running app's version from the Electron main process and
@@ -315,7 +251,6 @@ function mapBackendCheck(res: BackendUpdateCheckResponse): DesktopUpdateStatus {
     message: res.message ?? undefined,
     updateAvailable: res.update_available,
     behind: behind > 0 ? behind : 0,
-    currentVersion: res.current_version,
     targetSha: res.update_available ? `backend:${res.current_version}` : undefined,
     commits: res.commits,
     fetchedAt: Date.now()
@@ -463,10 +398,6 @@ export async function applyUpdates(opts: DesktopUpdateApplyOptions = {}): Promis
           id: UPDATE_TOAST_ID,
           kind: 'success',
           message: translateNow('updates.manualPickedUp'),
-          // No action button here, but it's still update-lifecycle news — keep
-          // it with the other update toasts instead of the ambient bottom-right
-          // stack.
-          placement: 'default',
           title: translateNow('updates.allSetTitle')
         })
       } else {
@@ -489,9 +420,24 @@ export async function applyUpdates(opts: DesktopUpdateApplyOptions = {}): Promis
   }
 }
 
-const BACKEND_ACTION_POLL_MS = 1500
-const BACKEND_ACTION_MAX_MS = 6 * 60 * 1000
-const BACKEND_RETURN_MAX_MS = 4 * 60 * 1000
+const BACKEND_RETURN_POLL_MS = 1500
+const BACKEND_RETURN_MAX_ATTEMPTS = 40
+
+async function waitForBackendReturn(): Promise<boolean> {
+  for (let attempt = 0; attempt < BACKEND_RETURN_MAX_ATTEMPTS; attempt += 1) {
+    await new Promise(resolve => globalThis.setTimeout(resolve, BACKEND_RETURN_POLL_MS))
+
+    try {
+      await checkHermesUpdate()
+
+      return true
+    } catch {
+      continue
+    }
+  }
+
+  return false
+}
 
 function finishBackendApply(returned: boolean): DesktopUpdateApplyResult {
   if (returned) {
@@ -534,32 +480,7 @@ function ingestBackendActionStatus(status: Awaited<ReturnType<typeof getActionSt
   })
 }
 
-function completedAfterRestart(
-  status: Awaited<ReturnType<typeof getActionStatus>>,
-  actionId: string | undefined
-): boolean {
-  return !!actionId && status.lines.some(line => line === `=== hermes-update completed ${actionId} ===`)
-}
-
-function legacyBackendReachedTarget(
-  status: BackendUpdateCheckResponse,
-  targetSha: string | undefined,
-  previousVersion: string | undefined
-): boolean {
-  if (status.behind === 0) {
-    return true
-  }
-
-  if (previousVersion && status.current_version !== previousVersion) {
-    return true
-  }
-
-  return !!targetSha && !!status.commits?.length && !status.commits.some(commit => commit.sha === targetSha)
-}
-
-let backendUpdateInFlight: Promise<DesktopUpdateApplyResult> | null = null
-
-async function runBackendUpdate(): Promise<DesktopUpdateApplyResult> {
+export async function applyBackendUpdate(): Promise<DesktopUpdateApplyResult> {
   dismissNotification(UPDATE_TOAST_ID)
   $backendUpdateApply.set({
     ...IDLE,
@@ -569,13 +490,6 @@ async function runBackendUpdate(): Promise<DesktopUpdateApplyResult> {
   })
 
   try {
-    const previousStatus = $backendUpdateStatus.get()
-    const requestedTargetSha = previousStatus?.commits?.at(0)?.sha
-
-    const previousVersion = previousStatus?.targetSha?.startsWith('backend:')
-      ? previousStatus.targetSha.slice('backend:'.length)
-      : undefined
-
     const started = await updateHermes()
 
     if (!started.ok) {
@@ -594,67 +508,41 @@ async function runBackendUpdate(): Promise<DesktopUpdateApplyResult> {
     })
 
     let last: Awaited<ReturnType<typeof getActionStatus>> | null = null
-    // Backups, dependency repair, and builds can legitimately take several
-    // minutes. Keep the generous cap only as a guard against a stuck action.
-    const actionDeadline = Date.now() + BACKEND_ACTION_MAX_MS
-    let deadline = actionDeadline
-    let reconnecting = false
 
-    while (Date.now() < deadline) {
-      await new Promise(resolve => globalThis.setTimeout(resolve, BACKEND_ACTION_POLL_MS))
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      await new Promise(resolve => globalThis.setTimeout(resolve, 1500))
 
       try {
-        last = await getActionStatus(started.name, 2000)
+        last = await getActionStatus(started.name, 200)
         ingestBackendActionStatus(last)
       } catch {
-        if (!reconnecting) {
-          reconnecting = true
-          deadline = Date.now() + BACKEND_RETURN_MAX_MS
-          $backendUpdateApply.set({
-            ...$backendUpdateApply.get(),
-            applying: true,
-            stage: 'restart',
-            message: translateNow('updates.applyStatus.restarting')
-          })
-        }
+        // The dashboard restarts mid-update, dropping this connection — expected, not a failure.
+        $backendUpdateApply.set({
+          ...$backendUpdateApply.get(),
+          applying: true,
+          stage: 'restart',
+          message: translateNow('updates.applyStatus.restarting')
+        })
 
-        continue
+        return finishBackendApply(await waitForBackendReturn())
       }
 
-      if (last.running) {
-        if (reconnecting) {
-          reconnecting = false
-          deadline = actionDeadline
-          $backendUpdateApply.set({
-            ...$backendUpdateApply.get(),
-            applying: true,
-            stage: 'pull',
-            message: translateNow('updates.applyStatus.pulling')
-          })
-        }
-
-        continue
-      }
-
-      if (last.exit_code === 0 || (last.exit_code === null && completedAfterRestart(last, started.action_id))) {
-        return finishBackendApply(true)
-      }
-
-      if (!started.action_id && last.exit_code === null) {
-        try {
-          const status = await checkHermesUpdate(true)
-
-          if (legacyBackendReachedTarget(status, requestedTargetSha, previousVersion)) {
-            return finishBackendApply(true)
-          }
-        } catch {
-          continue
-        }
-      }
-
-      if (last.exit_code !== null) {
+      if (last && !last.running) {
         break
       }
+    }
+
+    const ok = !!last && (last.exit_code ?? 1) === 0
+
+    if (ok) {
+      $backendUpdateApply.set({
+        ...$backendUpdateApply.get(),
+        applying: true,
+        stage: 'restart',
+        message: translateNow('updates.applyStatus.restarting')
+      })
+
+      return finishBackendApply(await waitForBackendReturn())
     }
 
     $backendUpdateApply.set({
@@ -678,18 +566,6 @@ async function runBackendUpdate(): Promise<DesktopUpdateApplyResult> {
 
     return { ok: false, error: 'apply-failed', message }
   }
-}
-
-export function applyBackendUpdate(): Promise<DesktopUpdateApplyResult> {
-  if (backendUpdateInFlight) {
-    return backendUpdateInFlight
-  }
-
-  backendUpdateInFlight = runBackendUpdate().finally(() => {
-    backendUpdateInFlight = null
-  })
-
-  return backendUpdateInFlight
 }
 
 function ingestProgress(payload: DesktopUpdateProgress): void {
@@ -735,7 +611,6 @@ export function startUpdatePoller(): void {
   }
 
   pollerStarted = true
-  void checkUpdates()
   void checkBackendUpdates()
   void refreshDesktopVersion()
   bridge.onProgress(ingestProgress)
@@ -758,7 +633,6 @@ export function startUpdatePoller(): void {
   window.addEventListener('focus', onFocus)
   backgroundTimer = setInterval(
     () => {
-      void checkUpdates()
       void checkBackendUpdates()
     },
     30 * 60 * 1000
@@ -786,7 +660,6 @@ function onFocus() {
   }
 
   lastFocusAt = now
-  void checkUpdates()
   void checkBackendUpdates()
   void refreshDesktopVersion()
 }

@@ -49,7 +49,7 @@ export const zh: Translations = {
   },
 
   app: {
-    brand: "Hermes Agent",
+    brand: "Argus Agent",
     brandShort: "HA",
     closeNavigation: "关闭导航",
     closeModelTools: "关闭模型与工具",
@@ -119,8 +119,8 @@ export const zh: Translations = {
     starting: "启动中",
     startedInBackground: "已在后台启动 — 请查看日志",
     stopped: "已停止",
-    updateHermes: "更新 Hermes",
-    updatingHermes: "正在更新 Hermes…",
+    updateHermes: "更新 Argus",
+    updatingHermes: "正在更新 Argus…",
     waitingForOutput: "等待输出…",
   },
 
@@ -128,14 +128,8 @@ export const zh: Translations = {
     title: "会话",
     history: "历史",
     overview: "概览",
-    filterChats: "聊天",
-    filterAutomation: "自动化",
-    filterAll: "全部",
-    sourceFilter: "会话来源",
-    anySource: "任意来源",
     searchPlaceholder: "搜索消息内容...",
     noSessions: "暂无会话",
-    noSessionsInFilter: "此筛选条件下暂无会话",
     noMatch: "没有匹配的会话",
     startConversation: "开始对话后将显示在此处",
     noMessages: "暂无消息",
@@ -321,7 +315,7 @@ export const zh: Translations = {
     enableAfterInstall: "安装后启用",
     enableRuntime: "启用",
     forceReinstall: "强制重装（先删除已有目录）",
-    headline: "发现、安装、启用和更新 Hermes 插件（对齐 `hermes plugins` CLI）。",
+    headline: "发现、安装、启用和更新 Argus 插件（对齐 `hermes plugins` CLI）。",
     identifierLabel: "Git 地址或 owner/repo",
     inactive: "未启用",
     installBtn: "安装",
@@ -433,32 +427,21 @@ export const zh: Translations = {
     replaceCurrentValue: "替换当前值（{preview}）",
     showValue: "显示实际值",
     hideValue: "隐藏值",
-    customTitle: "自定义密钥",
-    customHint: "存储在 .env 中、Hermes 无法识别的任意环境变量。可用于为技能、MCP 服务器或你自己的工具注入环境变量。",
-    customConfigured: "已设置 {count} 个自定义密钥",
-    addCustomKey: "添加自定义密钥",
-    customKeyName: "变量名",
-    customKeyNamePlaceholder: "例如 MY_SERVICE_API_KEY",
-    add: "添加",
-    invalidKeyName: "只能使用字母、数字和下划线（必须以字母或下划线开头）。",
   },
 
   oauth: {
     title: "提供商登录（OAuth）",
     providerLogins: "提供商登录（OAuth）",
-    description:
-      "已连接 {connected}/{total} 个 OAuth 提供商。仪表板支持的流程请使用「登录」；CLI 命令仍可用于外部或备用设置。",
+    description: "已连接 {connected}/{total} 个 OAuth 提供商。登录流程目前通过 CLI 运行；点击「复制命令」并粘贴到终端中进行设置。",
     connected: "已连接",
     expired: "已过期",
-    notConnected: "未连接。可用时请使用「登录」，或在终端中运行 {command}。",
+    notConnected: "未连接。在终端中运行 {command}。",
     runInTerminal: "在终端中。",
     noProviders: "未检测到支持 OAuth 的提供商。",
     login: "登录",
     disconnect: "断开连接",
     managedExternally: "外部管理",
     copied: "已复制 ✓",
-    copyCode: "复制代码",
-    copyFailed: "无法自动复制。请选中代码并手动复制。",
     cli: "复制",
     copyCliCommand: "复制 CLI 命令（用于外部/备用方式）",
     connect: "连接",
@@ -497,11 +480,11 @@ export const zh: Translations = {
   achievements: {
     hero: {
       kicker: "Agentic Gamerscore",
-      title: "Hermes Achievements",
+      title: "Argus Achievements",
       subtitle:
-        "从真实会话历史中获得的 Hermes 可收集徽章。已知尚未达成的成就显示为「已发现」；秘密成就在首次出现匹配行为之前保持隐藏。",
+        "从真实会话历史中获得的 Argus 可收集徽章。已知尚未达成的成就显示为「已发现」；秘密成就在首次出现匹配行为之前保持隐藏。",
       scan_subtitle:
-        "正在扫描 Hermes 会话历史。在历史记录较多时，首次扫描可能需要 5–10 秒。",
+        "正在扫描 Argus 会话历史。在历史记录较多时，首次扫描可能需要 5–10 秒。",
     },
     actions: {
       rescan: "重新扫描",
@@ -516,7 +499,7 @@ export const zh: Translations = {
       highest_tier: "最高等级",
       highest_tier_hint: "Copper → Silver → Gold → Diamond → Olympian",
       latest: "最新",
-      latest_hint_empty: "多多运行 Hermes",
+      latest_hint_empty: "多多运行 Argus",
       none_yet: "暂无",
     },
     state: {
@@ -547,10 +530,10 @@ export const zh: Translations = {
       tiers_header: "等级",
       secret_header: "秘密成就",
       secret_body:
-        "秘密成就会隐藏其确切触发条件。一旦 Hermes 检测到相关信号，卡片将变为「已发现」并显示其要求。",
+        "秘密成就会隐藏其确切触发条件。一旦 Argus 检测到相关信号，卡片将变为「已发现」并显示其要求。",
       scan_status_header: "扫描状态",
       scan_status_body:
-        "Hermes 正在对本地历史进行一次扫描，之后卡片会自动出现。即使这需要几秒钟，也没有卡住。",
+        "Argus 正在对本地历史进行一次扫描，之后卡片会自动出现。即使这需要几秒钟，也没有卡住。",
       what_scanned_header: "扫描内容",
       what_scanned_body:
         "会话、工具调用、模型元数据、错误、成就和本地解锁状态。",
@@ -597,7 +580,7 @@ export const zh: Translations = {
         "「在 X 上分享」会在新标签页中打开预填好的帖子。如果想附上 1200×630 的徽章，请先点击「复制图片」—— X 允许你直接粘贴到推文编辑器中。「下载 PNG」会将文件保存下来，可在任意位置使用。",
       clipboard_unsupported:
         "此浏览器不支持复制剪贴板图片 —— 请改用「下载」。",
-      tweet_text: "Just unlocked {tier_part}\"{name}\" in Hermes Agent ☤",
+      tweet_text: "Just unlocked {tier_part}\"{name}\" in Argus Agent ☤",
     },
   },
 

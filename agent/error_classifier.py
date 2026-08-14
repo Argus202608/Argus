@@ -31,9 +31,6 @@ class FailoverReason(enum.Enum):
     # Billing / quota
     billing = "billing"                  # 402 or confirmed credit exhaustion — rotate immediately
     rate_limit = "rate_limit"            # 429 or quota-based throttling — backoff then rotate
-    # Upstream model rate-limited (aggregator 429) — fallback to a different
-    # model, NOT credential rotation. The user's key is healthy.
-    upstream_rate_limit = "upstream_rate_limit"
 
     # Server-side
     overloaded = "overloaded"            # 503/529 — provider overloaded, backoff
@@ -41,11 +38,6 @@ class FailoverReason(enum.Enum):
 
     # Transport
     timeout = "timeout"                  # Connection/read timeout — rebuild client + retry
-    # TLS certificate verification failure — deterministic for the host
-    # (TLS-inspecting proxy, missing/expired CA bundle, self-signed cert).
-    # Retrying reproduces the identical handshake failure, so fail fast
-    # with actionable guidance instead of burning retries.
-    ssl_cert_verification = "ssl_cert_verification"
 
     # Context / payload
     context_overflow = "context_overflow"  # Context too large — compress, not failover
@@ -115,33 +107,12 @@ _BILLING_PATTERNS = [
     "exceeded your current quota",
     "account is deactivated",
     "plan does not include",
-    "out of extra usage",  # Anthropic OAuth Pro/Max overage bucket depleted (HTTP 400)
     "out of funds",
     "run out of funds",
     "balance_depleted",
     "model_not_supported_on_free_tier",
     "not available on the free tier",
 ]
-
-# xAI's explicit Grok credit-exhaustion code. Keep the HTTP 403 special case
-# provider-scoped: other providers' generic billing codes historically remain
-# auth failures when they arrive as 403.
-_XAI_SPENDING_LIMIT_ERROR_CODE = "personal-team-blocked:spending-limit"
-
-# Structured provider codes that mean the account cannot serve paid traffic
-# until credits/subscription capacity is restored. xAI returns its explicit
-# Grok spending-limit signal as HTTP 403 rather than 402.
-_BILLING_ERROR_CODES = frozenset({
-    "insufficient_quota",
-    "billing_not_active",
-    "payment_required",
-    "insufficient_credits",
-    "no_usable_credits",
-    "balance_depleted",
-    "model_not_supported_on_free_tier",
-    "member_spend_cap_exceeded",
-    _XAI_SPENDING_LIMIT_ERROR_CODE,
-})
 
 # Patterns that indicate rate limiting (transient, will resolve)
 _RATE_LIMIT_PATTERNS = [
@@ -160,14 +131,6 @@ _RATE_LIMIT_PATTERNS = [
     "throttlingexception",
     "too many concurrent requests",
     "servicequotaexceededexception",
-    # Generic throttle prefix — Bedrock (and some proxies) surface throttling
-    # as "Throttling error: Too many tokens, please wait before trying
-    # again."  Without this entry the message falls through to the
-    # context-overflow list (which contains "too many tokens") and the retry
-    # loop compresses a healthy session instead of backing off.  Matched
-    # BEFORE _CONTEXT_OVERFLOW_PATTERNS in the message-only path, so the
-    # throttle wins.  (port of anomalyco/opencode#37848's exclusion guard)
-    "throttling",
 ]
 
 # Patterns that indicate provider-side overload, NOT a per-credential rate
@@ -221,12 +184,6 @@ _PAYLOAD_TOO_LARGE_PATTERNS = [
     "request entity too large",
     "payload too large",
     "error code: 413",
-    # Anthropic's structured 413 error type.  Normally arrives with an HTTP
-    # 413 status (handled by the status path), but aggregators/proxies can
-    # re-wrap it into a plain message with no status attribute — route it to
-    # the same compression recovery.  (port of anomalyco/opencode#37848)
-    "request_too_large",
-    "request exceeds the maximum size",
 ]
 
 # Image-size patterns.  Matched against 400 bodies (not 413) because most
@@ -284,11 +241,6 @@ _CONTEXT_OVERFLOW_PATTERNS = [
     "context window",
     "prompt is too long",
     "prompt exceeds max length",
-    # NOTE: bare "max_tokens" is load-bearing — the output-cap-retry path keys
-    # off it (e.g. "max_tokens: 65536 > context_window: 200000 ..."). Do NOT
-    # remove it. Provider empty-response advisories also contain "very low
-    # max_tokens", but those are intercepted by _EMPTY_PROVIDER_RESPONSE_PATTERNS
-    # BEFORE this list is consulted, so they never mis-route into compression.
     "max_tokens",
     "maximum number of tokens",
     # vLLM / local inference server patterns
@@ -306,17 +258,11 @@ _CONTEXT_OVERFLOW_PATTERNS = [
     # Chinese error messages (some providers return these)
     "超过最大长度",
     "上下文长度",
-    # Z.AI / Zhipu GLM pattern (English form; error code 1210)
-    "tokens in request more than max tokens allowed",
     # AWS Bedrock Converse API error patterns
     "input is too long",
     "max input token",
     "input token",
     "exceeds the maximum number of input tokens",
-    # Together/Fireworks-style: "Input length 131393 exceeds the maximum
-    # allowed input length of 131040 tokens."  No other pattern in this list
-    # matches that wording.  (port of anomalyco/opencode#37848)
-    "maximum allowed input length",
 ]
 
 # Model not found patterns
@@ -329,80 +275,6 @@ _MODEL_NOT_FOUND_PATTERNS = [
     "no such model",
     "unknown model",
     "unsupported model",
-    # OpenRouter returns 404 with this message when none of the candidate
-    # endpoints for the selected model support tool/function calling.
-    # Classifying this as model_not_found triggers fallback to a different
-    # model or provider that does support tools.  Without this entry the
-    # pattern falls through to ``unknown`` with ``retryable=True``, the
-    # retry loop burns all attempts on the same deterministic rejection,
-    # and the error surfaces as a confusing "model not found" message
-    # instead of automatically failing over.  See PR #58446.
-    "no endpoints found that support tool use",
-]
-
-
-def _model_id_missing_known_prefix(model: str, provider: str) -> bool:
-    """True when a bare model id is only known to the provider as ``vendor/id``.
-
-    Some providers answer a malformed model id with a naked 404 that names
-    nothing — NVIDIA NIM returns ``404 page not found`` for a bare
-    ``nemotron-3-ultra-550b-a55b``, indistinguishable from a bad endpoint
-    path. Consulting the curated catalogue tells the two apart: if the id
-    carries no ``/`` but the catalogue has exactly one entry ending in
-    ``/<id>``, the prefix was dropped and the failure is deterministic.
-
-    Never guesses — an id absent from the catalogue (a local NIM container,
-    a proxied model) returns False so genuine endpoint problems keep their
-    retryable ``unknown`` classification.
-    """
-    name = (model or "").strip()
-    if not name or "/" in name:
-        return False
-    try:
-        from hermes_cli.model_normalize import suggest_prefixed_model_id
-
-        return bool(suggest_prefixed_model_id((provider or "").strip(), name))
-    except Exception:
-        return False
-
-
-# Malformed-message-array 400s.  Deterministic request-shape rejections that
-# describe the *transcript* being invalid, not a parameter.  The canonical
-# case: a stream dies mid-response and Hermes persists a content-less
-# assistant stub; on the next turn the Anthropic message schema (and the
-# litellm/Bedrock proxies in front of it) reject the whole request with
-#   "all messages must have non-empty content except for the optional final
-#    assistant message"  /  errorCode INVALID_REQUEST_BODY
-# These are NOT context overflow — the input may be tiny — but a large
-# session used to mis-route them into the compression loop via the generic
-# "400 + large session" heuristic below, ending in "Cannot compress further"
-# every retry (the input is unchanged, so compression cannot help).  Match
-# the message-shape signals explicitly and fail fast as a format_error so the
-# loop stops looping.  The empty-stub creation is the root cause (fixed in
-# chat_completion_helpers); this pattern stops the misclassification symptom
-# for transcripts that already contain a poisoned stub.
-# Qwen/vLLM chat-template raise_exception("No user query found in messages")
-# — shared between _INVALID_MESSAGE_BODY_PATTERNS (→ format_error) and the
-# llama.cpp grammar exclusion guard below. Keeping a single constant prevents
-# the two sites from silently drifting if the phrase is ever changed.
-_NO_USER_QUERY_SIGNAL = "no user query found"
-
-_INVALID_MESSAGE_BODY_PATTERNS = [
-    "must have non-empty content",
-    "messages must have non-empty",
-    "invalid_request_body",
-    "text content blocks must be non-empty",
-    "content field is required",
-    "messages: at least one message is required",
-    # Qwen / vLLM chat templates raise this when the request has no surviving
-    # non-empty user turn (oversized session truncation, compression that
-    # dropped the only user message, or a resumed lineage that opens with
-    # assistant/tool). Deterministic — compression cannot invent a user
-    # query the template already rejected. Fail fast as format_error so we
-    # do not thrash the compression loop or mis-route into llama.cpp
-    # grammar recovery when local engines wrap the raise_exception as
-    # applyPromptTemplate / "Unable to generate parser for this template".
-    _NO_USER_QUERY_SIGNAL,
 ]
 
 # Request-validation patterns — the request is malformed and will fail
@@ -483,21 +355,12 @@ _CONTENT_POLICY_BLOCKED_PATTERNS = [
     # echo back; the underscore form is provider-specific enough.
     "content_filter",
     "responsibleaipolicyviolation",
-    # MiniMax output-layer safety filter. The error string is surfaced
-    # verbatim by MiniMax SDK / OpenAI-compatible endpoints, usually in the
-    # form "output new_sensitive (1027)" when the model's *output* (often a
-    # large tool-call argument block) trips the upstream safety filter and
-    # the SSE stream is truncated mid-flight. ``new_sensitive`` is the
-    # filter name and is narrow enough that billing / format / auth error
-    # strings will not collide. See #32421.
-    "new_sensitive",
 ]
 
 # Auth patterns (non-status-code signals)
 _AUTH_PATTERNS = [
     "invalid api key",
     "invalid_api_key",
-    "gateway_auth_failed",
     "authentication",
     "unauthorized",
     "forbidden",
@@ -516,19 +379,6 @@ _THINKING_SIG_PATTERNS = [
 # the exception type is generic (e.g. RuntimeError from a local shim that
 # wraps a subprocess timeout).  Checked before the type-based transport
 # heuristics so custom-provider "timed out" errors don't fall through to
-# Provider empty-response advisories (OpenRouter / nano-gpt / similar).
-# Checked before context-overflow matching because the advisory text often
-# mentions "max_tokens" as a possible cause, which historically sat in
-# _CONTEXT_OVERFLOW_PATTERNS and sent healthy sessions into a compression
-# death spiral ending in "Cannot compress further".
-_EMPTY_PROVIDER_RESPONSE_PATTERNS = [
-    "returned an empty response",
-    "empty response despite retries",
-    "provider returned an empty response",
-    "model returning empty responses",
-    "empty response stream",
-]
-
 # the unknown bucket and get misreported as empty responses.
 _TIMEOUT_MESSAGE_PATTERNS = [
     "timed out",
@@ -574,29 +424,6 @@ _SERVER_DISCONNECT_PATTERNS = [
     "network connection lost",
     "unexpected eof",
     "incomplete chunked read",
-]
-
-# SSL certificate verification failures — deterministic, NOT transient.
-#
-# A failed certificate chain (TLS-inspecting corporate proxy, missing
-# custom CA in the trust store, expired certificate, self-signed cert)
-# fails identically on every retry. Burning the retry budget before
-# surfacing the error hides the actionable fix from the user for minutes.
-# Inspired by Claude Code v2.1.199 (July 2026), which made SSL certificate
-# errors fail immediately with a fix hint instead of retrying.
-#
-# Must be checked BEFORE _SSL_TRANSIENT_PATTERNS — "certificate verify
-# failed" messages usually also contain "[SSL:" which would otherwise
-# match the transient list and retry forever.
-_SSL_CERT_VERIFY_PATTERNS = [
-    "certificate verify failed",       # Python ssl module canonical text
-    "certificate_verify_failed",       # OpenSSL error token
-    "unable to get local issuer certificate",
-    "self-signed certificate",
-    "self signed certificate",
-    "certificate has expired",
-    "hostname mismatch, certificate is not valid",
-    "unable to verify the first certificate",  # Node/undici phrasing (MCP bridges)
 ]
 
 # SSL/TLS transient failure patterns — intentionally distinct from
@@ -648,7 +475,6 @@ def classify_api_error(
     """Classify an API error into a structured recovery recommendation.
 
     Priority-ordered pipeline:
-      0. Plugin ``transform_api_error_classification`` hooks (first valid result wins)
       1. Special-case provider-specific patterns (thinking sigs, tier gates)
       2. HTTP status code + message-aware refinement
       3. Error code classification (from body)
@@ -731,41 +557,6 @@ def classify_api_error(
         }
         defaults.update(overrides)
         return ClassifiedError(**defaults)
-
-    # ── 0. Plugin classifiers (first valid result wins) ─────────────
-    #
-    # Consulted BEFORE the built-in pipeline so a provider plugin can both
-    # add classifications the core patterns miss and correct ones they get
-    # wrong for its provider (see the ``transform_api_error_classification`` entry in
-    # hermes_cli.plugins.VALID_HOOKS for the callback contract). Callback
-    # exceptions are isolated inside invoke_hook and malformed returns are
-    # dropped by the helper, so a broken plugin can never break
-    # classification — the guard here only covers import/dispatch failure.
-    try:
-        from hermes_cli.plugins import get_plugin_error_classification
-        plugin_classification = get_plugin_error_classification(
-            provider=provider,
-            model=model,
-            status_code=status_code,
-            error_type=error_type,
-            error_code=error_code,
-            error_message=error_msg,
-            error_body=body,
-            error=error,
-            approx_tokens=approx_tokens,
-            context_length=context_length,
-            num_messages=num_messages,
-        )
-    except Exception as exc:
-        logger.debug("Plugin error classification unavailable: %s", exc)
-        plugin_classification = None
-    if plugin_classification is not None:
-        reason = plugin_classification.pop("reason")
-        logger.info(
-            "API error classified by plugin hook: %s (provider=%s, status=%s)",
-            reason.value, provider, status_code,
-        )
-        return _result(reason, **plugin_classification)
 
     # ── 1. Provider-specific patterns (highest priority) ────────────
 
@@ -855,16 +646,9 @@ def classify_api_error(
     # recognizable phrases; on match we strip ``pattern``/``format`` from
     # ``self.tools`` in the retry loop and retry once. Cloud providers are
     # unaffected — they accept these keywords and we never hit this branch.
-    #
-    # Exclude Qwen/vLLM template raise_exception("No user query found…")
-    # wrapped by some local engines as applyPromptTemplate / "Unable to
-    # generate parser for this template". That is a poisoned transcript
-    # shape (handled via _INVALID_MESSAGE_BODY_PATTERNS → format_error),
-    # not a tool-schema grammar rejection — matching it here strips
-    # pattern/format keywords and retries uselessly while the real fix
-    # is /new (or a successful compression that preserves a user turn).
-    if status_code == 400:
-        _llama_cpp_grammar_hit = (
+    if (
+        status_code == 400
+        and (
             "error parsing grammar" in error_msg
             or "json-schema-to-grammar" in error_msg
             or (
@@ -872,11 +656,6 @@ def classify_api_error(
                 and "template" in error_msg
             )
         )
-    else:
-        _llama_cpp_grammar_hit = False
-    if (
-        _llama_cpp_grammar_hit
-        and _NO_USER_QUERY_SIGNAL not in error_msg
     ):
         return _result(
             FailoverReason.llama_cpp_grammar_pattern,
@@ -926,27 +705,6 @@ def classify_api_error(
         if classified is not None:
             return classified
 
-    # Local MoA streaming compatibility errors are adapter-shape bugs, not a
-    # provider outage. Falling back to another model would silently switch the
-    # user's selected MoA route to a single-model answer (#55933 follow-up).
-    if provider_lower == "moa" and (
-        "'types.SimpleNamespace' object is not iterable" in str(error)
-        or "'types.SimpleNamespace' object has no attribute 'index'" in str(error)
-    ):
-        return _result(
-            FailoverReason.format_error,
-            retryable=False,
-            should_fallback=False,
-        )
-
-    # Local MoA config drift is deterministic: a persisted session can retain
-    # a preset name that was later renamed/deleted. Retrying the same lookup
-    # cannot recover and makes a clear config error look like an API outage.
-    from agent.errors import MoAPresetNotFoundError
-
-    if isinstance(error, MoAPresetNotFoundError):
-        return _result(FailoverReason.model_not_found, retryable=False)
-
     # ── 3. Error code classification ────────────────────────────────
 
     if error_code:
@@ -965,22 +723,7 @@ def classify_api_error(
     if classified is not None:
         return classified
 
-    # ── 5. SSL certificate verification failures → fail fast ────────
-    # A broken certificate chain (TLS-inspecting proxy, missing custom CA,
-    # expired/self-signed cert) is deterministic for the host — every retry
-    # reproduces the identical handshake failure. Fail immediately with
-    # actionable guidance instead of burning the retry budget first.
-    # Checked BEFORE the transient-SSL patterns: cert-verify messages also
-    # contain "[ssl:" which would otherwise match the transient list.
-    # Inspired by Claude Code v2.1.199 (July 2026).
-    if any(p in error_msg for p in _SSL_CERT_VERIFY_PATTERNS):
-        return _result(
-            FailoverReason.ssl_cert_verification,
-            retryable=False,
-            should_fallback=False,
-        )
-
-    # ── 5b. SSL/TLS transient errors → retry as timeout (not compression) ──
+    # ── 5. SSL/TLS transient errors → retry as timeout (not compression) ──
     # SSL alerts mid-stream are transport hiccups, not server-side context
     # overflow signals.  Classify before the disconnect check so a large
     # session doesn't incorrectly trigger context compression when the real
@@ -1033,34 +776,12 @@ def classify_api_error(
             )
         return _result(FailoverReason.timeout, retryable=True)
 
-    # ── 7b. Stale-call circuit breaker → failover immediately ──────
-    # _check_stale_giveup() in agent/chat_completion_helpers.py raises a
-    # RuntimeError when the provider has been unresponsive for N
-    # consecutive stale attempts (default 5).  The error is NOT a transport
-    # timeout — the circuit breaker fires *before* any network call to avoid
-    # an indefinite stall.  Without this classification the RuntimeError
-    # falls through to FailoverReason.unknown (retryable=True), which burns
-    # all max_retries against the same dead provider (each retry hitting the
-    # circuit breaker instantly with zero network overhead) before fallback
-    # is attempted.  Classify as non-retryable + should_fallback so the
-    # retry loop activates the next fallback provider on the first hit.
-    if (
-        error_type == "RuntimeError"
-        and "consecutive stale attempts" in error_msg
-        and "aborting this call" in error_msg
-    ):
-        return _result(
-            FailoverReason.timeout,
-            retryable=False,
-            should_fallback=True,
-        )
-
-    # ── 8. Transport / timeout heuristics ───────────────────────────
+    # ── 7. Transport / timeout heuristics ───────────────────────────
 
     if error_type in _TRANSPORT_ERROR_TYPES or isinstance(error, (TimeoutError, ConnectionError, OSError)):
         return _result(FailoverReason.timeout, retryable=True)
 
-    # ── 9. Fallback: unknown ────────────────────────────────────────
+    # ── 8. Fallback: unknown ────────────────────────────────────────
 
     return _result(FailoverReason.unknown, retryable=True)
 
@@ -1099,11 +820,7 @@ def _classify_by_status(
         # OpenRouter 403 "key limit exceeded" is actually billing. Other
         # providers also use 403 for account-plan or credit exhaustion.
         if (
-            (
-                provider == "xai-oauth"
-                and error_code.lower() == _XAI_SPENDING_LIMIT_ERROR_CODE
-            )
-            or "key limit exceeded" in error_msg
+            "key limit exceeded" in error_msg
             or "spending limit" in error_msg
             or any(p in error_msg for p in _BILLING_PATTERNS)
         ):
@@ -1151,18 +868,6 @@ def _classify_by_status(
                 retryable=False,
                 should_fallback=True,
             )
-        # A bare id that the provider's catalogue only knows in prefixed form
-        # is a malformed model id, not a routing glitch — NVIDIA NIM answers
-        # one with a naked ``404 page not found`` that names nothing, so the
-        # generic branch below burns three retries and reports what looks
-        # like an outage (#78796). Deterministic: don't retry, and let the
-        # model_not_found surface carry the real cause.
-        if _model_id_missing_known_prefix(model, provider):
-            return result_fn(
-                FailoverReason.model_not_found,
-                retryable=False,
-                should_fallback=True,
-            )
         # Generic 404 with no "model not found" signal — could be a wrong
         # endpoint path (common with local llama.cpp / Ollama / vLLM when
         # the URL is slightly misconfigured), a proxy routing glitch, or
@@ -1195,22 +900,6 @@ def _classify_by_status(
             return result_fn(
                 FailoverReason.overloaded,
                 retryable=True,
-            )
-        # Distinguish an OpenRouter-aggregator upstream 429 (an upstream model
-        # like DeepSeek rate-limited OpenRouter's aggregate traffic) from an
-        # account-level 429 (the user's key is actually throttled). OpenRouter
-        # wraps upstream errors with the outer message "Provider returned
-        # error" — the user's key is healthy, so marking it exhausted / rotating
-        # is wrong and burns the key for ~24min. Fall back to a different model.
-        if _is_openrouter_upstream_error(body, provider):
-            upstream_provider = _extract_upstream_provider_name(body)
-            ctx = {"upstream_provider": upstream_provider} if upstream_provider else {}
-            return result_fn(
-                FailoverReason.upstream_rate_limit,
-                retryable=True,
-                should_rotate_credential=False,
-                should_fallback=True,
-                error_context=ctx,
             )
         return result_fn(
             FailoverReason.rate_limit,
@@ -1247,57 +936,10 @@ def _classify_by_status(
                 retryable=False,
                 should_fallback=True,
             )
-        # Some local inference servers (notably llama.cpp / llama-server)
-        # report context overflow with an HTTP 500 instead of the standard
-        # 400/413. The request-validation guard above already ran, so any
-        # remaining explicit context-overflow signal routes into the
-        # compression-and-retry path (mirroring _classify_400) instead of
-        # blind server_error retries that exhaust and drop the turn.
-        # Empty-response advisories that mention "max_tokens" must not enter
-        # that compression path.
-        if any(p in error_msg for p in _EMPTY_PROVIDER_RESPONSE_PATTERNS):
-            return result_fn(
-                FailoverReason.server_error,
-                retryable=True,
-                should_compress=False,
-            )
-        if any(p in error_msg for p in _CONTEXT_OVERFLOW_PATTERNS):
-            return result_fn(
-                FailoverReason.context_overflow,
-                retryable=True,
-                should_compress=True,
-            )
         return result_fn(FailoverReason.server_error, retryable=True)
 
     if status_code in {503, 529}:
-        # Same overflow-as-5xx variant (server busy / model-load OOM, or a
-        # Cloudflare/Tailscale hop relabeling the status). Route explicit
-        # overflow bodies into compression; otherwise treat as transient
-        # overload and retry.
-        if any(p in error_msg for p in _EMPTY_PROVIDER_RESPONSE_PATTERNS):
-            return result_fn(
-                FailoverReason.server_error,
-                retryable=True,
-                should_compress=False,
-            )
-        if any(p in error_msg for p in _CONTEXT_OVERFLOW_PATTERNS):
-            return result_fn(
-                FailoverReason.context_overflow,
-                retryable=True,
-                should_compress=True,
-            )
         return result_fn(FailoverReason.overloaded, retryable=True)
-
-    # 408 Request Timeout — a transient timing failure the server itself flags
-    # as safe to retry (RFC 9110 §15.5.9), not a malformed request. Commonly
-    # emitted by reverse proxies sitting in front of self-hosted backends
-    # (llama.cpp / Ollama / vLLM) when a long generation outruns the proxy's
-    # request-read window. Route to the dedicated ``timeout`` reason (rebuild
-    # client + retry) instead of falling through to the generic 4xx bucket
-    # below, which would abort the turn on a retry-safe error the same way it
-    # aborts a 400 Bad Request.
-    if status_code == 408:
-        return result_fn(FailoverReason.timeout, retryable=True)
 
     # Other 4xx — non-retryable
     if 400 <= status_code < 500:
@@ -1392,7 +1034,6 @@ def _classify_400(
             "encrypted content for item" in error_msg
             and "could not be verified" in error_msg
         )
-        or "could not decrypt the provided encrypted_content" in error_msg
     ):
         return result_fn(
             FailoverReason.invalid_encrypted_content,
@@ -1405,8 +1046,8 @@ def _classify_400(
     # returns:
     #   "Unsupported parameter: 'max_tokens' is not supported with this model.
     #    Use 'max_completion_tokens' instead."
-    # That string contains the literal substring "max_tokens", which historically
-    # sat in _CONTEXT_OVERFLOW_PATTERNS — so without this guard the 400 is
+    # That string contains the literal substring "max_tokens", which is one of
+    # the _CONTEXT_OVERFLOW_PATTERNS — so without this guard the 400 is
     # misclassified as context_overflow, routed into the compression loop,
     # re-sent with the same bad parameter, and ends in "Cannot compress
     # further".  These errors are deterministic (every retry gets the identical
@@ -1426,44 +1067,6 @@ def _classify_400(
             FailoverReason.format_error,
             retryable=False,
             should_fallback=True,
-        )
-
-    # Malformed message array (empty-content assistant stub, etc.). Must be
-    # checked BEFORE context_overflow: the input can be tiny, so the generic
-    # "400 + large session" heuristic would otherwise mis-route it into the
-    # compression loop and thrash until "Cannot compress further" on every
-    # retry (the request is unchanged, so compression cannot fix it). This is
-    # a deterministic request-shape rejection — fail fast as a non-retryable
-    # format_error and fall back. Checked against the message text AND the
-    # structured error code, since proxies (litellm/Bedrock) surface the
-    # signal in errorCode=INVALID_REQUEST_BODY.
-    if (
-        any(p in error_msg for p in _INVALID_MESSAGE_BODY_PATTERNS)
-        or error_code_lower == "invalid_request_body"
-    ):
-        logger.warning(
-            "Malformed message array 400 (invalid request body) classified as "
-            "format_error, NOT context overflow — failing fast + falling back "
-            "instead of entering the compression loop. This usually means an "
-            "empty-content assistant stub is in the transcript; num_messages=%s "
-            "approx_tokens=%s. error=%.200s",
-            num_messages, approx_tokens, error_msg,
-        )
-        return result_fn(
-            FailoverReason.format_error,
-            retryable=False,
-            should_fallback=True,
-        )
-
-    # Empty-provider-response advisories must not enter compression. They
-    # often mention "max_tokens" as a possible cause and used to match the
-    # bare overflow pattern, then thrash compress until "Cannot compress
-    # further" on an otherwise healthy session (custom endpoints / nano-gpt).
-    if any(p in error_msg for p in _EMPTY_PROVIDER_RESPONSE_PATTERNS):
-        return result_fn(
-            FailoverReason.server_error,
-            retryable=True,
-            should_compress=False,
         )
 
     # Context overflow from 400
@@ -1515,18 +1118,6 @@ def _classify_400(
         # Responses API (and some providers) use flat body: {"message": "..."}
         if not err_body_msg:
             err_body_msg = str(body.get("message") or "").strip().lower()
-        # litellm / Bedrock proxies use a custom shape: {"errorMessage": "...",
-        # "errorCode": "...", "errorArgs": {"reason": "..."}}.  Without these
-        # keys err_body_msg stays "" and a long, descriptive rejection is
-        # wrongly treated as a "generic" (bare) error below, which — on a
-        # large session — mis-routes into the compression loop.  Recognize
-        # them so the is_generic heuristic sees the real message length.
-        if not err_body_msg:
-            err_body_msg = str(body.get("errorMessage") or "").strip().lower()
-        if not err_body_msg:
-            _args = body.get("errorArgs")
-            if isinstance(_args, dict):
-                err_body_msg = str(_args.get("reason") or "").strip().lower()
     is_generic = len(err_body_msg) < 30 or err_body_msg in {"error", ""}
     # Absolute token/message-count thresholds are only a proxy for smaller
     # context windows.  Large-context sessions can have many messages while
@@ -1565,7 +1156,15 @@ def _classify_by_error_code(
             should_rotate_credential=True,
         )
 
-    if code_lower in _BILLING_ERROR_CODES:
+    if code_lower in {
+        "insufficient_quota",
+        "billing_not_active",
+        "payment_required",
+        "insufficient_credits",
+        "no_usable_credits",
+        "balance_depleted",
+        "model_not_supported_on_free_tier",
+    }:
         return result_fn(
             FailoverReason.billing,
             retryable=False,
@@ -1679,15 +1278,6 @@ def _classify_by_message(
             retryable=True,
             should_rotate_credential=True,
             should_fallback=True,
-        )
-
-    # Empty-provider-response advisories (often mention "max_tokens") must
-    # retry without compression — see the matching 400-path guard above.
-    if any(p in error_msg for p in _EMPTY_PROVIDER_RESPONSE_PATTERNS):
-        return result_fn(
-            FailoverReason.server_error,
-            retryable=True,
-            should_compress=False,
         )
 
     # Context overflow patterns
@@ -1825,7 +1415,7 @@ def _extract_error_code(body: dict) -> str:
                 return nested_code
 
     # Top-level code
-    code = body.get("code") or body.get("error_code") or body.get("errorCode") or ""
+    code = body.get("code") or body.get("error_code") or ""
     if isinstance(code, (str, int)):
         text = str(code).strip()
         if text and text != "400":
@@ -1845,61 +1435,5 @@ def _extract_message(error: Exception, body: dict) -> str:
         msg = body.get("message", "")
         if isinstance(msg, str) and msg.strip():
             return msg.strip()[:500]
-        # litellm / Bedrock proxy shape: {"errorMessage": "...",
-        # "errorArgs": {"reason": "..."}}.
-        msg = body.get("errorMessage", "")
-        if isinstance(msg, str) and msg.strip():
-            return msg.strip()[:500]
-        args = body.get("errorArgs")
-        if isinstance(args, dict):
-            reason = args.get("reason", "")
-            if isinstance(reason, str) and reason.strip():
-                return reason.strip()[:500]
     # Fallback to str(error)
     return str(error)[:500]
-
-
-def _is_openrouter_upstream_error(body: Any, provider: str) -> bool:
-    """Detect OpenRouter's aggregator-wrapped upstream provider errors.
-
-    OpenRouter returns errors from upstream model providers (DeepSeek,
-    Anthropic, etc.) wrapped with the outer message "Provider returned error"
-    and the real error nested in ``metadata.raw``. This signal means the
-    user's OpenRouter key is healthy — the upstream provider is the one that
-    failed — so credential rotation is the wrong recovery.
-    """
-    if not isinstance(body, dict):
-        return False
-    provider_lower = (provider or "").strip().lower()
-    err = body.get("error")
-    if not isinstance(err, dict):
-        return False
-    outer_msg = str(err.get("message") or "").strip().lower()
-    if outer_msg != "provider returned error":
-        return False
-    # Require either the explicit OpenRouter provider OR the metadata shape
-    # that only OpenRouter produces (metadata.raw / metadata.provider_name).
-    if provider_lower == "openrouter":
-        return True
-    metadata = err.get("metadata")
-    if isinstance(metadata, dict) and (
-        "raw" in metadata or "provider_name" in metadata
-    ):
-        return True
-    return False
-
-
-def _extract_upstream_provider_name(body: Any) -> Optional[str]:
-    """Pull the upstream provider name out of OpenRouter's error metadata."""
-    if not isinstance(body, dict):
-        return None
-    err = body.get("error")
-    if not isinstance(err, dict):
-        return None
-    metadata = err.get("metadata")
-    if not isinstance(metadata, dict):
-        return None
-    name = metadata.get("provider_name")
-    if isinstance(name, str) and name.strip():
-        return name.strip()
-    return None

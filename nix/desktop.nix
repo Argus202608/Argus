@@ -14,138 +14,110 @@
   hermesNpmLib,
   electron,
   hermesAgent,
-  python3,
   ...
 }:
 let
-  electronHeaders = pkgs.fetchurl {
-    url = "https://artifacts.electronjs.org/headers/dist/v${electron.version}/node-v${electron.version}-headers.tar.gz";
-    sha256 = "sha256-f8bSbLRmtbP93CJAvEBs+sHWDZ1xP2bcpLhC1EnOmZU=";
+  npm = hermesNpmLib.mkNpmPassthru {
+    folder = "apps/desktop";
+    attr = "desktop";
+    pname = "hermes-desktop";
   };
 
-  # node-pty ships no Electron-tagged prebuild we can trust to match this
-  # exact nixpkgs electron version, so it's always compiled from source
-  # against Electron's own headers (not whatever Node ran `npm`).
-  targetPlatform =
-    if stdenv.hostPlatform.isDarwin then
-      "darwin"
-    else if stdenv.hostPlatform.isLinux then
-      "linux"
-    else
-      throw "hermes-desktop: unsupported host platform for node-pty staging";
-
-  targetArch =
-    if stdenv.hostPlatform.isAarch64 then
-      "arm64"
-    else if stdenv.hostPlatform.isx86_64 then
-      "x64"
-    else
-      throw "hermes-desktop: unsupported host arch for node-pty staging";
+  packageJson = builtins.fromJSON (builtins.readFile (npm.src + "/apps/desktop/package.json"));
+  version = packageJson.version;
 
   # Build the renderer (dist/ + electron/ + package.json).
-  renderer = hermesNpmLib.buildNpmPackage {
-    dirs = [
-      "apps/desktop"
-      "apps/shared"
-    ];
-    pname = "hermes-desktop-renderer";
+  renderer = pkgs.buildNpmPackage (
+    npm
+    // {
+      pname = "hermes-desktop-renderer";
+      inherit version;
+      doCheck = true;
 
-    doCheck = true;
+      buildPhase = ''
+        runHook preBuild
 
-    buildPhase = ''
-      runHook preBuild
+        # write-build-stamp.cjs replacement.  Packaged Electron reads this
+        # at first-launch to pin the install.ps1 git ref; informational in
+        # nix builds (the backend comes from the derivation directly).
+        mkdir -p apps/desktop/build
+        echo '{"schemaVersion":1,"commit":"nix","branch":"nix","dirty":false,"source":"nix"}' > apps/desktop/build/install-stamp.json
 
-      mkdir -p apps/desktop/build
+        # patch shebangs in node_modules/.bin so npm exec can find the
+        # nix-store equivalents of /usr/bin/env (which doesn't exist in the sandbox)
+        patchShebangs .
 
-      patchShebangs .
+        pushd apps/desktop
+          # stage node-pty native binaries into build/native-deps for the final nix output
+          npm rebuild node-pty --build-from-source
+          node scripts/stage-native-deps.cjs
+          
+          npm exec tsc -b
+          npm exec vite build
 
-      pushd apps/desktop
-        # typecheck :3
-        npm exec -- tsc -b
+          # Bundle the electron main into a single self-contained file so
+          # the nix output doesn't need node_modules/.  simple-git (the only
+          # external runtime dep of the electron main) gets inlined; electron
+          # and node-pty are external (provided by the runtime / native-deps).
+          # preload.cjs stays separate — Electron loads it via __dirname, not
+          # require(), so it must remain a standalone file.
+          node scripts/bundle-electron-main.mjs
+        popd
 
-        # build the renderer bundle
-        # vite's emptyOutDir wipes dist/ on every run
-        # so it has to be first
-        npm exec -- vite build
+        runHook postBuild
+      '';
 
-        # build the electron bundle
-        node scripts/bundle-electron-main.mjs
+      checkPhase = ''
+        runHook preCheck
 
-        # Compile node-pty against Electron's actual ABI (the nixpkgs
-        # `electron` we ship). Headers come from a pinned fetchurl input
-        # since the sandbox has no network here, so node-gyp's
-        # normal --disturl download path can't run.
-        mkdir -p "$TMPDIR/electron-headers"
-        tar -xzf ${electronHeaders} -C "$TMPDIR/electron-headers" --strip-components=1
+        pushd apps/desktop
 
-        ${lib.getExe hermesNpmLib.node-gyp} rebuild \
-          --directory=../../node_modules/node-pty \
-          --build-from-source \
-          --runtime=electron \
-          --target=${electron.version} \
-          --nodedir="$TMPDIR/electron-headers" \
-          --disturl="" \
-          --offline
+          npm run postbuild
 
-        # Target platform/arch come from stdenv.hostPlatform, not the
-        # build host's own process.platform/arch.
-        node scripts/stage-native-deps.mjs ${targetPlatform} ${targetArch}
-      popd
+          # validate staged node-pty native binary is present
+          STAGED_PTY_NODE="./build/native-deps/node-pty/build/Release/pty.node"
+          
+          if [ ! -f "$STAGED_PTY_NODE" ]; then
+            echo "FATAL: Missing staged node-pty native binary at $STAGED_PTY_NODE"
+            echo "node-pty must be compiled natively"
+            exit 1
+          fi
+          
+        popd
 
-      runHook postBuild
-    '';
+        runHook postCheck
+      '';
 
-    checkPhase = ''
-      runHook preCheck
+      installPhase = ''
+        runHook preInstall
+        mkdir -p $out
+        # vite writes to apps/desktop/dist/ (we cd'd there in buildPhase).
+        # apps/desktop/build was created before the cd.  electron/ is source.
+        cp -rn apps/desktop/dist $out/
+        cp -rn apps/desktop/electron $out/
 
-      pushd apps/desktop
+        # flatten native-deps and install-stamp.json to the root level, exactly like
+        # electron-builder's extraResources does ("from": "build/native-deps", "to": "native-deps")
+        # so main.cjs can find it at process.resourcesPath + '/native-deps/node-pty'
+        cp -rn apps/desktop/build/native-deps $out/
+        cp -n apps/desktop/build/install-stamp.json $out/
 
-        npm run postbuild
-
-        # validate staged node-pty native binary is present.
-        STAGED_PTY_NODE="./dist/node_modules/node-pty/build/Release/pty.node"
-
-        if [ ! -f "$STAGED_PTY_NODE" ]; then
-          echo "FATAL: Missing staged node-pty native binary at $STAGED_PTY_NODE"
-          echo "node-pty must be compiled natively"
-          exit 1
-        fi
-        
-      popd
-
-      runHook postCheck
-    '';
-
-    installPhase = ''
-      runHook preInstall
-      mkdir -p $out
-      # vite writes to apps/desktop/dist/ (we cd'd there in buildPhase).
-      # stage-native-deps.mjs stages node-pty into dist/node_modules/node-pty,
-      # so copying dist/ wholesale carries the native dep along with the
-      # esbuild bundle that require()s it. apps/desktop/build was created
-      # before the cd.
-      cp -rn apps/desktop/dist $out/
-
-      echo '{"schemaVersion":1,"commit":"nix-dummy-commit","branch":"nix","dirty":false,"source":"nix"}' > $out/install-stamp.json
-
-      cp -n apps/desktop/package.json $out/
-      runHook postInstall
-    '';
-  };
+        cp -n apps/desktop/package.json $out/
+        runHook postInstall
+      '';
+    }
+  );
 in
 
 # Electron wrapper: nixpkgs' electron binary pointed at the renderer dir.
 stdenv.mkDerivation {
   pname = "hermes-desktop";
-  inherit (renderer) version;
+  inherit version;
 
   dontUnpack = true;
   dontBuild = true;
 
-  nativeBuildInputs = [
-    makeWrapper
-    python3
-  ];
+  nativeBuildInputs = [ makeWrapper ];
 
   installPhase = ''
     runHook preInstall
@@ -156,7 +128,7 @@ stdenv.mkDerivation {
     # Standard nixpkgs pattern for electron-builder apps: patch process.resourcesPath
     # to point to the app's directory. In Nix, unpackaged electron defaults this
     # to the electron distribution's resources path, breaking extraResources lookups.
-    substituteInPlace $out/share/hermes-desktop/dist/electron-main.mjs \
+    substituteInPlace $out/share/hermes-desktop/electron/main.cjs \
       --replace-fail "process.resourcesPath" "'$out/share/hermes-desktop'"
 
     # Wrap the nixpkgs electron binary to launch our app.  Set
@@ -170,15 +142,6 @@ stdenv.mkDerivation {
       --set HERMES_DESKTOP_HERMES "${lib.getExe hermesAgent}" \
       --set ELECTRON_IS_DEV 0
 
-    # XDG launcher entry
-    mkdir -p $out/share/applications $out/share/icons/hicolor/1024x1024/apps
-    install -m 0644 ${../apps/desktop/assets/icon.png} \
-      $out/share/icons/hicolor/1024x1024/apps/hermes.png
-    export PYTHONPATH=$(mktemp -d)
-    cp ${../hermes_cli/linux_desktop_entry.py} "$PYTHONPATH/linux_desktop_entry.py"
-    export DESKTOP_EXEC="$out/bin/hermes-desktop"
-    export DESKTOP_ICON="$out/share/icons/hicolor/1024x1024/apps/hermes.png"
-    python3 -c 'import os; from linux_desktop_entry import render_desktop_entry; print(render_desktop_entry(os.environ["DESKTOP_EXEC"], os.environ["DESKTOP_ICON"]))' > $out/share/applications/hermes.desktop
     runHook postInstall
   '';
 

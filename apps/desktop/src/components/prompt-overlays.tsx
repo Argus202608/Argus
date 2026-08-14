@@ -1,9 +1,9 @@
 'use client'
 
 import { useStore } from '@nanostores/react'
-import { type FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
+import { type FormEvent, useCallback, useEffect, useState } from 'react'
 
-import { PendingApprovalFallback } from '@/components/assistant-ui/tool/approval'
+import { PendingApprovalFallback } from '@/components/assistant-ui/tool-approval'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -15,12 +15,13 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { useI18n } from '@/i18n'
-import { isMissingPendingPromptRequest } from '@/lib/gateway-rpc'
 import { triggerHaptic } from '@/lib/haptics'
-import { KeyRound, Loader2, Lock } from '@/lib/icons'
+import { Textarea } from '@/components/ui/textarea'
+import { KeyRound, Loader2, Lock, MessageQuestion } from '@/lib/icons'
+import { $unanchoredClarifyRequest, clearClarifyRequest } from '@/store/clarify'
 import { $gateway } from '@/store/gateway'
 import { notifyError } from '@/store/notifications'
-import { clearSecretRequest, clearSudoRequest, sessionSecretRequest, sessionSudoRequest } from '@/store/prompts'
+import { $secretRequest, $sudoRequest, clearSecretRequest, clearSudoRequest } from '@/store/prompts'
 
 // Renders the modal mid-turn prompts the gateway raises and waits on: sudo
 // password and skill secret capture. Dangerous-command / execute_code approval
@@ -35,11 +36,10 @@ import { clearSecretRequest, clearSudoRequest, sessionSecretRequest, sessionSudo
 // fire a second `*.respond` alongside onOpenChange (double-send) or block the
 // backdrop-dismiss path.
 
-function SudoDialog({ sessionId }: { sessionId: string | null }) {
+function SudoDialog() {
   const { t } = useI18n()
   const copy = t.prompts
-  const $request = useMemo(() => sessionSudoRequest(sessionId), [sessionId])
-  const request = useStore($request)
+  const request = useStore($sudoRequest)
   const gateway = useStore($gateway)
   const [password, setPassword] = useState('')
   const [submitting, setSubmitting] = useState(false)
@@ -71,12 +71,6 @@ function SudoDialog({ sessionId }: { sessionId: string | null }) {
         triggerHaptic('submit')
         clearSudoRequest(request.sessionId, request.requestId)
       } catch (error) {
-        if (isMissingPendingPromptRequest(error, 'password')) {
-          clearSudoRequest(request.sessionId, request.requestId)
-
-          return
-        }
-
         notifyError(error, copy.sudoSendFailed)
         setSubmitting(false)
       }
@@ -138,11 +132,10 @@ function SudoDialog({ sessionId }: { sessionId: string | null }) {
   )
 }
 
-function SecretDialog({ sessionId }: { sessionId: string | null }) {
+function SecretDialog() {
   const { t } = useI18n()
   const copy = t.prompts
-  const $request = useMemo(() => sessionSecretRequest(sessionId), [sessionId])
-  const request = useStore($request)
+  const request = useStore($secretRequest)
   const gateway = useStore($gateway)
   const [value, setValue] = useState('')
   const [submitting, setSubmitting] = useState(false)
@@ -174,12 +167,6 @@ function SecretDialog({ sessionId }: { sessionId: string | null }) {
         triggerHaptic('submit')
         clearSecretRequest(request.sessionId, request.requestId)
       } catch (error) {
-        if (isMissingPendingPromptRequest(error, 'value')) {
-          clearSecretRequest(request.sessionId, request.requestId)
-
-          return
-        }
-
         notifyError(error, copy.secretSendFailed)
         setSubmitting(false)
       }
@@ -239,15 +226,143 @@ function SecretDialog({ sessionId }: { sessionId: string | null }) {
   )
 }
 
-/** Mid-turn prompt surfaces for ONE session. Mounted by both the primary chat
- *  and each tile with its own session id, so a background/tiled session's
- *  blocking prompt renders instead of silently stalling. */
-export function PromptOverlays({ sessionId }: { sessionId: string | null }) {
+// Standalone clarify overlay for requests with no inline ClarifyTool row.
+// The inline tool only mounts against a `clarify` tool-call part; a raw
+// clarify.request (e.g. set_monitor's clarify_callback asking the alert mode)
+// has no such part, so without this modal the agent blocks on `clarify.respond`
+// until the backend `_block` 300s timeout. $unanchoredClarifyRequest is already
+// scoped to the active session AND excludes any request an inline row is
+// handling, so this never double-renders a normal clarify tool call.
+function ClarifyDialog() {
+  const { t } = useI18n()
+  const copy = t.assistant.clarify
+  const request = useStore($unanchoredClarifyRequest)
+  const gateway = useStore($gateway)
+  const [draft, setDraft] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+
+  useEffect(() => {
+    setDraft('')
+    setSubmitting(false)
+  }, [request?.requestId])
+
+  const send = useCallback(
+    async (answer: string) => {
+      if (!request) {
+        return
+      }
+
+      if (!gateway) {
+        notifyError(new Error(copy.gatewayDisconnected), copy.sendFailed)
+
+        return
+      }
+
+      setSubmitting(true)
+
+      try {
+        await gateway.request<{ ok?: boolean }>('clarify.respond', {
+          answer,
+          request_id: request.requestId
+        })
+        triggerHaptic('submit')
+        clearClarifyRequest(request.requestId, request.sessionId)
+      } catch (error) {
+        notifyError(error, copy.sendFailed)
+        setSubmitting(false)
+      }
+    },
+    [copy.gatewayDisconnected, copy.sendFailed, gateway, request]
+  )
+
+  // Dismiss (Esc / backdrop) → empty answer. The backend treats "" as a
+  // no-choice timeout fallback (see tools/monitor_tool._resolve_silent), so
+  // closing is a safe non-answer rather than a hang.
+  const onOpenChange = useCallback(
+    (open: boolean) => {
+      if (!open && !submitting && request) {
+        void send('')
+      }
+    },
+    [request, send, submitting]
+  )
+
+  if (!request) {
+    return null
+  }
+
+  const choices = request.choices ?? []
+
+  return (
+    <Dialog onOpenChange={onOpenChange} open>
+      <DialogContent showCloseButton={false}>
+        <DialogHeader>
+          <DialogTitle icon={MessageQuestion}>{request.question}</DialogTitle>
+        </DialogHeader>
+
+        <div className="grid gap-3">
+          {choices.length > 0 && (
+            <div className="grid gap-2">
+              {choices.map(choice => (
+                <Button
+                  className="justify-start"
+                  disabled={submitting}
+                  key={choice}
+                  onClick={() => void send(choice)}
+                  type="button"
+                  variant="outline"
+                >
+                  {choice}
+                </Button>
+              ))}
+            </div>
+          )}
+
+          <form
+            className="grid gap-3"
+            onSubmit={event => {
+              event.preventDefault()
+              if (draft.trim()) {
+                void send(draft.trim())
+              }
+            }}
+          >
+            <Textarea
+              autoFocus={choices.length === 0}
+              disabled={submitting}
+              onChange={event => setDraft(event.target.value)}
+              onKeyDown={event => {
+                if (event.key === 'Enter' && !event.shiftKey && draft.trim()) {
+                  event.preventDefault()
+                  void send(draft.trim())
+                }
+              }}
+              placeholder={copy.placeholder}
+              rows={2}
+              value={draft}
+            />
+            <DialogFooter>
+              <Button disabled={submitting} onClick={() => void send('')} type="button" variant="ghost">
+                {copy.skip}
+              </Button>
+              <Button disabled={submitting || !draft.trim()} type="submit">
+                {submitting ? <Loader2 className="size-3.5 animate-spin" /> : copy.continueLabel}
+              </Button>
+            </DialogFooter>
+          </form>
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+export function PromptOverlays() {
   return (
     <>
       <PendingApprovalFallback />
-      <SudoDialog sessionId={sessionId} />
-      <SecretDialog sessionId={sessionId} />
+      <SudoDialog />
+      <SecretDialog />
+      <ClarifyDialog />
     </>
   )
 }

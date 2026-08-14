@@ -1,4 +1,3 @@
-import { useStore } from '@nanostores/react'
 import type * as React from 'react'
 import type {
   ComponentProps,
@@ -8,23 +7,20 @@ import type {
   ReactNode
 } from 'react'
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import ShikiHighlighter from 'react-shiki'
 import { Streamdown } from 'streamdown'
 
 import { requestComposerFocus, requestComposerInsertRefs } from '@/app/chat/composer/focus'
 import { droppedFileInlineRef } from '@/app/chat/composer/inline-refs'
 import { HERMES_PATHS_MIME } from '@/app/chat/hooks/use-composer-actions'
 import { isAddSelectionShortcut } from '@/app/right-sidebar/terminal/selection'
-import { RichCodeBlock } from '@/components/assistant-ui/embeds'
 import { CodeEditor } from '@/components/chat/code-editor'
 import { FileDiffPanel } from '@/components/chat/diff-lines'
 import { chunkTextLines, useFixedRowWindow } from '@/components/chat/fixed-row-window'
-import { LazyShiki as ShikiHighlighter } from '@/components/chat/shiki-highlighter'
 import { PageLoader } from '@/components/page-loader'
-import { Tip } from '@/components/ui/tooltip'
 import { translateNow, useI18n } from '@/i18n'
 import {
   desktopFileDiff,
-  desktopFsCacheKey,
   desktopGitRoot,
   readDesktopFileDataUrl,
   readDesktopFileText,
@@ -35,7 +31,7 @@ import { shikiLanguageForFilename } from '@/lib/markdown-code'
 import { cn } from '@/lib/utils'
 import type { PreviewTarget } from '@/store/preview'
 import { setPreviewDirty } from '@/store/preview-edit'
-import { $connection, $currentCwd } from '@/store/session'
+import { $currentCwd } from '@/store/session'
 import { notifyWorkspaceChanged } from '@/store/workspace-events'
 
 const SHIKI_THEME = { dark: 'github-dark-default', light: 'github-light-default' } as const
@@ -219,45 +215,6 @@ function looksBinaryBytes(bytes: Uint8Array) {
   return suspicious / Math.min(bytes.length, 4096) > 0.12
 }
 
-function dataUrlToBlob(dataUrl: string) {
-  const comma = dataUrl.indexOf(',')
-
-  if (comma < 0 || !dataUrl.startsWith('data:')) {
-    throw new Error('Invalid PDF data URL')
-  }
-
-  const metadata = dataUrl
-    .slice(5, comma)
-    .split(';')
-    .map(part => part.trim().toLowerCase())
-
-  const payload = dataUrl.slice(comma + 1)
-
-  if (metadata[0] !== 'application/pdf' || !metadata.slice(1).includes('base64')) {
-    throw new Error('Invalid PDF data URL type')
-  }
-
-  let binary: string
-
-  try {
-    binary = atob(decodeURIComponent(payload))
-  } catch {
-    throw new Error('Invalid PDF data URL payload')
-  }
-
-  if (!binary.startsWith('%PDF-')) {
-    throw new Error('Invalid PDF file header')
-  }
-
-  const bytes = new Uint8Array(binary.length)
-
-  for (let index = 0; index < binary.length; index += 1) {
-    bytes[index] = binary.charCodeAt(index)
-  }
-
-  return new Blob([bytes], { type: 'application/pdf' })
-}
-
 async function readTextPreview(filePath: string) {
   try {
     return await readDesktopFileText(filePath)
@@ -334,9 +291,7 @@ function MarkdownCode({ className, children, ...props }: ComponentProps<'code'>)
     )
   }
 
-  const code = String(children).replace(/\n$/, '')
-
-  const highlighted = (
+  return (
     <ShikiHighlighter
       addDefaultStyles={false}
       as="div"
@@ -346,13 +301,9 @@ function MarkdownCode({ className, children, ...props }: ComponentProps<'code'>)
       showLanguage={false}
       theme={SHIKI_THEME}
     >
-      {code}
+      {String(children).replace(/\n$/, '')}
     </ShikiHighlighter>
   )
-
-  // ```mermaid / ```svg fences route to the shared lazy renderers (same
-  // registry the chat transcript uses); everything else stays on Shiki.
-  return <RichCodeBlock code={code} fallback={highlighted} language={language} />
 }
 
 const MARKDOWN_COMPONENTS = {
@@ -379,7 +330,7 @@ function MarkdownPreview({ text }: { text: string }) {
   )
 }
 
-export function PreviewModeSwitcher({
+function PreviewModeSwitcher({
   active,
   modes,
   onSelect,
@@ -480,10 +431,7 @@ function startLineDrag(event: ReactDragEvent<HTMLElement>, filePath: string, { e
   event.dataTransfer.effectAllowed = 'copy'
 }
 
-/** Windowed, Shiki-highlighted source. The gutter's line selection produces a
- *  `path:line` composer ref, so it is inert without a `filePath` (artifact
- *  content has no path to reference lines against). */
-export function SourceView({ filePath, language, text }: { filePath?: string; language: string; text: string }) {
+function SourceView({ filePath, language, text }: { filePath: string; language: string; text: string }) {
   const { t } = useI18n()
   const chunks = useMemo(() => chunkTextLines(text, SOURCE_CHUNK_LINES), [text])
   const lastChunk = chunks.at(-1)
@@ -501,10 +449,6 @@ export function SourceView({ filePath, language, text }: { filePath?: string; la
   const inSelection = (line: number) => selection != null && line >= selection.start && line <= selection.end
 
   const handleLineClick = (event: ReactMouseEvent, line: number) => {
-    if (!filePath) {
-      return
-    }
-
     if (event.shiftKey && selection) {
       setSelection({ end: Math.max(selection.end, line), start: Math.min(selection.start, line) })
 
@@ -521,10 +465,6 @@ export function SourceView({ filePath, language, text }: { filePath?: string; la
   }
 
   const handleDragStart = (event: ReactDragEvent<HTMLElement>, line: number) => {
-    if (!filePath) {
-      return
-    }
-
     startLineDrag(event, filePath, inSelection(line) && selection ? selection : { end: line, start: line })
   }
 
@@ -533,7 +473,7 @@ export function SourceView({ filePath, language, text }: { filePath?: string; la
   // the composer. Capture-phase + stopPropagation so it beats the terminal's
   // global ⌘L handler (which would otherwise grab the native text selection).
   useEffect(() => {
-    if (!selection || !filePath) {
+    if (!selection) {
       return
     }
 
@@ -551,10 +491,8 @@ export function SourceView({ filePath, language, text }: { filePath?: string; la
 
       event.preventDefault()
       event.stopPropagation()
-      // Insert into and focus the SAME composer — 'active' — so a tile that owns
-      // focus keeps it instead of the ref landing in a tile but main stealing focus.
       requestComposerInsertRefs([ref])
-      requestComposerFocus('active')
+      requestComposerFocus('main')
     }
 
     window.addEventListener('keydown', onKeyDown, { capture: true })
@@ -576,17 +514,16 @@ export function SourceView({ filePath, language, text }: { filePath?: string; la
                 return (
                   <div
                     className={cn(
-                      'h-5 w-9 pr-2 leading-5 tabular-nums transition-colors',
-                      filePath && 'cursor-pointer',
+                      'h-5 w-9 cursor-pointer pr-2 leading-5 tabular-nums transition-colors',
                       selected
                         ? 'bg-amber-200/45 text-amber-900 dark:bg-amber-300/20 dark:text-amber-100'
-                        : filePath && 'hover:text-foreground'
+                        : 'hover:text-foreground'
                     )}
-                    draggable={Boolean(filePath)}
+                    draggable
                     key={line}
                     onClick={event => handleLineClick(event, line)}
                     onDragStart={event => handleDragStart(event, line)}
-                    title={filePath ? t.preview.sourceLineTitle : undefined}
+                    title={t.preview.sourceLineTitle}
                   >
                     {line}
                   </div>
@@ -614,14 +551,12 @@ export function SourceView({ filePath, language, text }: { filePath?: string; la
   )
 }
 
-export type PreviewViewMode = 'diff' | 'rendered' | 'source'
+type PreviewViewMode = 'diff' | 'rendered' | 'source'
 
 export function LocalFilePreview({ reloadKey, target }: { reloadKey: number; target: PreviewTarget }) {
   const { t } = useI18n()
   const [state, setState] = useState<LocalPreviewState>({ loading: true })
   const [forcePreview, setForcePreview] = useState(false)
-  const [pdfError, setPdfError] = useState<string>()
-  const [pdfUrl, setPdfUrl] = useState<string>()
   // User-picked view; null = auto (diff when changed, else rendered markdown,
   // else source). Reset when the previewed file changes.
   const [userMode, setUserMode] = useState<null | PreviewViewMode>(null)
@@ -643,13 +578,9 @@ export function LocalFilePreview({ reloadKey, target }: { reloadKey: number; tar
   // hover flag (no state — only the keydown handler reads it).
   const readViewRef = useRef<HTMLDivElement>(null)
   const hoverRef = useRef(false)
-  const connection = useStore($connection)
-  const fsCacheKey = desktopFsCacheKey(connection)
   const filePath = filePathForTarget(target)
   const isImage = target.previewKind === 'image'
-  const isPdf = target.previewKind === 'pdf'
 
-  // eslint-disable-next-line no-restricted-syntax -- legitimate non-atom ref write (see eslint rule comment)
   useEffect(() => {
     setUserMode(null)
     setEditing(false)
@@ -666,7 +597,7 @@ export function LocalFilePreview({ reloadKey, target }: { reloadKey: number; tar
   // when the file is forcibly previewed past the binary refusal screen.
   const isText = target.previewKind === 'text' || target.previewKind === 'binary' || target.previewKind === 'html'
 
-  const blockedByTarget = !isImage && !isPdf && !forcePreview && (target.binary || target.large)
+  const blockedByTarget = !isImage && !forcePreview && (target.binary || target.large)
 
   useEffect(() => {
     let active = true
@@ -678,7 +609,7 @@ export function LocalFilePreview({ reloadKey, target }: { reloadKey: number; tar
         return
       }
 
-      if (!isImage && !isPdf && !isText) {
+      if (!isImage && !isText) {
         setState({ loading: false })
 
         return
@@ -687,7 +618,7 @@ export function LocalFilePreview({ reloadKey, target }: { reloadKey: number; tar
       setState({ loading: true })
 
       try {
-        if (isImage || isPdf) {
+        if (isImage) {
           // Prefer bytes the caller already handed us (a pasted/dropped
           // screenshot) over re-reading a path that may be transient/unreadable.
           const dataUrl = target.dataUrl || (await readDesktopFileDataUrl(filePath))
@@ -744,49 +675,7 @@ export function LocalFilePreview({ reloadKey, target }: { reloadKey: number; tar
     return () => {
       active = false
     }
-  }, [
-    blockedByTarget,
-    filePath,
-    forcePreview,
-    fsCacheKey,
-    isImage,
-    isPdf,
-    isText,
-    reloadKey,
-    selfReload,
-    target.dataUrl,
-    target.language
-  ])
-
-  useEffect(() => {
-    setPdfUrl(undefined)
-    setPdfError(undefined)
-
-    if (!isPdf || !state.dataUrl) {
-      return
-    }
-
-    // Chromium's PDF viewer is blank for large data: URLs in an iframe. Use a
-    // blob URL instead, and revoke it when the target or loaded bytes change.
-    if (typeof URL.createObjectURL !== 'function') {
-      setPdfError('PDF preview requires object URL support')
-
-      return
-    }
-
-    let objectUrl: string
-
-    try {
-      objectUrl = URL.createObjectURL(dataUrlToBlob(state.dataUrl))
-      setPdfUrl(objectUrl)
-    } catch (error) {
-      setPdfError(error instanceof Error ? error.message : String(error))
-
-      return
-    }
-
-    return () => URL.revokeObjectURL(objectUrl)
-  }, [isPdf, state.dataUrl])
+  }, [blockedByTarget, filePath, forcePreview, isImage, isText, reloadKey, selfReload, target.dataUrl, target.language])
 
   // Editing is only offered for whole, readable text — never images, binaries,
   // or files we only loaded the first 512 KB of (saving would drop the tail).
@@ -977,13 +866,8 @@ export function LocalFilePreview({ reloadKey, target }: { reloadKey: number; tar
     return <PreviewEmptyState body={state.error} title={t.preview.unavailable} />
   }
 
-  if (pdfError) {
-    return <PreviewEmptyState body={pdfError} title={t.preview.unavailable} />
-  }
-
   if (
     !isImage &&
-    !isPdf &&
     !forcePreview &&
     (target.binary || target.large || state.binary || (state.byteSize ?? 0) > TEXT_PREVIEW_MAX_BYTES)
   ) {
@@ -1011,23 +895,6 @@ export function LocalFilePreview({ reloadKey, target }: { reloadKey: number; tar
         />
       </div>
     )
-  }
-
-  if (isPdf && state.dataUrl && pdfUrl) {
-    return (
-      <div className="h-full w-full overflow-hidden bg-transparent">
-        <iframe
-          aria-label={target.label}
-          className="h-full w-full border-0 bg-white"
-          src={pdfUrl}
-          title={target.label}
-        />
-      </div>
-    )
-  }
-
-  if (isPdf && state.dataUrl) {
-    return <PageLoader label={t.preview.loading} />
   }
 
   if (isText && state.text !== undefined) {
@@ -1071,16 +938,15 @@ export function LocalFilePreview({ reloadKey, target }: { reloadKey: number; tar
           onSelect={setUserMode}
           trailing={
             canEdit ? (
-              <Tip label={`${t.preview.edit} (e)`}>
-                <button
-                  className="flex items-center gap-1 text-[0.625rem] font-bold text-muted-foreground underline-offset-4 transition-colors hover:text-foreground"
-                  onClick={beginEdit}
-                  type="button"
-                >
-                  <Pencil className="size-3" />
-                  {t.preview.edit}
-                </button>
-              </Tip>
+              <button
+                className="flex items-center gap-1 text-[0.625rem] font-bold text-muted-foreground underline-offset-4 transition-colors hover:text-foreground"
+                onClick={beginEdit}
+                title={`${t.preview.edit} (e)`}
+                type="button"
+              >
+                <Pencil className="size-3" />
+                {t.preview.edit}
+              </button>
             ) : null
           }
         />

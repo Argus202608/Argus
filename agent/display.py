@@ -14,10 +14,9 @@ from dataclasses import dataclass, field
 from difflib import unified_diff
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
 
 from utils import safe_json_loads
-from agent.redact import redact_sensitive_text
+from agent.redact import redact_sensitive_text, redact_url_userinfo
 from agent.tool_result_classification import file_mutation_result_landed
 
 # ANSI escape codes for coloring tool failure indicators
@@ -27,14 +26,6 @@ _RESET = "\033[0m"
 logger = logging.getLogger(__name__)
 
 _ANSI_RESET = "\033[0m"
-
-
-def _display_url(value: Any) -> str:
-    """Extract a display-only URL without assuming model argument types."""
-    if isinstance(value, dict):
-        value = value.get("url") or value.get("href")
-    return value.strip() if isinstance(value, str) else ""
-
 
 # Diff colors — resolved lazily from the skin engine so they adapt
 # to light/dark themes.  Falls back to sensible defaults on import
@@ -186,15 +177,6 @@ def _truncate_preview(text: str, max_len: int | None) -> str:
             return "." * max_len
         return text[:max_len - 3] + "..."
     return text
-
-
-@dataclass(frozen=True)
-class ToolPreview:
-    """A compact tool preview plus presentation facts lost to truncation."""
-
-    text: str
-    truncated: bool = False
-    url: str | None = None
 
 
 _SHELL_SILENT_HEADS = {"cd", "pushd", "popd", "export", "set", "unset", "source", ".", "true", "false", ":"}
@@ -414,6 +396,333 @@ def redact_tool_args_for_display(tool_name: str, args: dict | None) -> dict | No
     return args
 
 
+# =========================================================================
+# Generic args preview — the DEFAULT for tools without a bespoke branch.
+#
+# The bespoke `primary_args` table below only covers ~30 tools. Everything
+# else used to fall through to `return None`, which the UIs render as a bare
+# tool name: the user sees "computer_use" with no hint of what it is doing.
+# That is a white-list design — a newly added tool is silently invisible
+# until someone remembers to extend the table.
+#
+# This flips the default: any tool with args gets a preview built from the
+# args themselves. Bespoke branches remain, they just become an upgrade
+# rather than the only source of information.
+#
+# ── Privacy ────────────────────────────────────────────────────────────
+# Args reach the UI verbatim, so field values are classified rather than
+# dumped. `redact_sensitive_text` catches known credential SHAPES (sk-*,
+# Bearer, JWT, ENV assignments) but provably does NOT catch two things:
+#
+#   1. URL userinfo — `https://user:p4ssw0rd@host` passes through, because
+#      global URL redaction is deliberately off (see the NOTE in
+#      agent/redact.py: it breaks magic-link / OAuth callback flows). We
+#      apply `redact_url_userinfo` to individual literal values only, so
+#      that workflow-breaking global behaviour is not resurrected.
+#   2. Free prose — a user's `message="my password is hunter2"` is not a
+#      recognizable secret shape and never will be.
+#
+# So FREEFORM fields (message bodies, file contents, patch payloads) render
+# as a character COUNT and never as content. Identifiers, enums, numbers and
+# paths render verbatim: they are what makes the line informative, and they
+# are not where prose secrets live.
+# =========================================================================
+
+# PAYLOAD fields — data the call is writing, sending, or typing somewhere.
+# This is where user-private content lives: a DM body, a file's contents, a
+# password typed into a form, a diff hunk. Rendered as a character COUNT
+# only; the value never reaches the UI.
+#
+# Matched case-insensitively on the exact arg name. Adding a name here is
+# always the SAFE direction; omitting one means its value can be displayed.
+#
+# NOTE the deliberate split from _INTENT_ARG_NAMES below. Both are prose, but
+# only payload prose is user data. `question="what is on screen"` is the model
+# describing its own action and is the single most useful thing to show —
+# suppressing it would also contradict this function's own bespoke branches,
+# which already display `clarify.question`, `vision_analyze.question` and
+# `delegate_task.goal` in full.
+_FREEFORM_ARG_NAMES = frozenset({
+    "content", "body", "message", "text", "old_string", "new_string",
+    "patch", "code", "data", "value", "expression", "answer", "comment",
+    "caption", "note",
+})
+
+# CREDENTIAL fields — the value is a secret, so NOTHING about it is shipped
+# (not even a length: a password's length is itself a hint worth denying).
+#
+# This is a separate axis from _FREEFORM_ARG_NAMES. Freeform is "user prose,
+# too private to show but harmless to measure"; credential is "never emit".
+#
+# ── Why this list is needed at all ─────────────────────────────────────
+# `redact_sensitive_text` is NOT a sufficient backstop here. Its
+# `_SENSITIVE_BODY_KEYS` is documented as EXACT-match (so "token_count" isn't
+# mangled), which means it knows `password` but not `pwd`, `secret` but not
+# `access_key`, and it has no concept of SSN / card / cookie / OTP at all.
+# Before the generic renderer existed those args were never displayed, so the
+# gap was invisible; now every unlisted tool's args reach the UI and the gap
+# is load-bearing. Verified leaks this closes: pwd, ssn, credit_card, cookie,
+# otp, pin, private_key.
+#
+# Matched as SUBSTRINGS (case-insensitive) — unlike the exact-match sets
+# above — because credential fields proliferate as variants (`user_pwd`,
+# `api_key_v2`, `stripe_secret`) and each unmatched variant is a leak. The
+# stems here are chosen to be unambiguous as substrings.
+_CREDENTIAL_ARG_SUBSTRINGS = (
+    "password", "passwd", "pwd", "passphrase",
+    "secret", "token", "apikey", "api_key", "credential",
+    "private_key", "privatekey", "access_key", "secret_key",
+    "cookie", "bearer", "otp", "cvv", "ssn", "social_security",
+    "credit_card", "cardnumber", "card_number", "pin_code", "pincode",
+)
+
+# Credential names that are only safe to match EXACTLY. As substrings they
+# would swallow innocent fields — `keys` is `computer_use`'s key-press list
+# ("cmd+s"), and matching "key" loosely would hide it, undoing the very
+# visibility this renderer exists to provide.
+_CREDENTIAL_ARG_EXACT = frozenset({
+    "key", "auth", "jwt", "pin", "authorization", "salt", "hash",
+    "signature", "sig", "session_key",
+})
+
+
+# Names that CONTAIN a credential stem but are provably not secrets — token
+# budgets and pagination cursors, overwhelmingly common in LLM tool schemas.
+# `agent/redact.py` calls out this exact hazard ("token_count and session_id
+# must NOT match") as its reason for exact-matching; substring matching has to
+# earn that back with an explicit carve-out.
+#
+# Matched on the whole (lowercased) name, so a genuine `access_token` is
+# unaffected. `*_count` / `max_*` / `*_limit` style names carry a NUMBER, so a
+# false negative here reveals a quantity, never a credential.
+_CREDENTIAL_ARG_ALLOW = frozenset({
+    "token_count", "tokens", "max_tokens", "min_tokens", "num_tokens",
+    "input_tokens", "output_tokens", "reasoning_tokens", "total_tokens",
+    "token_limit", "token_budget", "max_token", "n_tokens",
+    "page_token", "next_page_token", "continuation_token", "pagination_token",
+})
+
+
+def _is_credential_arg(name: str) -> bool:
+    """True when an arg name indicates a secret whose value must never ship."""
+    lowered = name.lower()
+    if lowered in _CREDENTIAL_ARG_ALLOW:
+        return False
+    if lowered in _CREDENTIAL_ARG_EXACT:
+        return True
+    return any(stem in lowered for stem in _CREDENTIAL_ARG_SUBSTRINGS)
+
+
+# INTENT fields — prose the MODEL authored to describe what it is doing.
+# Displayed (truncated + redacted) because it is the payload-free description
+# of the action. Listed explicitly rather than "anything not in the payload
+# set" so that a newly seen prose field defaults to the SAFE side: unknown
+# string names are literals only if they are short identifier-ish values,
+# and any genuinely sensitive new field name should be added to
+# _FREEFORM_ARG_NAMES.
+_INTENT_ARG_NAMES = frozenset({
+    "question", "goal", "reason", "summary", "description", "instruction",
+    "task_instruction", "prompt", "query", "title",
+})
+
+# Args that are pure plumbing — they identify a backend, not the action, and
+# repeating them on every line crowds out the informative fields.
+_BORING_ARG_NAMES = frozenset({"board", "tenant", "profile", "workspace_kind"})
+
+# Fields that read best first: they say what KIND of operation this is, which
+# is the single most useful token for consolidated `action=`-style tools.
+_LEAD_ARG_NAMES = ("action", "op", "mode", "method", "command", "direction")
+
+_GENERIC_VALUE_MAX = 40      # per-value cap for identifiers/paths/enums
+_INTENT_VALUE_MAX = 60       # per-value cap for intent prose (a sentence)
+_GENERIC_MAX_FIELDS = 4      # keep the one-line preview scannable
+# Cap for the STRUCTURED payload (describe_arg_fields). Higher than the
+# one-line budget — the expanded panel has room and the whole point is to
+# stop hiding args — but still bounded, because this ships per tool.start
+# AND per resumed tool row.
+_STRUCTURED_MAX_FIELDS = 24
+
+
+# An unrecognized string arg longer than this is treated as payload (count
+# only) rather than an identifier. Identifiers, paths, enums and entity ids
+# are short; a 200-char unknown string is prose, and prose from a tool nobody
+# has classified (an MCP tool, a freshly added builtin) must not be displayed
+# on the strength of a guess.
+_UNKNOWN_STRING_LITERAL_MAX = 60
+
+
+def classify_arg_field(key: str, value: Any) -> str:
+    """Classify one arg for display: ``credential`` / ``literal`` / ``freeform`` / ``shape``.
+
+    Driven by the VALUE's type and the arg NAME's category — never by tool
+    name — so a newly registered tool (including an MCP tool whose schema
+    nobody here has seen) is classified without anyone updating a table.
+
+    ``credential`` means "emit nothing at all", ``freeform`` means "show a
+    length, never the value". Unknown long strings land in ``freeform`` by
+    default: the failure mode of hiding something harmless is a less useful
+    line, while the failure mode of showing something private is a leak.
+    """
+    # Credential FIRST, and regardless of value type: `pin=4021` is an int and
+    # would otherwise be a "literal", and a bool/number check ahead of this
+    # would leak it. A credential name is disqualifying by itself.
+    if _is_credential_arg(key):
+        return "credential"
+    if isinstance(value, bool) or isinstance(value, (int, float)):
+        return "literal"
+    if isinstance(value, str):
+        name = key.lower()
+        if name in _FREEFORM_ARG_NAMES:
+            return "freeform"
+        if name in _INTENT_ARG_NAMES:
+            return "literal"
+        return (
+            "literal" if len(value) <= _UNKNOWN_STRING_LITERAL_MAX else "freeform"
+        )
+    if isinstance(value, (list, tuple, set, dict)):
+        return "shape"
+    return "literal"
+
+
+def describe_arg_fields(args: dict) -> list[dict]:
+    """Structured, privacy-classified view of tool args for rich UIs.
+
+    Returns one entry per arg: ``{"key", "kind", "value"}`` for literals /
+    shapes and ``{"key", "kind": "freeform", "chars"}`` for prose — the
+    latter never carrying the prose itself. Ordering puts the operation kind
+    first (see ``_LEAD_ARG_NAMES``), then declaration order.
+
+    ``credential`` entries carry neither value nor length — only the key, so
+    the UI can say "this was passed, and withheld".
+
+    At most ``_STRUCTURED_MAX_FIELDS`` entries are returned; when args are
+    wider, a trailing ``{"kind": "elided", "count": N}`` entry reports how many
+    were dropped. This payload ships on every tool.start and again on every
+    resume, so an MCP tool with a 200-field schema must not be able to inflate
+    it without bound (measured: ~15% of a real session's resume payload is
+    already args_fields).
+
+    This is the payload the web UI expands under a tool row; the one-line
+    ``build_generic_args_preview`` below is the same data flattened.
+    """
+    if not isinstance(args, dict) or not args:
+        return []
+    ordered: list[str] = []
+    for lead in _LEAD_ARG_NAMES:
+        if lead in args and lead not in ordered:
+            ordered.append(lead)
+    ordered.extend(k for k in args if k not in ordered)
+
+    out: list[dict] = []
+    for position, key in enumerate(ordered):
+        value = args[key]
+        if value is None or value == "" or value == [] or value == {}:
+            continue
+        if len(out) >= _STRUCTURED_MAX_FIELDS:
+            # Count what is genuinely left, skipping empties like the loop does.
+            remaining = sum(
+                1
+                for k in ordered[position:]
+                if not (
+                    args[k] is None or args[k] == "" or args[k] == [] or args[k] == {}
+                )
+            )
+            if remaining:
+                out.append({"key": "", "kind": "elided", "count": remaining})
+            break
+        kind = classify_arg_field(key, value)
+        if kind == "credential":
+            # Name only. Not even a length — the length of a secret is itself
+            # a hint, and unlike freeform prose there is no reading of it that
+            # helps the user understand what the tool did.
+            out.append({"key": key, "kind": kind})
+            continue
+        if kind == "freeform":
+            out.append({"key": key, "kind": kind, "chars": len(str(value))})
+            continue
+        if kind == "shape":
+            out.append({"key": key, "kind": kind, "count": len(value)})
+            continue
+        if isinstance(value, bool):
+            rendered = "true" if value else "false"
+        elif isinstance(value, (int, float)):
+            rendered = str(value)
+        else:
+            # Literal strings are the one path where a raw value reaches the
+            # UI, so plug the URL-userinfo hole the global redactor leaves
+            # open. Scoped to this value — global URL redaction stays off.
+            # Intent prose ("what is on screen") gets a longer budget than an
+            # identifier: it is a sentence, and clipping it at 40 chars loses
+            # the verb.
+            budget = (
+                _INTENT_VALUE_MAX
+                if key.lower() in _INTENT_ARG_NAMES
+                else _GENERIC_VALUE_MAX
+            )
+            # Name-based classification can't catch a credential hiding under
+            # an innocuous key (`foo="sk-ant-api03-…"`), so apply the SHAPE
+            # matcher per value too. `build_generic_args_preview` gets this via
+            # its final pass over the joined line, but this structured payload
+            # is consumed directly by the UI and had no equivalent net.
+            # Redact BEFORE truncating: clipping a key to 40 chars can destroy
+            # the suffix the pattern needs to match, turning a would-be
+            # redaction into a leak of the first 40 characters.
+            rendered = _truncate_preview(
+                _oneline(
+                    redact_sensitive_text(
+                        redact_url_userinfo(str(value)), force=True
+                    )
+                ),
+                budget,
+            )
+        out.append({"key": key, "kind": kind, "value": rendered})
+    return out
+
+
+def build_generic_args_preview(args: dict, max_len: int | None = None) -> str | None:
+    """One-line preview built from arbitrary tool args. ``None`` if unusable.
+
+    The schema-agnostic fallback for tools with no bespoke branch. Output
+    looks like ``action=capture mode=som app=Google Chrome`` or, when prose
+    is involved, ``group_code=G9 message(13 chars)``.
+    """
+    fields = describe_arg_fields(args)
+    if not fields:
+        return None
+    parts: list[str] = []
+    for entry in fields:
+        key = entry["key"]
+        if key in _BORING_ARG_NAMES and len(parts) >= 2:
+            continue
+        if entry["kind"] == "elided":
+            # The one-line budget is far tighter than the structured cap, so
+            # this is only reachable for a tool with <4 renderable args plus a
+            # long tail of empties. Say nothing rather than "+N" noise.
+            continue
+        if entry["kind"] == "credential":
+            parts.append(f"{key}=***")
+        elif entry["kind"] == "freeform":
+            parts.append(f"{key}({entry['chars']} chars)")
+        elif entry["kind"] == "shape":
+            parts.append(f"{key}[{entry['count']}]")
+        elif key in _LEAD_ARG_NAMES and not parts:
+            # Leading operation kind reads better bare: "capture som" beats
+            # "action=capture mode=som" as the first thing the eye hits.
+            parts.append(str(entry["value"]))
+        else:
+            parts.append(f"{key}={entry['value']}")
+        if len(parts) >= _GENERIC_MAX_FIELDS:
+            break
+    if not parts:
+        return None
+    # Final safety net over the assembled line: catches credential shapes in
+    # any literal value (sk-*, Bearer, JWT, ENV assignments). Freeform prose
+    # never reaches here, so this is defence in depth rather than the only
+    # barrier.
+    preview = redact_sensitive_text(" ".join(parts), force=True)
+    return _truncate_preview(preview, max_len) or None
+
+
 def _delegate_task_goal_parts(tasks: Any, *, per_goal_len: int) -> tuple[int, list[str]]:
     if not isinstance(tasks, list):
         return 0, []
@@ -427,20 +736,61 @@ def _delegate_task_goal_parts(tasks: Any, *, per_goal_len: int) -> tuple[int, li
     return len(goals), goals
 
 
-def _browser_exec_step_label(args: dict, max_chars: int = 80) -> str | None:
-    """User-friendly step label from browser_exec code's leading comment."""
-    code = str(args.get("code", "") or "").strip()
-    if not code:
+def _computer_use_preview(args: dict) -> str | None:
+    """Phrase a ``computer_use`` call the way its approval prompt does.
+
+    Mirrors ``tools/computer_use/tool.py::_summarize_action`` (which only ever
+    reached the approval dialog, never the chat UI) and appends the target app
+    when one is scoped, since "click #7" is ambiguous across windows.
+    """
+    action = str(args.get("action") or "").strip()
+    if not action:
         return None
-    first = code.split("\n", 1)[0].strip()
-    if not first.startswith("#"):
-        return None
-    label = first.lstrip("#").strip()
-    if not label:
-        return None
-    if len(label) > max_chars:
-        label = label[: max_chars - 1] + "…"
-    return label
+    app = _oneline(str(args.get("app") or "")).strip()
+
+    if action in {"click", "double_click", "right_click", "middle_click"}:
+        if args.get("element") is not None:
+            head = f"{action} #{args['element']}"
+        elif args.get("coordinate"):
+            coord = args["coordinate"]
+            head = (
+                f"{action} at ({coord[0]},{coord[1]})"
+                if isinstance(coord, (list, tuple)) and len(coord) == 2
+                else action
+            )
+        else:
+            head = action
+    elif action == "capture":
+        head = f"capture {args.get('mode', 'som')}"
+    elif action == "drag":
+        src = args.get("from_element")
+        dst = args.get("to_element")
+        if src is None:
+            src = args.get("from_coordinate")
+        if dst is None:
+            dst = args.get("to_coordinate")
+        head = f"drag {src} → {dst}"
+    elif action == "scroll":
+        head = f"scroll {args.get('direction', '?')} x{args.get('amount', 3)}"
+    elif action == "type":
+        # The typed string can be a password or other prose the user typed —
+        # length only, matching the FREEFORM policy in describe_arg_fields.
+        head = f"type ({len(str(args.get('text') or ''))} chars)"
+    elif action == "key":
+        head = f"key {args.get('keys', '')}"
+    elif action == "set_value":
+        target = args.get("element")
+        head = f"set_value #{target}" if target is not None else "set_value"
+    elif action in {"focus_app", "launch_app"}:
+        head = f"{action} {_oneline(str(args.get('name') or args.get('app') or ''))}".strip()
+        return redact_sensitive_text(head, force=True) or None
+    elif action == "wait":
+        head = f"wait {args.get('seconds', 1)}s"
+    else:
+        head = action
+
+    preview = f"{head} · {app}" if app else head
+    return redact_sensitive_text(preview, force=True) or None
 
 
 def build_tool_preview(tool_name: str, args: dict, max_len: int | None = None) -> str | None:
@@ -448,6 +798,12 @@ def build_tool_preview(tool_name: str, args: dict, max_len: int | None = None) -
 
     *max_len* controls truncation.  ``None`` (default) defers to the global
     ``_tool_preview_max_len`` set via config; ``0`` means unlimited.
+
+    Returns ``None`` only when *args* is empty/not a dict. A tool with args
+    always gets SOMETHING: bespoke branches first, then the schema-agnostic
+    :func:`build_generic_args_preview`. Callers that used to rely on ``None``
+    to mean "this tool has no useful preview" will now get a generic line —
+    that is the point (see the block comment above ``classify_arg_field``).
     """
     if max_len is None:
         max_len = _tool_preview_max_len
@@ -463,25 +819,21 @@ def build_tool_preview(tool_name: str, args: dict, max_len: int | None = None) -
         "vision_analyze": "question",
         "skill_view": "name", "skills_list": "category",
         "cronjob": "action",
-        "execute_code": "code", "browser_exec": "code", "delegate_task": "goal",
+        "execute_code": "code", "delegate_task": "goal",
         "clarify": "question", "skill_manage": "name",
     }
 
-    # browser_exec: prefer the leading `# …` comment as a friendly step label
-    if tool_name == "browser_exec":
-        label = _browser_exec_step_label(args)
-        if label is not None:
-            return _truncate_preview(label, max_len)
-        preview = _oneline(str(args.get("code", "") or ""))
+    # computer_use: an `action`-discriminated tool whose informative args
+    # (element, coordinate, keys, app) are none of the fallback keys, so it
+    # used to preview as a bare "computer_use". The tool already builds a good
+    # phrase for its approval prompt — mirror that wording here so the chat
+    # line and the approval dialog describe the action identically.
+    if tool_name == "computer_use":
+        preview = _computer_use_preview(args)
         return _truncate_preview(preview, max_len) if preview else None
 
     # delegate_task: show goal (single) or individual task goals (batch)
     if tool_name == "delegate_task":
-        action = str(args.get("action") or "").strip().lower()
-        if action in ("list", "steer", "stop"):
-            sid = str(args.get("subagent_id") or "").strip()
-            preview = f"{action} {sid}".strip()
-            return _truncate_preview(preview, max_len)
         tasks = args.get("tasks")
         if tasks and isinstance(tasks, list):
             task_count, goals = _delegate_task_goal_parts(tasks, per_goal_len=40)
@@ -501,14 +853,13 @@ def build_tool_preview(tool_name: str, args: dict, max_len: int | None = None) -
         sid = args.get("session_id", "")
         data = args.get("data", "")
         timeout_val = args.get("timeout")
-        parts = [str(action) if action else ""]
+        parts = [action]
         if sid:
-            parts.append(str(sid)[:16])
+            parts.append(sid[:16])
         if data:
-            parts.append(f'"{_oneline(str(data)[:20])}"')
+            parts.append(f'"{_oneline(data[:20])}"')
         if timeout_val and action == "wait":
             parts.append(f"{timeout_val}s")
-        parts = [p for p in parts if p]
         return " ".join(parts) if parts else None
 
     if tool_name == "todo":
@@ -563,25 +914,20 @@ def build_tool_preview(tool_name: str, args: dict, max_len: int | None = None) -
             msg = msg[:17] + "..."
         return f"to {target}: \"{msg}\""
 
-    if tool_name == "skill_view":
-        name = _oneline(str(args.get("name") or ""))
-        file_path = args.get("file_path")
-        if file_path:
-            file_path = _oneline(str(file_path))
-            preview = f"{name} → {file_path}" if name else file_path
-        else:
-            preview = name
-        return _truncate_preview(preview, max_len) if preview else None
-
+    # Tools listed in `primary_args` have a curated "one arg says it all" key,
+    # so show that value bare. Everything else goes to the generic renderer.
+    #
+    # There used to be a guess list here — ("query", "text", "command", "path",
+    # "name", …) — probed against the args of any UNLISTED tool. It existed
+    # because the alternative was `None`/no preview at all. It is actively
+    # harmful now: it locks onto ONE key and discards the rest, so
+    # `yb_send_dm(group_code=G9, name=张三, message=…)` previewed as just
+    # "张三" — losing which group, and whether a message was even attached.
+    # The generic renderer shows every informative field, so the guess is
+    # strictly worse and is gone.
     key = primary_args.get(tool_name)
-    if not key:
-        for fallback_key in ("query", "text", "command", "path", "name", "prompt", "code", "goal"):
-            if fallback_key in args:
-                key = fallback_key
-                break
-
     if not key or key not in args:
-        return None
+        return build_generic_args_preview(args, max_len)
 
     value = args[key]
     if isinstance(value, list):
@@ -589,201 +935,12 @@ def build_tool_preview(tool_name: str, args: dict, max_len: int | None = None) -
 
     preview = _oneline(str(value))
     if not preview:
-        return None
+        # The primary key exists but is empty (e.g. `path=""`); the other args
+        # may still say something useful.
+        return build_generic_args_preview(args, max_len)
     if max_len > 0 and len(preview) > max_len:
         preview = preview[:max_len - 3] + "..."
     return preview
-
-
-def prepare_tool_preview(
-    tool_name: str,
-    args: dict | None,
-    *,
-    fallback: str,
-    max_len: int,
-) -> ToolPreview:
-    """Build one canonical compact preview before platform formatting.
-
-    The uncapped preview is rebuilt from the tool arguments when possible so
-    an upstream display cap cannot discard its link target.  Platforms then
-    receive explicit truncation and URL metadata instead of inferring either
-    fact from the rendered text.
-    """
-    full_text = build_tool_preview(tool_name, args, max_len=0) or fallback
-    text = _truncate_preview(full_text, max_len)
-    truncated = text != full_text
-    url = None
-    if truncated:
-        candidate = _display_url(full_text)
-        try:
-            parsed = urlsplit(candidate)
-        except ValueError:
-            parsed = None
-        if parsed and parsed.scheme.lower() in {"http", "https"} and parsed.netloc:
-            url = candidate
-    return ToolPreview(text=text, truncated=truncated, url=url)
-
-
-# =========================================================================
-# Friendly tool labels (human-phrased verbs for built-in tools)
-#
-# Turns "web_search <query>" into "Searching the web for <query>" — the
-# ChatGPT-style "Searching…/Reading…" surface.  Curated and built-in only:
-# we know each core tool's semantics, so the verb is fixed, not computed.
-# Custom/plugin/MCP tools have no entry and fall back to the raw preview.
-# =========================================================================
-
-# Each entry maps a built-in tool name to its present-participle verb phrase.
-# A trailing space-then-preview is appended by build_tool_label() when the
-# tool's argument preview is available (e.g. "Reading docs/api.md").
-_TOOL_VERBS: dict[str, str] = {
-    "web_search": "Searching the web",
-    "web_extract": "Reading",
-    "browser_navigate": "Browsing",
-    "browser_click": "Clicking",
-    "browser_type": "Typing",
-    "read_file": "Reading",
-    "write_file": "Writing",
-    "patch": "Editing",
-    "search_files": "Searching files",
-    "terminal": "Running",
-    "execute_code": "Running code",
-    "image_generate": "Generating image",
-    "video_generate": "Generating video",
-    "text_to_speech": "Generating speech",
-    "vision_analyze": "Looking at the image",
-    "session_search": "Searching past sessions",
-    "skill_view": "Reading skill",
-    "skills_list": "Listing skills",
-    "skill_manage": "Updating skill",
-    "delegate_task": "Delegating",
-    "cronjob": "Scheduling",
-    "clarify": "Asking",
-    "memory": "Updating memory",
-    "todo": "Updating tasks",
-}
-
-# Verbs that read better without the raw argument preview appended.
-_TOOL_VERBS_NO_PREVIEW: frozenset[str] = frozenset({
-    "skills_list",
-    "session_search",
-})
-
-# Verbs that take a "for" connector before the preview (search-style phrasing):
-# "Searching the web for <query>" reads better than "Searching the web <query>".
-_TOOL_VERBS_FOR_CONNECTOR: frozenset[str] = frozenset({
-    "web_search",
-    "search_files",
-})
-
-_friendly_tool_labels: bool = True
-
-
-def set_friendly_tool_labels(enabled: bool) -> None:
-    """Toggle friendly human-phrased tool labels (display.friendly_tool_labels)."""
-    global _friendly_tool_labels
-    _friendly_tool_labels = bool(enabled)
-
-
-def get_friendly_tool_labels() -> bool:
-    """Return whether friendly tool labels are enabled."""
-    return _friendly_tool_labels
-
-
-def get_tool_verb(tool_name: str) -> str | None:
-    """Return the friendly verb for a built-in tool, or None.
-
-    Returns None when friendly labels are disabled or the tool has no curated
-    verb (custom/plugin/MCP tools).  Callers that already hold a computed
-    argument preview can compose ``f"{verb} {preview}"`` themselves; use
-    :func:`tool_verb_connector` to pick the right joiner.
-    """
-    if not _friendly_tool_labels:
-        return None
-    return _TOOL_VERBS.get(tool_name)
-
-
-def tool_verb_connector(tool_name: str) -> str:
-    """Return the connector between a verb and its preview (" for " or " ")."""
-    return " for " if tool_name in _TOOL_VERBS_FOR_CONNECTOR else " "
-
-
-def verb_drops_preview(tool_name: str) -> bool:
-    """Whether the verb should render alone, without the argument preview."""
-    return tool_name in _TOOL_VERBS_NO_PREVIEW
-
-
-def build_status_phrase(tool_name: str, args: dict | None, max_len: int = 49) -> str | None:
-    """Build a short present-tense status phrase for platform status surfaces.
-
-    Used by text-rendering "typing" indicators (Slack's
-    ``assistant.threads.setStatus`` line) to show what the agent is doing
-    right now: ``is running scripts/run_tests.sh…`` instead of a static
-    ``is thinking...``.  The phrase is phrased to follow the bot's display
-    name ("Hermes is running …"), so it starts lowercase with "is".
-
-    Pass ``args=None`` for a verb-only phrase (``is running…``) — used when
-    ``display.live_status`` is ``verb`` to keep argument previews out of
-    shared channels.
-
-    Returns None for the ``_thinking`` pseudo-tool and when friendly labels
-    are disabled (callers fall back to their static default).  ``max_len``
-    caps the total phrase length; Slack truncates its status line around 50
-    characters, so the default stays just under that.
-    """
-    if not tool_name or tool_name == "_thinking":
-        return None
-    if not _friendly_tool_labels:
-        return None
-
-    verb = _TOOL_VERBS.get(tool_name)
-    if verb:
-        head = f"is {verb[0].lower()}{verb[1:]}"
-    else:
-        # Custom / plugin / MCP tools: generic but still informative.
-        head = f"is using {tool_name}"
-
-    phrase = head
-    if args and verb and tool_name not in _TOOL_VERBS_NO_PREVIEW:
-        preview = build_tool_preview(tool_name, args, max_len=None)
-        if preview:
-            # Previews can contain newlines (terminal commands); keep the
-            # status to the first line.
-            preview = preview.splitlines()[0].strip()
-            phrase = f"{head}{tool_verb_connector(tool_name)}{preview}"
-
-    if len(phrase) > max_len - 1:
-        phrase = phrase[: max_len - 2].rstrip() + "…"
-    else:
-        phrase = phrase + "…"
-    return phrase
-
-
-def build_tool_label(tool_name: str, args: dict, max_len: int | None = None) -> str | None:
-    """Build a human-phrased status label for a tool call.
-
-    For built-in tools with a known verb (``web_search`` -> "Searching the
-    web for ..."), returns the verb optionally followed by the argument
-    preview.  For everything else (custom/plugin/MCP tools, or when friendly
-    labels are disabled) returns the raw preview, so callers can use this as a
-    drop-in replacement for :func:`build_tool_preview`.
-    """
-    if not _friendly_tool_labels:
-        return build_tool_preview(tool_name, args, max_len=max_len)
-
-    verb = _TOOL_VERBS.get(tool_name)
-    if not verb:
-        return build_tool_preview(tool_name, args, max_len=max_len)
-
-    if tool_name in _TOOL_VERBS_NO_PREVIEW:
-        return verb
-
-    preview = build_tool_preview(tool_name, args, max_len=max_len)
-    if not preview:
-        return verb
-    if tool_name in _TOOL_VERBS_FOR_CONNECTOR:
-        return f"{verb} for {preview}"
-    return f"{verb} {preview}"
 
 
 # =========================================================================
@@ -1382,7 +1539,7 @@ def _detect_tool_failure(tool_name: str, result: str | None) -> tuple[bool, str]
     return False, ""
 
 
-def _get_cute_tool_message(
+def get_cute_tool_message(
     tool_name: str, args: dict, duration: float, result: str | None = None,
 ) -> str:
     """Generate a formatted tool completion line for CLI quiet mode.
@@ -1424,11 +1581,9 @@ def _get_cute_tool_message(
     if tool_name == "web_extract":
         urls = args.get("urls", [])
         if urls:
-            url = _display_url(urls[0] if isinstance(urls, list) else urls)
-            if not url:
-                return _wrap(f"┊ 📄 fetch     pages  {dur}")
+            url = urls[0] if isinstance(urls, list) else str(urls)
             domain = url.replace("https://", "").replace("http://", "").split("/")[0]
-            extra = f" +{len(urls)-1}" if isinstance(urls, list) and len(urls) > 1 else ""
+            extra = f" +{len(urls)-1}" if len(urls) > 1 else ""
             return _wrap(f"┊ 📄 fetch     {_trunc(domain, 35)}{extra}  {dur}")
         return _wrap(f"┊ 📄 fetch     pages  {dur}")
     if tool_name == "terminal":
@@ -1519,11 +1674,7 @@ def _get_cute_tool_message(
     if tool_name == "skills_list":
         return _wrap(f"┊ 📚 skills    list {args.get('category', 'all')}  {dur}")
     if tool_name == "skill_view":
-        label = args.get("name", "")
-        file_path = args.get("file_path")
-        if file_path:
-            label = f"{label} → {file_path}" if label else str(file_path)
-        return _wrap(f"┊ 📚 skill     {_trunc(label, 44)}  {dur}")
+        return _wrap(f"┊ 📚 skill     {_trunc(args.get('name', ''), 30)}  {dur}")
     if tool_name == "image_generate":
         return _wrap(f"┊ 🎨 create    {_trunc(args.get('prompt', ''), 35)}  {dur}")
     if tool_name == "text_to_speech":
@@ -1545,20 +1696,7 @@ def _get_cute_tool_message(
         code = args.get("code", "")
         first_line = code.strip().split("\n")[0] if code.strip() else ""
         return _wrap(f"┊ 🐍 exec      {_trunc(first_line, 35)}  {dur}")
-    if tool_name == "browser_exec":
-        label = _browser_exec_step_label(args)
-        if label is not None:
-            # Leading `# …` comment (the tool description asks for one):
-            # surface it as the user-facing step label; the code itself stays
-            # collapsed behind display.tool_preview_length.
-            return _wrap(f"┊ 🌐 browser   {label}  {dur}")
-        code = " ".join(str(args.get("code", "") or "").split())
-        return _wrap(f"┊ 🌐 browser   {_trunc(code, 35)}  {dur}")
     if tool_name == "delegate_task":
-        _action = str(args.get("action") or "").strip().lower()
-        if _action in ("list", "steer", "stop"):
-            _sid = str(args.get("subagent_id") or "").strip()
-            return _wrap(f"┊ 🔀 delegate  {_trunc(f'{_action} {_sid}'.strip(), 35)}  {dur}")
         tasks = args.get("tasks")
         if tasks and isinstance(tasks, list):
             task_count, goals = _delegate_task_goal_parts(tasks, per_goal_len=30)
@@ -1571,19 +1709,8 @@ def _get_cute_tool_message(
     return _wrap(f"┊ ⚡ {tool_name[:9]:9} {_trunc(preview, 35)}  {dur}")
 
 
-def get_cute_tool_message(
-    tool_name: str, args: dict, duration: float, result: str | None = None,
-) -> str:
-    """Render a completion label without letting cosmetic failures escape."""
-    try:
-        return _get_cute_tool_message(tool_name, args, duration, result=result)
-    except Exception as exc:  # noqa: BLE001 — display must never abort a turn
-        logger.debug("Tool completion label failed for %s: %s", tool_name, exc)
-        safe_name = tool_name[:9] if isinstance(tool_name, str) and tool_name else "tool"
-        safe_duration = f"{duration:.1f}s" if isinstance(duration, (int, float)) else "done"
-        return f"┊ ⚡ {safe_name:9} completed  {safe_duration}"
-
-
 # =========================================================================
 # Honcho session line (one-liner with clickable OSC 8 hyperlink)
 # =========================================================================
+
+

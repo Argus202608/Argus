@@ -1,7 +1,9 @@
 'use client'
 
+import type { ReactNode } from 'react'
 import * as React from 'react'
-import type { BundledLanguage, ShikiTransformer, ThemedToken } from 'shiki'
+import { useShikiHighlighter } from 'react-shiki'
+import { type BundledLanguage, codeToTokens, type ShikiTransformer, type ThemedToken } from 'shiki'
 
 import { chunkLines, type LineChunk, useFixedRowWindow } from '@/components/chat/fixed-row-window'
 import { exceedsHighlightBudget, SHIKI_THEME } from '@/components/chat/shiki-highlighter'
@@ -39,15 +41,15 @@ interface ParsedHunk {
 // plain renderer; the Shiki path omits it so syntax colors win, layering only
 // the background + border.
 const DIFF_KIND_TINT: Record<DiffKind, string> = {
-  add: 'border-(--ui-diff-add-border) bg-(--ui-diff-add-background)',
+  add: 'border-emerald-500 bg-emerald-500/12',
   context: 'border-transparent',
-  remove: 'border-(--ui-diff-remove-border) bg-(--ui-diff-remove-background)'
+  remove: 'border-rose-500 bg-rose-500/12'
 }
 
 const DIFF_KIND_TEXT: Record<DiffKind, string> = {
-  add: 'text-(--ui-diff-add-foreground)',
+  add: 'text-emerald-800 dark:text-emerald-200',
   context: '',
-  remove: 'text-(--ui-diff-remove-foreground)'
+  remove: 'text-rose-800 dark:text-rose-200'
 }
 
 const DIFF_LINE_BASE = 'block min-w-max whitespace-pre border-l-2 px-2.5 py-px'
@@ -274,8 +276,7 @@ function parseFullFileDiff(diff: string, fullText: string): DiffLine[] {
   return out
 }
 
-/** Exported for the lazily-loaded SyntaxDiff (syntax-diff.tsx). */
-export function DiffBody({ lines, syntax }: { lines: DiffLine[]; syntax?: boolean }) {
+function DiffBody({ lines, syntax }: { lines: DiffLine[]; syntax?: boolean }) {
   return (
     <>
       {lines.map((line, index) => (
@@ -382,10 +383,7 @@ function TokenizedDiffBody({
     let cancelled = false
 
     setTokens(null)
-    // Dynamic import so the multi-MB shiki chunk stays off the cold-start
-    // path — this effect only runs once a highlightable diff is on screen.
-    void import('shiki')
-      .then(({ codeToTokens }) => codeToTokens(code, { lang: language as BundledLanguage, theme }))
+    void codeToTokens(code, { lang: language as BundledLanguage, theme })
       .then(result => {
         if (!cancelled) {
           setTokens(result.tokens)
@@ -448,8 +446,7 @@ function TokenizedDiffBody({
 
 // Shiki transformer: tag each `.line` with the diff tint for its kind, so the
 // syntax-highlighted output keeps add/remove backgrounds + the gutter accent.
-// Exported for the lazily-loaded SyntaxDiff (syntax-diff.tsx).
-export function diffLineTransformer(kinds: DiffKind[]): ShikiTransformer {
+function diffLineTransformer(kinds: DiffKind[]): ShikiTransformer {
   return {
     line(node, line) {
       const kind = kinds[line - 1] ?? 'context'
@@ -466,17 +463,17 @@ export function diffLineTransformer(kinds: DiffKind[]): ShikiTransformer {
 }
 
 function SyntaxDiff({ language, lines }: { language: string; lines: DiffLine[] }) {
-  // The Shiki hook lives in a lazily-loaded module (syntax-diff.tsx) so the
-  // multi-MB shiki chunk stays off the cold-start path. Until it (and the
-  // highlight itself) resolves, show the plain colored diff — no flash.
-  return (
-    <React.Suspense fallback={<DiffBody lines={lines} />}>
-      <LazySyntaxDiff language={language} lines={lines} />
-    </React.Suspense>
-  )
-}
+  const code = React.useMemo(() => lines.map(line => line.text).join('\n'), [lines])
+  const transformers = React.useMemo(() => [diffLineTransformer(lines.map(line => line.kind))], [lines])
 
-const LazySyntaxDiff = React.lazy(() => import('./syntax-diff'))
+  const highlighted = useShikiHighlighter(code, language, SHIKI_THEME, {
+    defaultColor: 'light-dark()',
+    transformers
+  })
+
+  // Until Shiki resolves, show the plain colored diff so there's no flash.
+  return (highlighted as ReactNode) ?? <DiffBody lines={lines} />
+}
 
 interface DiffLinesProps extends Omit<React.ComponentProps<'pre'>, 'children'> {
   text: string
@@ -498,7 +495,7 @@ function overviewRuns(lines: DiffLine[]): { kind: 'add' | 'remove'; sizePct: num
   const total = lines.length || 1
   const runs: { kind: 'add' | 'remove'; sizePct: number; startPct: number }[] = []
 
-  for (let i = 0; i < lines.length;) {
+  for (let i = 0; i < lines.length; ) {
     const kind = lines[i].kind
 
     if (kind === 'context') {
@@ -540,10 +537,7 @@ function DiffOverviewRuler({ lines }: { lines: DiffLine[] }) {
       <div className="relative w-full" style={{ height: `min(100%, ${lines.length * PREVIEW_LINE_PX}px)` }}>
         {runs.map((run, index) => (
           <div
-            className={cn(
-              'absolute inset-x-0',
-              run.kind === 'add' ? 'bg-(--ui-diff-add-border)' : 'bg-(--ui-diff-remove-border)'
-            )}
+            className={cn('absolute inset-x-0', run.kind === 'add' ? 'bg-(--ui-green)' : 'bg-(--ui-red)')}
             key={index}
             style={{ height: `max(0.125rem, ${run.sizePct}%)`, top: `${run.startPct}%` }}
           />
@@ -565,20 +559,9 @@ interface FileDiffPanelProps {
   /** Render an old/new line-number gutter (the full preview diff). The compact
    *  tool-card + inline review diff leave this off. */
   showLineNumbers?: boolean
-  /** Window the rows (fixed-row virtualization) WITHOUT a gutter — for a large
-   *  diff in a scrolling pane (the review panel), so only visible rows mount
-   *  instead of highlighting every line. `showLineNumbers` implies windowing. */
-  virtualized?: boolean
 }
 
-export function FileDiffPanel({
-  className,
-  diff,
-  fullText,
-  path,
-  showLineNumbers = false,
-  virtualized = false
-}: FileDiffPanelProps) {
+export function FileDiffPanel({ className, diff, fullText, path, showLineNumbers = false }: FileDiffPanelProps) {
   const lines = React.useMemo(
     () => (fullText != null ? parseFullFileDiff(diff, fullText) : parseDiff(diff)),
     [diff, fullText]
@@ -597,79 +580,66 @@ export function FileDiffPanel({
 
   const language = shikiLanguageForFilename(path)
   const canHighlight = Boolean(language) && !exceedsHighlightBudget(fullText ?? diff)
-  const windowed = showLineNumbers || virtualized
 
-  // Windowed: we own fixed-height rows and render only the visible chunks, so a
-  // large diff never mounts (or Shiki-highlights) every line. Compact tool cards
-  // are small/clamped, so they let Shiki own the rows (SyntaxDiff).
-  const windowedBody = canHighlight ? (
+  // Full-file preview: we own the rows (tokens rendered inside) so blank lines
+  // can't collapse. Compact tool/review diffs let Shiki own the rows.
+  const body = !canHighlight ? (
+    showLineNumbers ? (
+      <PreviewDiffRows afterLines={afterRows} beforeLines={beforeRows} chunks={visibleLineChunks} />
+    ) : (
+      <DiffBody lines={lines} />
+    )
+  ) : fullText != null ? (
     <TokenizedDiffBody
       afterLines={afterRows}
       beforeLines={beforeRows}
-      chunked
+      chunked={showLineNumbers}
       chunks={visibleLineChunks}
       language={language}
       lines={lines}
     />
   ) : (
-    <PreviewDiffRows afterLines={afterRows} beforeLines={beforeRows} chunks={visibleLineChunks} />
-  )
-
-  const compactBody = !canHighlight ? (
-    <DiffBody lines={lines} />
-  ) : fullText != null ? (
-    <TokenizedDiffBody language={language} lines={lines} />
-  ) : (
     <SyntaxDiff language={language} lines={lines} />
   )
 
-  if (!windowed) {
+  if (!showLineNumbers) {
     return (
       <div className={cn(DIFF_BOX_CLASS, className)} data-slot="file-diff-panel">
-        {compactBody}
+        {body}
       </div>
     )
   }
 
-  // Windowed: a fixed-row scroller renders only the visible rows (killing the
-  // full-Shiki-of-every-line freeze on large diffs). With `showLineNumbers` a
-  // VS Code-style gutter (new number for context/adds, old for removals) sits in
-  // a left column; the scroller owns scroll so the overview ruler (an absolute
-  // sibling) stays viewport-fixed.
+  // A single line-number gutter (VS Code's inline-diff style): each row shows its
+  // own file's number — the new number for context/adds, the old number for
+  // removals — with an overview ruler pinned to the right edge. The inner div
+  // owns the scroll so the ruler (an absolute sibling) stays viewport-fixed.
   return (
     <div className={cn(DIFF_BOX_CLASS, 'relative overflow-hidden', className)} data-slot="file-diff-panel">
-      <div
-        className={cn('absolute inset-0 overflow-auto', showLineNumbers && 'pr-2.5')}
-        onScroll={onScroll}
-        ref={scrollerRef}
-      >
-        {showLineNumbers ? (
-          <div className="grid min-w-max grid-cols-[auto_minmax(0,1fr)]">
-            <div className="sticky left-0 z-1 select-none bg-(--ui-editor-surface-background) py-3 text-muted-foreground/55">
-              {beforeRows > 0 && <div aria-hidden style={{ height: beforeRows * PREVIEW_LINE_PX }} />}
-              {visibleLineChunks.map(chunk => (
-                <div className="block" key={chunk.start}>
-                  {chunk.lines.map((line, offset) => {
-                    const index = chunk.start + offset
+      <div className="absolute inset-0 overflow-auto pr-2.5" onScroll={onScroll} ref={scrollerRef}>
+        <div className="grid min-w-max grid-cols-[auto_minmax(0,1fr)]">
+          <div className="sticky left-0 z-1 select-none bg-(--ui-editor-surface-background) py-3 text-muted-foreground/55">
+            {beforeRows > 0 && <div aria-hidden style={{ height: beforeRows * PREVIEW_LINE_PX }} />}
+            {visibleLineChunks.map(chunk => (
+              <div className="block" key={chunk.start}>
+                {chunk.lines.map((line, offset) => {
+                  const index = chunk.start + offset
 
-                    return (
-                      <div
-                        className="h-5 w-9 pr-2 text-right leading-5 tabular-nums"
-                        key={`${index}-${line.oldNo}-${line.newNo}`}
-                      >
-                        {line.newNo ?? ''}
-                      </div>
-                    )
-                  })}
-                </div>
-              ))}
-              {afterRows > 0 && <div aria-hidden style={{ height: afterRows * PREVIEW_LINE_PX }} />}
-            </div>
-            <div className="min-w-0">{windowedBody}</div>
+                  return (
+                    <div
+                      className="h-5 w-9 pr-2 text-right leading-5 tabular-nums"
+                      key={`${index}-${line.oldNo}-${line.newNo}`}
+                    >
+                      {line.newNo ?? ''}
+                    </div>
+                  )
+                })}
+              </div>
+            ))}
+            {afterRows > 0 && <div aria-hidden style={{ height: afterRows * PREVIEW_LINE_PX }} />}
           </div>
-        ) : (
-          <div className="min-w-0">{windowedBody}</div>
-        )}
+          <div className="min-w-0">{body}</div>
+        </div>
       </div>
       <DiffOverviewRuler lines={lines} />
     </div>

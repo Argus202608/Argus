@@ -57,7 +57,7 @@ def remove_path_from_shell_configs():
     
     for config_path in configs:
         try:
-            content = config_path.read_text(encoding="utf-8")
+            content = config_path.read_text()
             original_content = content
             
             # Remove lines containing hermes-agent or hermes PATH entries
@@ -87,20 +87,7 @@ def remove_path_from_shell_configs():
                 new_content = new_content.replace('\n\n\n', '\n\n')
             
             if new_content != original_content:
-                from utils import atomic_write_text
-
-                # This is the user's own shell rc, not a Hermes-owned file, and
-                # nothing in this function backs it up. A bare write_text()
-                # truncates it before the new content lands, so a crash or
-                # SIGINT mid-write leaves the user with an empty or truncated
-                # ~/.zshrc -- and the enclosing `except Exception` downgrades
-                # that to a warning, so the next login just starts a bare
-                # shell. atomic_replace also resolves a symlinked rc file, so a
-                # dotfiles-repo setup keeps the symlink instead of having it
-                # replaced by a regular file. preserve_mode keeps the rc's
-                # permission bits (normally 0644) and owner (sudo-run
-                # uninstalls) instead of mkstemp's 0600/root.
-                atomic_write_text(config_path, new_content, preserve_mode=True)
+                config_path.write_text(new_content)
                 removed_from.append(config_path)
                 
         except Exception as e:
@@ -113,11 +100,7 @@ def remove_wrapper_script():
     """Remove the hermes wrapper script if it exists."""
     wrapper_paths = [
         Path.home() / ".local" / "bin" / "hermes",
-        Path.home() / ".local" / "bin" / "hermes-acp",
-        Path.home() / ".local" / "bin" / "hermes-agent",
         Path("/usr/local/bin/hermes"),
-        Path("/usr/local/bin/hermes-acp"),
-        Path("/usr/local/bin/hermes-agent"),
     ]
     
     removed = []
@@ -125,7 +108,7 @@ def remove_wrapper_script():
         if wrapper.exists():
             try:
                 # Check if it's our wrapper (contains hermes_cli reference)
-                content = wrapper.read_text(encoding="utf-8")
+                content = wrapper.read_text()
                 if 'hermes_cli' in content or 'hermes-agent' in content:
                     wrapper.unlink()
                     removed.append(wrapper)
@@ -482,7 +465,7 @@ def _uninstall_profile(profile) -> None:
             subprocess.run(
                 hermes_invocation + ["gateway", subcmd],
                 capture_output=True,
-                text=True, encoding='utf-8', errors='replace',
+                text=True,
                 timeout=60,
                 check=False,
             )
@@ -591,14 +574,6 @@ def run_uninstall(args):
     """
     project_root = get_project_root()
     hermes_home = get_hermes_home()
-
-    if bool(getattr(args, "dry_run", False)):
-        _print_uninstall_dry_run(
-            project_root=project_root,
-            hermes_home=hermes_home,
-            full_uninstall=bool(getattr(args, "full", False)),
-        )
-        return
 
     # Detect named profiles when uninstalling from the default root —
     # offer to clean them up too instead of leaving zombie HERMES_HOMEs
@@ -727,30 +702,6 @@ def run_uninstall(args):
         remove_profiles=remove_profiles,
         named_profiles=named_profiles,
     )
-
-
-def _print_uninstall_dry_run(*, project_root: Path, hermes_home: Path, full_uninstall: bool) -> None:
-    """Print the uninstall plan without stopping services or deleting files."""
-    print()
-    print(color("Dry run: no files, services, or environment entries will be changed.", Colors.CYAN, Colors.BOLD))
-    print()
-    print(color("Would inspect/remove:", Colors.YELLOW, Colors.BOLD))
-    print("  • Gateway services and standalone gateway processes")
-    print("  • Hermes PATH entries from shell configs / Windows User PATH")
-    print("  • Hermes wrapper scripts and Hermes-managed node/npm/npx symlinks")
-    print("  • Desktop Chat GUI artifacts")
-    print(f"  • Code checkout: {project_root}")
-    if full_uninstall:
-        print(f"  • Hermes config/data: {hermes_home}")
-        if _is_default_hermes_home(hermes_home):
-            profiles = _discover_named_profiles()
-            if profiles:
-                print("  • Named profiles (interactive uninstall asks before removing):")
-                for prof in profiles:
-                    print(f"    - {prof.name}: {prof.path}")
-    else:
-        print(f"  • Keep Hermes config/data: {hermes_home}")
-    print()
 
 
 def _perform_uninstall(

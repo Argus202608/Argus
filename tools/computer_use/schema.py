@@ -24,7 +24,14 @@ COMPUTER_USE_SCHEMA: Dict[str, Any] = {
         "then click by `element` index for reliability. Pixel coordinates "
         "are supported for models trained on them. Works on any window — "
         "hidden, minimized, or behind another app. Requires cua-driver to "
-        "be installed."
+        "be installed.\n"
+        "★ In a multimodal video session, do not use computer_use merely to "
+        "answer an ordinary visual question about the current or past live screen; "
+        "use query_multimodal. If the user explicitly asks only for a raw/latest "
+        "capture or to show/inspect the current live frame (no interaction), use "
+        "get_current_frame. Reserve computer_use for desktop INTERACTION (click, "
+        "type, scroll, drag, launch_app), including captures needed to carry out "
+        "that interaction."
     ),
     "parameters": {
         "type": "object",
@@ -44,24 +51,21 @@ COMPUTER_USE_SCHEMA: Dict[str, Any] = {
                     "set_value",
                     "wait",
                     "list_apps",
-                    "list_windows",
                     "focus_app",
-                    "cua_browser_state",
-                    "cua_browser_prepare",
-                    "cua_browser_navigate",
-                    "cua_browser_click",
-                    "cua_browser_type",
-                    "cua_browser_pointer",
-                    "cua_browser_dialog",
-                    "cua_browser_set_input_files",
-                    "cua_browser_download",
+                    "launch_app",
                 ],
                 "description": (
                     "Which action to perform. `capture` is free (no side "
                     "effects). All other actions require approval unless "
                     "auto-approved. Use `set_value` for select/popup elements "
                     "and sliders — it selects the matching option directly "
-                    "without opening the native menu (no focus steal)."
+                    "without opening the native menu (no focus steal). Use "
+                    "`launch_app` to OPEN / START an application that is not "
+                    "yet running (e.g. 'open Tencent Meeting'): it launches in the "
+                    "background without stealing focus and returns the new "
+                    "pid + window. This is the RIGHT way to open an app — do "
+                    "NOT try to press Win/Win+R or click the taskbar, which "
+                    "need a focused window and fail on a bare desktop capture."
                 ),
             },
             # ── capture ────────────────────────────────────────────
@@ -70,40 +74,32 @@ COMPUTER_USE_SCHEMA: Dict[str, Any] = {
                 "enum": ["som", "vision", "ax"],
                 "description": (
                     "Capture mode. `som` (default) is a screenshot with "
-                    "numbered overlays on every interactable element plus "
-                    "the AX tree — best for vision models, lets you click "
-                    "by element index. `vision` is a plain screenshot. "
-                    "`ax` is the accessibility tree only (no image; useful "
-                    "for text-only models)."
+                    "numbered overlays on every interactable element — best "
+                    "for vision models, lets you click by element index (only "
+                    "when an `app` is targeted; a whole-screen capture has no "
+                    "AX overlay). `vision` is a plain screenshot. `ax` is the "
+                    "accessibility tree only (no image; text-only models). "
+                    "NOTE: element indices only exist for app-targeted "
+                    "captures; a full-screen capture (no `app`) is vision-only "
+                    "— act on it with x/y screen coordinates."
                 ),
             },
             "app": {
                 "type": "string",
                 "description": (
-                    "Optional. Limit capture/action to a specific app "
-                    "(by name, e.g. 'Safari', or bundle ID, "
-                    "'com.apple.Safari'). If omitted, operates on the "
-                    "frontmost app's window. Pass app='screen' (or "
-                    "'desktop') to capture the OS desktop/shell surface — "
-                    "e.g. to see the wallpaper or click the taskbar. Note: "
-                    "capture is per-window; a single image cannot span "
-                    "multiple monitors, so on a multi-screen setup capture "
-                    "one window or display at a time."
-                ),
-            },
-            "pid": {
-                "type": "integer",
-                "description": (
-                    "Optional exact process target for action='capture'. Pair "
-                    "with window_id when discovery cannot resolve an X11 app."
-                ),
-            },
-            "window_id": {
-                "type": "integer",
-                "description": (
-                    "Optional exact native window target for action='capture'. "
-                    "Pair with pid when an external cua-driver list_windows "
-                    "lookup has already identified the window."
+                    "Optional. Target a SPECIFIC app window (by name, e.g. "
+                    "'Safari', or bundle ID 'com.apple.Safari') to get its "
+                    "accessibility tree + numbered element overlay, then click "
+                    "by element index. Works even on hidden/minimized/"
+                    "background windows. IF OMITTED (or app='screen'/"
+                    "'desktop'), captures the ENTIRE display — a true "
+                    "full-screen screenshot — and subsequent click(x,y)/"
+                    "scroll(x,y) use TRUE SCREEN pixel coordinates (no element "
+                    "indices). Use the full-screen capture to see the whole "
+                    "desktop / find where things are, then either act via x/y "
+                    "screen coords or re-capture with app='<AppName>' for "
+                    "precise element-index clicks. (A single image can't span "
+                    "multiple monitors — capture one display at a time.)"
                 ),
             },
             "max_elements": {
@@ -143,9 +139,9 @@ COMPUTER_USE_SCHEMA: Dict[str, Any] = {
                 "minItems": 2,
                 "maxItems": 2,
                 "description": (
-                    "Pixel coordinates [x, y] relative to the captured window "
-                    "screenshot (top-left origin). Only use this if no element "
-                    "index is available."
+                    "Pixel coordinates [x, y] in logical screen space (as "
+                    "returned by capture width/height). Only use this if "
+                    "no element index is available."
                 ),
             },
             "button": {
@@ -221,118 +217,40 @@ COMPUTER_USE_SCHEMA: Dict[str, Any] = {
             "raise_window": {
                 "type": "boolean",
                 "description": (
-                    "Only for action='focus_app'. If true, brings the "
-                    "window to front (DISRUPTS the user). Default false "
-                    "— input is routed to the app without raising, "
-                    "matching the background co-work model."
+                    "Only for action='focus_app'. If true, actually brings the "
+                    "window to the front (needed to switch to an app and type into "
+                    "it; DISRUPTS the user's current focus). Default false — input "
+                    "is routed to the app without raising, matching the background "
+                    "co-work model. Note: if the window is on another Space / "
+                    "minimized, the raise may fail on macOS — the focus_app result "
+                    "says so; do NOT loop-retry, ask the user to move the window to "
+                    "the current Space instead."
                 ),
             },
-            # ── delivery (verify → escalate ladder) ────────────────
-            "delivery_mode": {
+            # ── launch_app ─────────────────────────────────────────
+            "path": {
                 "type": "string",
-                "enum": ["background", "foreground"],
                 "description": (
-                    "How input is delivered, for the input actions (click, "
-                    "double_click, right_click, drag, scroll, type, key). "
-                    "`background` (DEFAULT) routes input to the target without "
-                    "raising it or stealing focus — the co-work model. "
-                    "`foreground` briefly fronts the window, acts, then "
-                    "restores the prior frontmost app. A `confirmed` effect is "
-                    "done. For `unverifiable`, inspect fresh state before any "
-                    "retry even if escalation is recommended. Escalate only "
-                    "after `suspected_noop` or a structured refusal. Do not "
-                    "predict the rung from the app being Electron/Chromium. "
-                    "Foreground is a visible focus change and needs its own "
-                    "approval."
+                    "For action='launch_app': full path to the executable "
+                    "(Windows, e.g. 'C:\\\\Program Files\\\\Tencent\\\\WeMeet\\\\"
+                    "wemeetapp.exe'). Most reliable launch method on Windows. "
+                    "If you don't know the path, first try `name` (display "
+                    "name); the driver resolves it via the Start-menu / "
+                    "AppsFolder index. Launches in the background without "
+                    "stealing focus."
                 ),
             },
-            "bring_to_front": {
-                "type": "boolean",
+            "name": {
+                "type": "string",
                 "description": (
-                    "Optional and only valid with delivery_mode='foreground'. "
-                    "Explicitly invokes cua-driver's standalone bring_to_front "
-                    "tool before the input; it is never passed as an input "
-                    "property. This persistent focus change has a separate "
-                    "approval scope. Default false."
+                    "For action='launch_app': app display name to launch "
+                    "(e.g. 'Tencent Meeting', 'wemeetapp', 'Notepad'). Resolved via "
+                    "the Start-menu / shell:AppsFolder index, falling back to "
+                    "a PATH search. Prefer `path` when known. (Distinct from "
+                    "`app`, which TARGETS an already-running window for "
+                    "capture/focus_app.)"
                 ),
             },
-            # ── cua-driver typed browser route ─────────────────────
-            "tab_id": {
-                "type": "string",
-                "description": "Opaque tab capability returned by cua_browser_state.",
-            },
-            "ref": {
-                "type": "string",
-                "description": "Current semantic ref from the latest cua_browser_state snapshot.",
-            },
-            "destination_ref": {
-                "type": "string",
-                "description": "Current destination ref for a typed pointer action.",
-            },
-            "url": {"type": "string", "description": "URL for cua_browser_navigate."},
-            "input_route": {
-                "type": "string",
-                "enum": ["trusted", "dom_event"],
-                "description": (
-                    "Typed-browser trust class. Defaults to trusted. dom_event "
-                    "is an explicit downgrade and is never selected silently."
-                ),
-            },
-            "snapshot_format": {
-                "type": "string",
-                "enum": ["semantic_v2", "dom_refs_v1"],
-                "description": "Typed-browser snapshot format; semantic_v2 is the default.",
-            },
-            "query": {"type": "string", "description": "Optional browser-state query."},
-            "scope_ref": {"type": "string", "description": "Optional current ref to scope a snapshot."},
-            "continuation": {"type": "string", "description": "Continuation minted by the current snapshot."},
-            "profile_mode": {
-                "type": "string",
-                "enum": ["isolated_new", "isolated_named", "existing_profile"],
-                "description": (
-                    "Browser preparation mode. existing_profile is decided by "
-                    "cua-driver's immutable permission mode: standard requires a "
-                    "certified protected host; explicit Hermes YOLO uses a private "
-                    "unrestricted daemon."
-                ),
-            },
-            "profile_name": {"type": "string", "description": "Name for isolated_named setup."},
-            "allow_launch": {
-                "type": "boolean",
-                "description": "Explicitly allow launch of a driver-owned isolated browser.",
-            },
-            "browser_pointer_action": {
-                "type": "string",
-                "enum": ["hover", "right_click", "double_click", "scroll", "drag"],
-                "description": "Operation for cua_browser_pointer.",
-            },
-            "browser_dialog_action": {
-                "type": "string",
-                "enum": ["inspect", "accept", "dismiss"],
-                "description": "Page JavaScript dialog action; native prompts stay on the native ladder.",
-            },
-            "browser_type_mode": {
-                "type": "string",
-                "enum": ["insert_text", "keystrokes"],
-                "description": "Delivery form for cua_browser_type; defaults to insert_text.",
-            },
-            "dialog_id": {"type": "string", "description": "Opaque page-dialog capability."},
-            "prompt_text": {"type": "string", "description": "Optional text for a page prompt dialog."},
-            "files": {
-                "type": "array",
-                "items": {"type": "string"},
-                "description": "Explicit paths for cua_browser_set_input_files.",
-            },
-            "destination_root": {
-                "type": "string",
-                "description": "Approved destination root for cua_browser_download.",
-            },
-            "delta_x": {"type": "number", "description": "Typed pointer horizontal delta."},
-            "delta_y": {"type": "number", "description": "Typed pointer vertical delta."},
-            "x": {"type": "number", "description": "Typed browser viewport x coordinate."},
-            "y": {"type": "number", "description": "Typed browser viewport y coordinate."},
-            "to_x": {"type": "number", "description": "Typed browser drag destination x."},
-            "to_y": {"type": "number", "description": "Typed browser drag destination y."},
             # ── return shape ───────────────────────────────────────
             "capture_after": {
                 "type": "boolean",

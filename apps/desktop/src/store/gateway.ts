@@ -1,9 +1,8 @@
-import { type ConnectionState, type GatewayEvent, resolveGatewayWsUrl } from '@hermes/shared'
+import type { ConnectionState, GatewayEvent } from '@hermes/shared'
 import { atom } from 'nanostores'
 
 import { HermesGateway } from '@/hermes'
-import { reconnectBackoffDelayMs } from '@/lib/reconnect-backoff'
-import { markNativeNotifyBaseline } from '@/store/notify-baseline'
+import { resolveGatewayWsUrl } from '@/lib/gateway-ws-url'
 import { setGatewayState } from '@/store/session'
 
 // ── Multi-profile gateway routing ──────────────────────────────────────────
@@ -22,8 +21,28 @@ const normKey = (profile: string | null | undefined): string => (profile ?? '').
 // narrow the getter to a constant across guards (it genuinely changes).
 const isOpen = (gateway: HermesGateway | null): boolean => gateway?.connectionState === 'open'
 
+// The active gateway instance, exposed for inline message-stream components
+// (e.g. inline ClarifyTool, model overlays) that call gateway methods without
+// the instance threaded down through props.
+export const $gateway = atom<HermesGateway | null>(null)
+
 interface RegistryConfig {
   onEvent: (event: GatewayEvent) => void
+}
+
+let config: RegistryConfig | null = null
+
+export function configureGatewayRegistry(cfg: RegistryConfig): void {
+  config = cfg
+}
+
+// ── Primary (window) backend ───────────────────────────────────────────────
+let primaryGateway: HermesGateway | null = null
+let primaryProfile = 'default'
+
+export function setPrimaryGateway(gateway: HermesGateway | null, profile = 'default'): void {
+  primaryGateway = gateway
+  primaryProfile = normKey(profile)
 }
 
 // ── Secondary (pool) backends ──────────────────────────────────────────────
@@ -40,97 +59,20 @@ interface Secondary {
   wantOpen: boolean
 }
 
-// ── HMR-stable module state ─────────────────────────────────────────────────
-// All mutable singletons (live sockets, active-profile routing, the event
-// registry) live in ONE container parked on globalThis, NOT in module-level
-// `let`/`const` bindings. Reason: this module is imported widely without an HMR
-// boundary that accepts it, so editing it (or anything that fans out to it)
-// makes Vite issue a FULL PAGE RELOAD — which would kill every live socket and
-// drop the agent session on an unrelated edit. Persisting the state on
-// globalThis + self-accepting HMR (bottom of file) turns that full reload into
-// an in-place hot update that preserves the sockets. Production strips
-// import.meta.hot, and a fresh page realm starts with an empty container, so the
-// runtime behavior is identical to plain module state.
-interface GatewayRegistryState {
-  config: RegistryConfig | null
-  primaryGateway: HermesGateway | null
-  primaryProfile: string
-  activeKey: string
-  secondaries: Map<string, Secondary>
-  $gateway: ReturnType<typeof atom<HermesGateway | null>>
-}
+const secondaries = new Map<string, Secondary>()
 
-const STATE_KEY = Symbol.for('hermes.desktop.gatewayRegistryState')
-
-function createRegistryState(): GatewayRegistryState {
-  return {
-    config: null,
-    primaryGateway: null,
-    primaryProfile: 'default',
-    activeKey: 'default',
-    secondaries: new Map<string, Secondary>(),
-    // The active gateway instance, exposed for inline message-stream
-    // components (inline ClarifyTool, model overlays) that call gateway
-    // methods without the instance threaded down through props.
-    $gateway: atom<HermesGateway | null>(null)
-  }
-}
-
-// Dev only: park the singletons on globalThis so an HMR re-eval of this module
-// (self-accepted at the bottom) hands back the SAME live sockets/atoms instead
-// of resetting them — that's what keeps the agent session alive across UI edits.
-// `import.meta.hot` is undefined in production, so Vite dead-code-eliminates the
-// entire globalThis branch and prod uses a plain module-local singleton — no
-// globalThis, no Symbol.for. Both realms load the module once, so the container's
-// shape and lifetime are identical either way.
-function gatewayState(): GatewayRegistryState {
-  if (import.meta.hot) {
-    const store = globalThis as unknown as { [STATE_KEY]?: GatewayRegistryState }
-    store[STATE_KEY] ??= createRegistryState()
-
-    return store[STATE_KEY]
-  }
-
-  return createRegistryState()
-}
-
-const g = gatewayState()
-
-// Re-exported as a stable binding: the atom instance lives in `g`, so every hot
-// reload of this module hands back the SAME atom subscribers are already wired
-// to. (A fresh `atom()` per reload would orphan existing subscriptions.)
-export const $gateway = g.$gateway
-
-export function configureGatewayRegistry(cfg: RegistryConfig): void {
-  g.config = cfg
-}
-
-/**
- * Feed a synthetic event through the exact same fan-out a real socket frame
- * takes (`config.onEvent` → the desktop's `handleGatewayEvent`). Used by
- * dev-only tooling to exercise the real event branches (e.g. the credit-notice
- * demo) without a backend that can produce the event on demand. No-op until a
- * registry is configured.
- */
-export function emitLocalGatewayEvent(event: GatewayEvent): void {
-  g.config?.onEvent(event)
-}
-
-export function setPrimaryGateway(gateway: HermesGateway | null, profile = 'default'): void {
-  g.primaryGateway = gateway
-  g.primaryProfile = normKey(profile)
-}
+let activeKey = 'default'
 
 export function isActivePrimary(): boolean {
-  return g.activeKey === g.primaryProfile
+  return activeKey === primaryProfile
 }
 
 export function activeGateway(): HermesGateway | null {
-  if (g.activeKey === g.primaryProfile) {
-    return g.primaryGateway
+  if (activeKey === primaryProfile) {
+    return primaryGateway
   }
 
-  return g.secondaries.get(g.activeKey)?.gateway ?? g.primaryGateway
+  return secondaries.get(activeKey)?.gateway ?? primaryGateway
 }
 
 // Mirror a backend's connection state into the global composer state, but only
@@ -138,25 +80,19 @@ export function activeGateway(): HermesGateway | null {
 // composer reflect the active profile's socket without a background reconnect
 // flipping the foreground enabled/disabled state.
 function reportGatewayState(profile: string, state: ConnectionState): void {
-  // Any socket opening replays parked prompts; hold OS notifications so a
-  // launch/reconnect doesn't alert about state that already existed.
-  if (state === 'open') {
-    markNativeNotifyBaseline()
-  }
-
-  if (normKey(profile) === g.activeKey) {
+  if (normKey(profile) === activeKey) {
     setGatewayState(state)
   }
 }
 
 export function reportPrimaryGatewayState(state: ConnectionState): void {
-  reportGatewayState(g.primaryProfile, state)
+  reportGatewayState(primaryProfile, state)
 }
 
 function setActive(profile: string): void {
-  g.activeKey = normKey(profile)
+  activeKey = normKey(profile)
   const gateway = activeGateway()
-  g.$gateway.set(gateway)
+  $gateway.set(gateway)
   setGatewayState(gateway?.connectionState ?? 'closed')
 }
 
@@ -185,9 +121,8 @@ function scheduleReconnect(entry: Secondary): void {
     return
   }
 
-  // Full-jitter exponential backoff — same shape (and same reason: avoid a
-  // reconnect storm against a restarting gateway) as the primary's.
-  const delay = reconnectBackoffDelayMs(entry.reconnectAttempt)
+  // 1s, 2s, 4s … capped at 15s — same backoff shape as the primary.
+  const delay = Math.min(15_000, 1_000 * 2 ** Math.min(entry.reconnectAttempt, 4))
   entry.reconnectAttempt += 1
   entry.reconnectTimer = setTimeout(() => {
     entry.reconnectTimer = null
@@ -230,7 +165,7 @@ function createSecondary(profile: string): Secondary {
     wantOpen: true
   }
 
-  entry.offEvent = gateway.onEvent(event => g.config?.onEvent({ ...event, profile }))
+  entry.offEvent = gateway.onEvent(event => config?.onEvent(event))
   entry.offState = gateway.onState(state => {
     reportGatewayState(profile, state)
 
@@ -242,58 +177,9 @@ function createSecondary(profile: string): Secondary {
     }
   })
 
-  g.secondaries.set(profile, entry)
+  secondaries.set(profile, entry)
 
   return entry
-}
-
-// True when `profile`'s backend route resolves to the SHARED primary backend
-// (global-remote case 3 in resolveProfileBackendRoute): the descriptor comes
-// back as the primary connection tagged with `profile`. Own-remote-override
-// and local pooled descriptors are never tagged. Dialing a second socket at
-// that descriptor is wrong — over SSH the second dial fails (tunnel/token are
-// per-backend) and the closed socket poisons the active gateway with
-// "not connected" even though the primary is open right next to it.
-async function sharedPrimaryRoute(profile: string): Promise<boolean> {
-  const desktop = window.hermesDesktop
-
-  if (!desktop) {
-    return false
-  }
-
-  try {
-    const conn = await desktop.getConnection(profile)
-
-    return Boolean(conn && typeof conn === 'object' && (conn as { profile?: string }).profile)
-  } catch {
-    return false
-  }
-}
-
-// Open `profile`'s socket WITHOUT making it active — the hover-intent pre-warm
-// (store/profile). Runs the same spawn + connect chain as a real switch, so by
-// click time ensureGatewayForProfile finds an open socket and just activates
-// it. No scheduleReconnect on failure: a hover is speculative, so a dead
-// backend must not start a background retry loop — the real switch owns retry
-// and error UX. An already-open (or primary) profile is a no-op.
-export async function openGatewayForProfile(profile: string): Promise<void> {
-  const key = normKey(profile)
-
-  if (key === g.primaryProfile) {
-    return
-  }
-
-  if (await sharedPrimaryRoute(key)) {
-    // Served by the primary backend — there is no per-profile socket to warm.
-    return
-  }
-
-  const entry = g.secondaries.get(key) ?? createSecondary(key)
-  entry.wantOpen = true
-
-  if (!isOpen(entry.gateway)) {
-    await openSecondary(entry)
-  }
 }
 
 // Make `profile` the active gateway, lazily opening its socket if needed. The
@@ -301,24 +187,13 @@ export async function openGatewayForProfile(profile: string): Promise<void> {
 export async function ensureGatewayForProfile(profile: string): Promise<void> {
   const key = normKey(profile)
 
-  if (key === g.primaryProfile) {
+  if (key === primaryProfile) {
     setActive(key)
 
     return
   }
 
-  // Global-remote share (routing case 3): one remote host serves every
-  // profile through the PRIMARY socket, scoped per request. Activate the
-  // primary instead of dialing a doomed duplicate socket at the same
-  // descriptor — $activeGatewayProfile still moves to `key`, so request
-  // scoping and profile-aware surfaces behave identically.
-  if (await sharedPrimaryRoute(key)) {
-    setActive(g.primaryProfile)
-
-    return
-  }
-
-  let entry = g.secondaries.get(key)
+  let entry = secondaries.get(key)
 
   if (!entry) {
     entry = createSecondary(key)
@@ -343,11 +218,11 @@ export async function ensureGatewayForProfile(profile: string): Promise<void> {
 // Reconnect the active gateway after a transient request failure. Primary
 // reconnects are owned by use-gateway-boot, so we only drive secondaries here.
 export async function ensureActiveGatewayOpen(): Promise<HermesGateway | null> {
-  if (g.activeKey === g.primaryProfile) {
-    return g.primaryGateway
+  if (activeKey === primaryProfile) {
+    return primaryGateway
   }
 
-  const entry = g.secondaries.get(g.activeKey)
+  const entry = secondaries.get(activeKey)
 
   if (!entry) {
     return null
@@ -362,7 +237,7 @@ export async function ensureActiveGatewayOpen(): Promise<HermesGateway | null> {
 
 // Wake signal (sleep/network/visibility): nudge every live secondary back open.
 export function reconnectSecondaryGateways(): void {
-  for (const entry of g.secondaries.values()) {
+  for (const entry of secondaries.values()) {
     if (!entry.wantOpen || isOpen(entry.gateway)) {
       continue
     }
@@ -378,47 +253,38 @@ export function reconnectSecondaryGateways(): void {
 export function touchSecondaryGateways(): void {
   const desktop = window.hermesDesktop
 
-  for (const entry of g.secondaries.values()) {
+  for (const entry of secondaries.values()) {
     if (entry.wantOpen) {
       void desktop?.touchBackend?.(entry.profile).catch(() => undefined)
     }
   }
 }
 
-// Tear a secondary down: stop its reconnect loop, detach listeners, close the
-// socket. Caller handles removal from the map.
-function disposeSecondary(entry: Secondary): void {
-  entry.wantOpen = false
-  clearTimer(entry)
-  entry.offEvent()
-  entry.offState()
-  entry.gateway.close()
-}
-
 // Close + evict secondaries whose profile is neither active nor in `keep`
 // (profiles with a running / needs-input session). Bounds cost to live work.
 export function pruneSecondaryGateways(keep: Set<string>): void {
-  for (const [key, entry] of [...g.secondaries]) {
-    if (key === g.activeKey || keep.has(key)) {
+  for (const [key, entry] of [...secondaries]) {
+    if (key === activeKey || keep.has(key)) {
       continue
     }
 
-    disposeSecondary(entry)
-    g.secondaries.delete(key)
+    entry.wantOpen = false
+    clearTimer(entry)
+    entry.offEvent()
+    entry.offState()
+    entry.gateway.close()
+    secondaries.delete(key)
   }
 }
 
 export function closeSecondaryGateways(): void {
-  for (const entry of g.secondaries.values()) {
-    disposeSecondary(entry)
+  for (const entry of secondaries.values()) {
+    entry.wantOpen = false
+    clearTimer(entry)
+    entry.offEvent()
+    entry.offState()
+    entry.gateway.close()
   }
 
-  g.secondaries.clear()
-}
-
-// Self-accept so editing this module (or a fan-out that lands here) is an
-// in-place hot update instead of a full page reload — the live sockets in `g`
-// survive the swap. Dev-only: production strips import.meta.hot.
-if (import.meta.hot) {
-  import.meta.hot.accept()
+  secondaries.clear()
 }

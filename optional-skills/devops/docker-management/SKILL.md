@@ -1,6 +1,6 @@
 ---
 name: docker-management
-description: Manage Docker containers, images, volumes, and Compose.
+description: Manage Docker containers, images, volumes, networks, and Compose stacks — lifecycle ops, debugging, cleanup, and Dockerfile optimization.
 version: 1.0.0
 author: sprmn24
 license: MIT
@@ -178,8 +178,7 @@ services:
     ports:
       - "3000:3000"
     environment:
-      # Password comes from the POSTGRES_PASSWORD secret, not the URL
-      - DATABASE_URL=postgres://mydb_user@db:5432/mydb
+      - DATABASE_URL=postgres://user:pass@db:5432/mydb
     depends_on:
       db:
         condition: service_healthy

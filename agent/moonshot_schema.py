@@ -15,9 +15,6 @@ and MoonshotAI/kimi-cli#1595:
 2. When ``anyOf`` is used, ``type`` must be on the ``anyOf`` children, not
    the parent.  Presence of both causes "type should be defined in anyOf
    items instead of the parent schema".
-3. Every object schema must carry a ``required`` array, even an empty one.
-   Standard JSON Schema allows omitting it; Moonshot 400s with
-   "required must be an array".
 
 The ``#/definitions/...`` → ``#/$defs/...`` rewrite for draft-07 refs is
 handled separately in ``tools/mcp_tool._normalize_mcp_input_schema`` so it
@@ -133,30 +130,7 @@ def _repair_schema(node: Any, is_schema: bool = True) -> Any:
             else:
                 repaired.pop("enum")
 
-    # Rule 4: object schemas must carry a `required` array, even when empty.
-    if repaired.get("type") == "object":
-        repaired = _ensure_required_array(repaired)
-
     return repaired
-
-
-def _ensure_required_array(node: Dict[str, Any]) -> Dict[str, Any]:
-    """Guarantee an object schema carries a ``required`` array (Moonshot rule).
-
-    Standard JSON Schema lets you omit ``required`` when nothing is required;
-    Moonshot 400s on that ("required must be an array").  Ensure the key is a
-    list.  When ``properties`` is known, prune ``required`` entries that don't
-    name a real property — defensive against dangling names, which Moonshot
-    also rejects.  Mutates and returns ``node``.
-    """
-    props = node.get("properties")
-    req = node.get("required")
-    if isinstance(req, list):
-        if isinstance(props, dict):
-            node["required"] = [r for r in req if r in props]
-    else:
-        node["required"] = []
-    return node
 
 
 def _fill_missing_type(node: Dict[str, Any]) -> Dict[str, Any]:
@@ -200,18 +174,17 @@ def sanitize_moonshot_tool_parameters(parameters: Any) -> Dict[str, Any]:
     applied.  Input is not mutated.
     """
     if not isinstance(parameters, dict):
-        return {"type": "object", "properties": {}, "required": []}
+        return {"type": "object", "properties": {}}
 
     repaired = _repair_schema(copy.deepcopy(parameters), is_schema=True)
     if not isinstance(repaired, dict):
-        return {"type": "object", "properties": {}, "required": []}
+        return {"type": "object", "properties": {}}
 
     # Top-level must be an object schema
     if repaired.get("type") != "object":
         repaired["type"] = "object"
     if "properties" not in repaired:
         repaired["properties"] = {}
-    _ensure_required_array(repaired)
 
     return repaired
 
@@ -259,11 +232,26 @@ def is_moonshot_model(model: str | None) -> bool:
     tail = bare.rsplit("/", 1)[-1]
     if tail.startswith("kimi-") or tail == "kimi":
         return True
-    # Kimi Coding Plan serves K3 under the bare slug ``k3`` (plus dated /
-    # suffixed variants like ``k3.1`` or ``k3-turbo``).
-    if tail == "k3" or tail.startswith(("k3.", "k3-")):
-        return True
     # Vendor-prefixed forms commonly used on aggregators
     if "moonshot" in bare or "/kimi" in bare or bare.startswith("kimi"):
         return True
     return False
+
+
+def is_thinking_only_moonshot_model(model: str | None) -> bool:
+    """True for Kimi/Moonshot models that ONLY support thinking mode and REJECT
+    ``thinking: {"type": "disabled"}`` with HTTP 400
+    ("invalid thinking: only type=enabled is allowed for this model").
+
+    Currently the ``kimi-k2.7-code`` family (incl. ``-highspeed``). k2.6 / k2.5
+    are hybrid and DO allow disabling thinking, so they are NOT flagged here.
+    Callers must never send a disabled-thinking flag to a model this returns
+    True for — omit the thinking key (default = enabled) instead.
+    """
+    if not is_moonshot_model(model):
+        return False
+    bare = (model or "").strip().lower()
+    tail = bare.rsplit("/", 1)[-1]
+    # Match k2.7-code / k2-7-code / kimi-k2.7-code-highspeed, tolerant of the
+    # dot-vs-dash version separator aggregators sometimes use.
+    return "k2.7-code" in tail or "k2-7-code" in tail

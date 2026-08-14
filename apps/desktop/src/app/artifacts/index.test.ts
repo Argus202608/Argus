@@ -1,9 +1,8 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 
-import { $connection } from '@/store/session'
 import type { SessionInfo, SessionMessage } from '@/types/hermes'
 
-import { artifactImageSrc, collectArtifactsForSession, loadArtifactsForSessions } from './artifact-utils'
+import { collectArtifactsForSession } from './index'
 
 function makeSession(overrides: Partial<SessionInfo> = {}): SessionInfo {
   return {
@@ -25,12 +24,6 @@ function makeSession(overrides: Partial<SessionInfo> = {}): SessionInfo {
 }
 
 describe('collectArtifactsForSession', () => {
-  afterEach(() => {
-    vi.unstubAllGlobals()
-    vi.clearAllMocks()
-    $connection.set(null)
-  })
-
   it('indexes plain https links from assistant text', () => {
     const artifacts = collectArtifactsForSession(makeSession(), [
       {
@@ -65,79 +58,5 @@ describe('collectArtifactsForSession', () => {
       kind: 'link',
       value: 'https://example.com/changelog/latest'
     })
-  })
-
-  it('resolves remote image artifact thumbnails through the desktop fs bridge', async () => {
-    const api = vi.fn(async ({ path }: { path: string }) => {
-      if (path.startsWith('/api/fs/read-data-url?')) {
-        return { dataUrl: 'data:image/jpeg;base64,cmVtb3Rl' }
-      }
-
-      throw new Error(`unexpected path ${path}`)
-    })
-
-    vi.stubGlobal('window', { hermesDesktop: { api } })
-    $connection.set({ baseUrl: 'https://gw', mode: 'remote', token: 'secret' } as never)
-
-    const path = '/Users/me/.hermes/skills/work-esab/references/images/manual-step03.jpeg'
-    const downloadHref = `https://gw/api/files/download?path=${encodeURIComponent(path)}&token=secret`
-
-    await expect(artifactImageSrc(path, downloadHref)).resolves.toBe('data:image/jpeg;base64,cmVtb3Rl')
-
-    expect(api).toHaveBeenCalledWith({
-      path: '/api/fs/read-data-url?path=%2FUsers%2Fme%2F.hermes%2Fskills%2Fwork-esab%2Freferences%2Fimages%2Fmanual-step03.jpeg'
-    })
-  })
-})
-
-describe('loadArtifactsForSessions', () => {
-  it('loads transcripts serially and continues after a session fails', async () => {
-    const sessions = [
-      makeSession({ id: 'session-1' }),
-      makeSession({ id: 'session-2' }),
-      makeSession({ id: 'session-3' })
-    ]
-
-    const callOrder: string[] = []
-    let activeLoads = 0
-    let maxActiveLoads = 0
-
-    const result = await loadArtifactsForSessions(sessions, async session => {
-      activeLoads += 1
-      maxActiveLoads = Math.max(maxActiveLoads, activeLoads)
-      callOrder.push(`start:${session.id}`)
-
-      try {
-        await Promise.resolve()
-
-        if (session.id === 'session-2') {
-          throw new Error('Session transcript exceeds the Desktop safe-load limit')
-        }
-
-        return [
-          {
-            content: `https://example.com/${session.id}.png`,
-            role: 'assistant',
-            timestamp: 2000
-          }
-        ]
-      } finally {
-        callOrder.push(`end:${session.id}`)
-        activeLoads -= 1
-      }
-    })
-
-    expect(maxActiveLoads).toBe(1)
-    expect(callOrder).toEqual([
-      'start:session-1',
-      'end:session-1',
-      'start:session-2',
-      'end:session-2',
-      'start:session-3',
-      'end:session-3'
-    ])
-    expect(result.artifacts.map(artifact => artifact.sessionId)).toEqual(['session-1', 'session-3'])
-    expect(result.failures).toHaveLength(1)
-    expect(result.failures[0]?.session.id).toBe('session-2')
   })
 })

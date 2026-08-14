@@ -1,16 +1,18 @@
 """
-yuanbao_tools.py - 元宝平台工具集
+yuanbao_tools.py — Yuanbao platform toolset.
 
-提供以下工具函数，供 hermes-agent 的 "hermes-yuanbao" toolset 使用：
-  - get_group_info        : 查询群基本信息（群名、群主、成员数）
-  - query_group_members   : 查询群成员（按名搜索、列举 bot、列举全部）
-  - search_sticker        : 按关键词搜索内置贴纸（返回候选列表，含 sticker_id/name/description）
-  - send_sticker          : 向当前会话或指定 chat_id 发送贴纸（TIMFaceElem）
-  - send_dm               : 发送私聊消息（按昵称查找用户并发送）
+Tools exposed here, consumed by the "hermes-yuanbao" toolset:
+  - get_group_info        : group basic info (name, owner, member count)
+  - query_group_members   : query group members (by-name search, list bots, list all)
+  - search_sticker        : keyword-search the bundled sticker table
+                            (returns candidates with sticker_id / name / description)
+  - send_sticker          : send a sticker (TIMFaceElem) to the current chat or a given chat_id
+  - send_dm               : send a direct message (looks up the user by nickname)
 
-对齐 chatbot-web/yuanbao-openclaw-plugin 的 sticker-search/sticker-send 行为：
-LLM 应先用 search_sticker 找到合适的 sticker_id（或直接传中文 name），再用 send_sticker
-发送。不要在文本中夹杂裸的 Unicode emoji 当作贴纸。
+Aligned with chatbot-web/yuanbao-openclaw-plugin's sticker-search / sticker-send
+behaviour: the LLM should first call search_sticker to obtain a sticker_id (or
+pass a Chinese `name` directly), then call send_sticker. Do NOT embed raw
+Unicode emoji as stickers in message text.
 
 The active adapter singleton lives in ``gateway.platforms.yuanbao`` and is
 accessed via ``get_active_adapter()``.
@@ -51,7 +53,7 @@ MENTION_HINT = (
 # ---------------------------------------------------------------------------
 
 async def get_group_info(group_code: str) -> dict:
-    """查询群基本信息（群名、群主、成员数）。"""
+    """Query group basic info (name, owner, member count)."""
     if not group_code:
         return {"success": False, "error": "group_code is required"}
 
@@ -85,13 +87,12 @@ async def query_group_members(
     name: str = "",
     mention: bool = False,
 ) -> dict:
-    """
-    统一的群成员查询工具（对齐 TS query_session_members）。
+    """Unified group-member query tool (aligned with TS query_session_members).
 
     action:
-      - find      : 按昵称模糊搜索
-      - list_bots : 列出 bot 和元宝 AI
-      - list_all  : 列出全部成员
+      - find      : fuzzy search by nickname
+      - list_bots : list bots and Yuanbao AI
+      - list_all  : list every member
     """
     if not group_code:
         return {"success": False, "error": "group_code is required"}
@@ -170,11 +171,10 @@ async def query_group_members(
 
 
 async def search_sticker(query: str = "", limit: int = 10) -> dict:
-    """
-    在内置贴纸表中按关键词模糊搜索，返回 Top-N 候选。
+    """Fuzzy-search the bundled sticker table by keyword; return the Top-N candidates.
 
-    返回每条候选的 sticker_id / name / description / package_id，
-    供 LLM 选择后传给 send_sticker。空 query 时返回前 N 条。
+    Each candidate carries sticker_id / name / description / package_id — the
+    LLM picks one and passes it to send_sticker. Empty query returns the first N.
     """
     from gateway.platforms.yuanbao_sticker import search_stickers
 
@@ -210,14 +210,16 @@ async def send_sticker(
     chat_id: str = "",
     reply_to: str = "",
 ) -> dict:
-    """
-    向 chat_id（缺省取当前会话）发送一张内置贴纸（TIMFaceElem）。
+    """Send one bundled sticker (TIMFaceElem) to chat_id (default: current session).
 
     Args:
-        sticker:   贴纸名称（如 "六六六"）或 sticker_id（如 "278"）。为空时随机发送一张。
-        chat_id:   目标会话；缺省时使用当前会话上下文（HERMES_SESSION_CHAT_ID）。
-                   格式：``direct:{account_id}`` / ``group:{group_code}`` / 或裸 account_id。
-        reply_to:  群聊场景的引用消息 ID（可选）。
+        sticker:   Sticker name (e.g. "六六六") or sticker_id (e.g. "278").
+                   Empty → pick a random one.
+        chat_id:   Target chat; defaults to the current session context
+                   (HERMES_SESSION_CHAT_ID). Format:
+                   ``direct:{account_id}`` / ``group:{group_code}`` /
+                   or a bare account_id.
+        reply_to:  Optional quoted-message id (group chat only).
 
     Returns: ``{"success": bool, ...}``
     """
@@ -505,7 +507,7 @@ registry.register(
     schema={
         "name": "yb_query_group_info",
         "description": (
-            "Query basic info about a group (called '派/Pai' in the app), "
+            "Query basic info about a group (called 'Pai' in the app), "
             "including group name, owner, and member count."
         ),
         "parameters": {
@@ -531,7 +533,7 @@ registry.register(
     schema={
         "name": "yb_query_group_members",
         "description": (
-            "Query members of a group (called '派/Pai' in the app). "
+            "Query members of a group (called 'Pai' in the app). "
             "Use this tool when you need to @mention someone, find a user by name, "
             "list bots (including Yuanbao AI), or list all members. "
             "IMPORTANT: You MUST call this tool before @mentioning any user, "
@@ -585,7 +587,7 @@ registry.register(
         "description": (
             "Send a private/direct message (DM) to a user in a group, with optional media files. "
             "This tool automatically looks up the user by name in the group member list "
-            "and sends the message. Use this when someone asks to privately message / 私信 / DM a user. "
+            "and sends the message. Use this when someone asks to privately message or DM a user. "
             "Supports text, images, and file attachments. "
             "You can also provide user_id directly if already known."
         ),
@@ -657,10 +659,10 @@ registry.register(
     schema={
         "name": "yb_search_sticker",
         "description": (
-            "Search the built-in Yuanbao sticker (TIM face / 表情包) catalogue by keyword. "
+            "Search the built-in Yuanbao sticker (TIM face) catalogue by keyword. "
             "Returns the top matching candidates with sticker_id, name, and description. "
             "Use this BEFORE yb_send_sticker to discover the right sticker_id. "
-            "Sticker = 贴纸 = TIM face — NOT a message reaction. "
+            "A sticker means a TIM face, not a message reaction. "
             "Prefer sending a sticker over bare Unicode emoji when reacting/expressing emotion."
         ),
         "parameters": {
@@ -669,7 +671,8 @@ registry.register(
                 "query": {
                     "type": "string",
                     "description": (
-                        "Search keyword (Chinese or English, e.g. '666', '比心', 'cool', '吃瓜'). "
+                        "Search keyword in the user's language, for example '666', "
+                        "'heart', 'cool', or 'spectating'. "
                         "Empty string returns the first N stickers."
                     ),
                 },
@@ -694,10 +697,10 @@ registry.register(
     schema={
         "name": "yb_send_sticker",
         "description": (
-            "Send a built-in sticker (TIMFaceElem / 贴纸表情) to the current Yuanbao chat. "
+            "Send a built-in sticker (TIMFaceElem) to the current Yuanbao chat. "
             "Call yb_search_sticker first if you don't know the sticker_id/name. "
-            "Sticker = 贴纸 = TIM face — NOT a message reaction. "
-            "CRITICAL: Whenever the user asks you to send a sticker / 贴纸 / 表情包, you MUST "
+            "A sticker means a TIM face, not a message reaction. "
+            "CRITICAL: Whenever the user asks you to send a sticker, you MUST "
             "use this tool. DO NOT draw a PNG via execute_code / Pillow / matplotlib and "
             "then call send_image_file — that produces a fake 'sticker' image instead of a "
             "real TIM face and is the WRONG path. If no suitable sticker_id is known, call "
@@ -711,7 +714,7 @@ registry.register(
                 "sticker": {
                     "type": "string",
                     "description": (
-                        "Sticker name (e.g. '六六六', '比心', 'ok') or numeric sticker_id "
+                        "Sticker name (in its original catalogue language, e.g. 'ok') or numeric sticker_id "
                         "(e.g. '278'). Empty string sends a random built-in sticker."
                     ),
                 },

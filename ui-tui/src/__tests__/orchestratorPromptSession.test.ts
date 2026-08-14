@@ -32,7 +32,7 @@ describe('startPromptLiveSession', () => {
         'rpc',
         {
           method: 'config.set',
-          params: { key: 'model', session_id: 'abc123', value: 'kimi-k2.6 --provider ollama-cloud --session' }
+          params: { key: 'model', session_id: 'abc123', value: 'kimi-k2.6 --provider ollama-cloud' }
         }
       ],
       ['sys', 'model → kimi-k2.6'],

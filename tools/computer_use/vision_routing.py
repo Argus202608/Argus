@@ -180,12 +180,21 @@ def should_route_capture_to_aux_vision(
       caller should keep the existing multimodal envelope (main model
       handles vision natively).
     """
-    if _explicit_aux_vision_override(cfg):
-        return True
-
+    # A main model the user EXPLICITLY declared vision-capable
+    # (model.supports_vision: true, or a per-provider model override) can
+    # consume the screenshot directly. Prefer that over the aux pipeline even
+    # when auxiliary.vision is configured: for computer_use, routing every
+    # full-desktop capture to a second model adds latency AND a failure
+    # dependency (a slow/broken aux model hangs or blanks the capture — the
+    # exact symptom this guards against). The aux override still wins for
+    # non-vision / undeclared main models below.
     user_declared = _lookup_user_declared_supports_vision(provider, model, cfg)
     if user_declared is True:
         return False
+
+    if _explicit_aux_vision_override(cfg):
+        return True
+
     if user_declared is False:
         return True
 

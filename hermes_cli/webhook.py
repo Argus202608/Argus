@@ -96,11 +96,9 @@ def _is_webhook_enabled() -> bool:
 
 def _get_webhook_base_url() -> str:
     wh = _get_webhook_config().get("extra", {})
-    host = wh.get("host")
+    host = wh.get("host", "0.0.0.0")
     port = wh.get("port", 8644)
-    display_host = "localhost" if not host or host in {"0.0.0.0", "::"} else host
-    if ":" in display_host and not display_host.startswith("["):
-        display_host = f"[{display_host}]"
+    display_host = "localhost" if host == "0.0.0.0" else host
     return f"http://{display_host}:{port}"
 
 
@@ -117,6 +115,7 @@ def _setup_hint() -> str:
        webhook:
          enabled: true
          extra:
+           host: "0.0.0.0"
            port: 8644
            secret: "your-global-hmac-secret"
 
@@ -190,10 +189,6 @@ def _cmd_subscribe(args):
             return
         route["deliver_only"] = True
 
-    script = getattr(args, "script", "") or ""
-    if script.strip():
-        route["script"] = script.strip()
-
     if args.deliver_chat_id:
         route["deliver_extra"] = {"chat_id": args.deliver_chat_id}
 
@@ -217,11 +212,9 @@ def _cmd_subscribe(args):
         prompt_preview = route["prompt"][:80] + ("..." if len(route["prompt"]) > 80 else "")
         label = "Message" if route.get("deliver_only") else "Prompt"
         print(f"  {label}: {prompt_preview}")
-    if route.get("script"):
-        print(f"  Script: {route['script']}")
-    print("\n  Configure your service to POST to the URL above.")
-    print("  Use the secret for HMAC-SHA256 signature validation.")
-    print("  The gateway must be running to receive events (hermes gateway run).\n")
+    print(f"\n  Configure your service to POST to the URL above.")
+    print(f"  Use the secret for HMAC-SHA256 signature validation.")
+    print(f"  The gateway must be running to receive events (hermes gateway run).\n")
 
 
 def _cmd_list(args):
@@ -245,8 +238,6 @@ def _cmd_list(args):
         print(f"    URL:     {base_url}/webhooks/{name}")
         print(f"    Events:  {events}")
         print(f"    Deliver: {deliver}")
-        if route.get("script"):
-            print(f"    Script:  {route['script']}")
         print()
 
 

@@ -1,7 +1,3 @@
-import { execFile } from 'child_process'
-
-import { forceRedraw, onTerminalBackground, onTerminalForeground } from '@hermes/ink'
-
 import { STARTUP_IMAGE, STARTUP_QUERY } from '../config/env.js'
 import { STREAM_BATCH_MS } from '../config/timing.js'
 import { buildSetupRequiredSections, SETUP_REQUIRED_TITLE } from '../content/setup.js'
@@ -13,341 +9,37 @@ import type {
   GatewaySkin,
   SessionMostRecentResponse
 } from '../gatewayTypes.js'
-import { billingDialogCopy } from '../lib/billingDialog.js'
-import { relativeLuminance } from '../lib/color.js'
 import { isTodoDone } from '../lib/liveProgress.js'
 import { openExternalUrl } from '../lib/openExternalUrl.js'
 import { rpcErrorMessage } from '../lib/rpc.js'
 import { topLevelSubagents } from '../lib/subagentTree.js'
-import { isPaintableHex, setTerminalBackground, setTerminalForeground } from '../lib/terminalModes.js'
 import { formatAbandonedClarify, formatToolCall, stripAnsi } from '../lib/text.js'
-import { bootSeededPin, invalidateBootBackground, writeBootTheme } from '../lib/themeBoot.js'
-import { defaultThemeForCurrentBackground, fromSkin, skinIsLight, type Theme, themeToneHex } from '../theme.js'
+import { fromSkin } from '../theme.js'
 import type { Msg, SubagentProgress, SubagentStatus } from '../types.js'
 
 import { applyDelegationStatus, getDelegationState } from './delegationStore.js'
 import type { GatewayEventHandlerContext } from './interfaces.js'
 import { getOverlayState, patchOverlayState } from './overlayStore.js'
-import { flashGoodVibes, flashPet } from './petFlashStore.js'
+import { flashPet } from './petFlashStore.js'
 import { turnController } from './turnController.js'
 import { getTurnState } from './turnStore.js'
 import { getUiState, patchUiState } from './uiStore.js'
-import { isWakeUserDisabled } from './wakeState.js'
 
 const NO_PROVIDER_RE = /\bNo (?:LLM|inference) provider configured\b/i
 
-type VoiceSubmitMode = 'direct' | 'draft'
-
-const normalizeVoiceSubmitMode = (value: unknown): VoiceSubmitMode =>
-  typeof value === 'string' && value.trim().toLowerCase() === 'draft' ? 'draft' : 'direct'
-
 const statusFromBusy = () => (getUiState().busy ? 'running…' : 'ready')
 
-// The last gateway skin, kept so the theme can be re-derived when the OSC-11
-// background answer arrives after (or without) gateway.ready.
-let lastSkin: GatewaySkin | null = null
-
-const themeForSkin = (s: GatewaySkin) => {
-  // Polarity overrides OVERLAY the base palette, they don't replace it: a skin
-  // can ship a fills-only `light_colors` (flip the dark navy menu/status fills
-  // to light on a light terminal) while its vivid foreground golds keep coming
-  // from `colors` and render raw through fromSkin's shim. A full paired block
-  // still works — it just overrides every key it lists. Polarity follows the
-  // skin's authored background when it has one (the skin paints the terminal
-  // with it), else the host's.
-  const paired = skinIsLight(s.colors ?? {}) ? s.light_colors : s.dark_colors
-
-  const colors = paired && Object.keys(paired).length ? { ...(s.colors ?? {}), ...paired } : (s.colors ?? {})
-
-  return fromSkin(
-    colors,
-    s.branding ?? {},
-    s.banner_logo ?? '',
-    s.banner_hero ?? '',
-    s.tool_prefix ?? '',
-    s.help_header ?? ''
-  )
-}
-
-// Patch the live theme AND persist it for the next launch's first frame
-// (flash-free boot — see lib/themeBoot.ts).
-//
-// The force-redraw is load-bearing: a theme swap recolors EVERYTHING, but the
-// renderer's diff/blit cache treats layout-unchanged regions as reusable, so
-// incremental repaints after a swap can tear — stale cells keep the previous
-// palette (observed live: gold headers from the boot theme composited with
-// slate chrome, dark status fills surviving on a light terminal, half-
-// overwritten glyphs reading as "shadows"). One full clear+repaint after the
-// new theme has rendered guarantees a coherent frame. Deferred ~2 frames so
-// React + Ink flush the recolored tree first; skipping identical themes keeps
-// the no-op resolution path (boot cache confirmed by detection) paint-free.
-let lastCommittedTheme: Theme | null = null
-
-const commitTheme = (theme: Theme) => {
-  // First commit compares against the SEED uiStore mounted with (boot cache
-  // or default), not null — otherwise a first resolve that differs from the
-  // boot-cached theme skips the anti-tearing repaint (the exact seed≠skin
-  // case: cold start defaults dark, then resolves to a light skin).
-  const prev = lastCommittedTheme ?? getUiState().theme
-  const changed = !themesEqual(prev, theme)
-
-  lastCommittedTheme = theme
-  patchUiState({ theme })
-  // Persist the config pin alongside the resolved theme + physical
-  // background: a pinned session's resolved polarity intentionally
-  // disagrees with the background, and caching one without the other
-  // recreates the multi-stage flash on the next launch (light first frame →
-  // dark skin resolve against the cached background → light config pin).
-  const pin = configPinnedTheme ? process.env.HERMES_TUI_THEME : undefined
-
-  writeBootTheme(theme, process.env.HERMES_TUI_BACKGROUND, pin === 'light' || pin === 'dark' ? pin : undefined)
-
-  if (changed) {
-    setTimeout(() => forceRedraw(process.stdout), 40).unref?.()
-  }
-}
-
-const themesEqual = (a: Theme, b: Theme) => {
-  if (a === b) {
-    return true
-  }
-
-  for (const key of Object.keys(a.color) as (keyof Theme['color'])[]) {
-    if (a.color[key] !== b.color[key]) {
-      return false
-    }
-  }
-
-  return (
-    a.brand.name === b.brand.name &&
-    a.brand.prompt === b.brand.prompt &&
-    a.bannerLogo === b.bannerLogo &&
-    a.bannerHero === b.bannerHero
-  )
-}
-
-// A skin that owns the background must own BOTH terminal defaults: OSC-11
-// paints every cell's backdrop, and OSC-10 re-bases every default-fg token —
-// markdown body, borders, anything rendered without an explicit color — onto
-// the theme's text color. Without the pair, a dark skin on a light terminal
-// leaves default-fg text at the HOST's near-black: invisible. Opt-in stays
-// intact: no `background` ⇒ both defaults restore to the terminal's own.
-// The text tone resolves through themeToneHex because a limited-palette
-// terminal quantizes it to `ansi256(N)`, which OSC-10 cannot speak.
-const paintTerminalDefaults = (theme: Theme) => {
-  const background = lastSkin?.colors?.background ?? ''
-
-  setTerminalBackground(background)
-  setTerminalForeground(isPaintableHex(background) ? themeToneHex(theme.color.text) : '')
-}
-
-const applySkin = (s: GatewaySkin) => {
-  lastSkin = s
-  const theme = themeForSkin(s)
-
-  commitTheme(theme)
-  paintTerminalDefaults(theme)
-}
-
-/** Re-derive the theme from current detection signals (env overrides, cached
- *  OSC-11 answer) — used by /theme, config sync, and the OSC listener. */
-export function reapplyTheme(): void {
-  const theme = lastSkin ? themeForSkin(lastSkin) : defaultThemeForCurrentBackground()
-
-  commitTheme(theme)
-  // Polarity flips swap paired palettes, so the default fg must track the
-  // re-derived text tone even though the skin's background hasn't moved.
-  paintTerminalDefaults(theme)
-}
-
-/**
- * Apply the persisted mode pin (`display.tui_theme`). 'light'/'dark' bridge
- * to HERMES_TUI_THEME — the priority-2 signal `detectLightMode` already
- * honors (only an explicit HERMES_TUI_LIGHT env var outranks it); 'auto'
- * clears the pin so the OSC-11 probe + env heuristics decide. The pin exists
- * because the probe cannot always be trusted: xterm.js hosts report #000000
- * regardless of the painted background when the editor theme leaves the
- * terminal background unset.
- */
-// True once CONFIG (via light/dark) owns the HERMES_TUI_THEME env pin, so an
-// 'auto' hydrate knows not to clobber a user's shell-exported pin. A pin the
-// boot cache replayed counts as config-owned — it originated from
-// display.tui_theme last session, and treating it as a shell export would
-// make a stale cached pin unclearable by 'auto'.
-let configPinnedTheme = bootSeededPin
-
-export function applyConfiguredTuiTheme(raw: unknown): void {
-  const mode = String(raw ?? '')
-    .trim()
-    .toLowerCase()
-
-  const current = process.env.HERMES_TUI_THEME ?? ''
-
-  if (mode === 'light' || mode === 'dark') {
-    // Record config ownership BEFORE the match short-circuit — otherwise a
-    // pin that already matches (e.g. env and config agree at boot) leaves
-    // configPinnedTheme false, and a later 'auto' would refuse to clear it.
-    configPinnedTheme = true
-
-    if (current === mode) {
-      return
-    }
-
-    process.env.HERMES_TUI_THEME = mode
-  } else {
-    // 'auto' clears only a pin CONFIG set — never a HERMES_TUI_THEME the user
-    // exported in their shell, which is an explicit override that outranks
-    // auto-detection (see detectLightMode's priority order).
-    if (!current || !configPinnedTheme) {
-      return
-    }
-
-    configPinnedTheme = false
-    delete process.env.HERMES_TUI_THEME
-  }
-
-  reapplyTheme()
-}
-
-let themeBackgroundSyncStarted = false
-
-/**
- * Re-derive the theme from the terminal's ACTUAL background color once the
- * OSC-11 probe answers. The env heuristics `detectLightMode` runs at module
- * load are blind in xterm.js hosts (VS Code / Cursor set no COLORFGBG), so a
- * light editor terminal otherwise gets the dark fallback palette. The answer
- * is cached into HERMES_TUI_BACKGROUND — the slot `detectLightMode` already
- * reads (and child processes inherit) — then the current skin (or the
- * skinless default) is re-applied against the corrected base. Explicit
- * HERMES_TUI_LIGHT / HERMES_TUI_THEME overrides still win inside
- * detectLightMode, so users can pin a mode regardless of the probe.
- */
-/** Infer the terminal's polarity from its reported FOREGROUND (OSC 10).
- *  Transparent profiles lie about the background (unset default = pure
- *  black) but report the theme's real foreground — a bright foreground
- *  means a dark theme and vice versa. Returns a representative background
- *  for the inferred pole, or undefined when the answer is unusable
- *  (mid-gray foregrounds are ambiguous; #000000/#ffffff can be unset
- *  defaults themselves, so only clearly-toned answers count). */
-export function polarityBackgroundFromForeground(hex: string): string | undefined {
-  const luminance = relativeLuminance(hex)
-
-  if (luminance === null || hex === '#000000' || hex === '#ffffff') {
-    return undefined
-  }
-
-  if (luminance >= 0.45) {
-    return '#1e1e1e'
-  }
-
-  if (luminance <= 0.2) {
-    return '#ffffff'
-  }
-
-  return undefined
-}
-
-export function syncThemeToTerminalBackground(): void {
-  if (themeBackgroundSyncStarted) {
-    return
-  }
-
-  themeBackgroundSyncStarted = true
-
-  let resolved = false
-
-  onTerminalBackground(hex => {
-    // Exactly-#000000 is the "unset default" fingerprint, not a measurement:
-    // xterm.js reports it when the editor theme sets no terminal background
-    // (observed: pure black reported on a white Cursor terminal), and tmux
-    // answers OSC 11 with its own black fallback regardless of the outer
-    // terminal — and tmux also strips TERM_PROGRAM, so no host allow-list
-    // can catch it. Real dark themes report their actual surface (#1e1e1e,
-    // #282828, …). Distrusting pure black universally is safe: the OSC-10
-    // foreground below resolves the pole for transparent hosts, and a truly
-    // pure-black terminal lands on dark either way.
-    if (hex === '#000000') {
-      // The CURRENT terminal answered with an untrusted value — a background
-      // the boot cache seeded is from another era and must not keep
-      // outranking the live fallback chain (previous light session + new
-      // pure-black terminal stayed light forever: OSC-10 pure-white is also
-      // rejected, and the macOS fallback refuses to run while the slot is
-      // occupied). Clear the stale hint, give OSC-10 (same startup batch)
-      // first claim, then settle via env heuristics if nothing answered.
-      if (invalidateBootBackground()) {
-        setTimeout(() => {
-          if (!resolved) {
-            reapplyTheme()
-          }
-        }, 250).unref?.()
-      }
-
-      return
-    }
-
-    resolved = true
-    process.env.HERMES_TUI_BACKGROUND = hex
-    reapplyTheme()
+const applySkin = (s: GatewaySkin) =>
+  patchUiState({
+    theme: fromSkin(
+      s.colors ?? {},
+      s.branding ?? {},
+      s.banner_logo ?? '',
+      s.banner_hero ?? '',
+      s.tool_prefix ?? '',
+      s.help_header ?? ''
+    )
   })
-
-  // Foreground tiebreaker for the distrusted-background case. The two OSC
-  // replies arrive in the same startup batch; this listener only commits when
-  // the background didn't (first-writer-wins via `resolved`), and an explicit
-  // user pin still outranks it inside detectLightMode.
-  onTerminalForeground(hex => {
-    if (resolved || process.env.HERMES_TUI_THEME || process.env.HERMES_TUI_LIGHT) {
-      return
-    }
-
-    const inferred = polarityBackgroundFromForeground(hex)
-
-    if (!inferred) {
-      return
-    }
-
-    resolved = true
-    process.env.HERMES_TUI_BACKGROUND = inferred
-    reapplyTheme()
-  })
-
-  // Last-resort inference when the probe never answers (or answered with the
-  // untrusted default): on macOS, editor themes overwhelmingly track the
-  // system appearance, so `AppleInterfaceStyle` is a strong prior. Runs only
-  // when no explicit signal exists (env pins/COLORFGBG all beat the cache
-  // slot this writes), after giving the probe a beat to answer.
-  setTimeout(() => {
-    if (
-      resolved ||
-      process.platform !== 'darwin' ||
-      process.env.HERMES_TUI_BACKGROUND ||
-      process.env.HERMES_TUI_THEME ||
-      process.env.HERMES_TUI_LIGHT ||
-      process.env.COLORFGBG
-    ) {
-      return
-    }
-
-    execFile('defaults', ['read', '-g', 'AppleInterfaceStyle'], (error, stdout) => {
-      if (resolved || process.env.HERMES_TUI_BACKGROUND || process.env.HERMES_TUI_THEME) {
-        return
-      }
-
-      // `defaults read` exits non-zero when the key is absent — which MEANS
-      // light mode; "Dark" means dark. Cache as an inferred background so
-      // every later signal (config pin, real OSC answer) still outranks it.
-      const dark = !error && stdout.trim() === 'Dark'
-
-      // Mark resolved so a LATE OSC-10 foreground reply (also an inference)
-      // can't re-flip this committed guess after the fact — visible churn.
-      // A real OSC-11 background answer still corrects it: that listener
-      // intentionally doesn't gate on `resolved` (a measurement outranks an
-      // inference).
-      resolved = true
-      process.env.HERMES_TUI_BACKGROUND = dark ? '#1e1e1e' : '#ffffff'
-      reapplyTheme()
-    })
-  }, 1500).unref?.()
-}
 
 const dropBgTask = (taskId: string) =>
   patchUiState(state => {
@@ -387,8 +79,6 @@ const normalizeSubagentStatus = (status: unknown, fallback: SubagentStatus): Sub
 }
 
 export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev: GatewayEvent) => void {
-  syncThemeToTerminalBackground()
-
   const { rpc } = ctx.gateway
   const { STARTUP_RESUME_ID, newSession, recoverSidRef, resumeById, setCatalog } = ctx.session
   const { bellOnComplete, stdout, sys } = ctx.system
@@ -396,6 +86,36 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
   const { setInput } = ctx.composer
   const { submitRef } = ctx.submission
   const { setProcessing: setVoiceProcessing, setRecording: setVoiceRecording, setVoiceEnabled } = ctx.voice
+
+  // ── Sub-agent bubbles (monitor SPEAK / deep-research) ──────────────────────
+  // The backend pushes message.start/delta/complete tagged with a `source` for
+  // monitor + deep-research turns on the SAME session socket. These are NOT the
+  // main turn: they must render as their own standalone bubbles and MUST NOT
+  // touch turnController (which owns the single main-agent turn) — otherwise a
+  // monitor SPEAK hijacks the user's in-flight assistant bubble. They are
+  // display-only: the TUI's context lives server-side, so an appendMessage here
+  // never enters the conversation history (parity with web/desktop, and with
+  // monitor SPEAK already not being written to backend context).
+  const SUBAGENT_SOURCES = new Set([
+    'monitor',
+    'watcher',
+    'watcher_running',
+    'watcher_threadback'
+  ])
+  const isSubAgentSource = (s: unknown): boolean => typeof s === 'string' && SUBAGENT_SOURCES.has(s)
+  // Accumulate streamed sub-agent text per identity until complete.
+  const subAgentBuf = new Map<string, { source: string; label: string; text: string }>()
+  // Identity key: monitor turns carry monitor_id (NO request_id — see backend
+  // _emit_monitor_speak); deep-research carries request_id. Keying on the right
+  // id keeps concurrent monitors / delegations from clobbering each other's buffer.
+  const subAgentKey = (p: { source?: string; request_id?: string; monitor_id?: string }): string => {
+    const id = p.source === 'monitor' ? p.monitor_id : p.request_id
+    return `${p.source}:${id || '_'}`
+  }
+  const subAgentPrefix = (source: string, label?: string): string => {
+    if (source === 'monitor') return `👁 ${label || '监控'}`
+    return '🔬 深度分析'
+  }
 
   let pendingThinkingStatus = ''
   let thinkingStatusTimer: null | ReturnType<typeof setTimeout> = null
@@ -627,14 +347,6 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
     // "too many re-renders" guard in embedded dashboard PTYs.
     ensureAgentsNudgeConfig()
 
-    // Arm "Hey Hermes" if this surface owns it (server gates on config).
-    // Fire-and-forget + idempotent server-side, so reconnects are harmless.
-    // Skipped when the user explicitly ran `/wake off` this session — an
-    // explicit opt-out must survive gateway reconnects (see wakeState.ts).
-    if (!isWakeUserDisabled()) {
-      void rpc('wake.start', { surface: 'tui' }).catch(() => undefined)
-    }
-
     rpc<CommandsCatalogResponse>('commands.catalog', {})
       .then(r => {
         if (!r?.pairs) {
@@ -772,11 +484,28 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
         return
       }
 
-      case 'message.start':
+      case 'message.start': {
+        // Sub-agent turn (monitor / deep-research): don't touch the main turn.
+        // Seed a buffer keyed by source+request_id; the bubble is emitted on
+        // message.complete. Skip the watcher_running placeholder (only the
+        // final answer becomes a bubble — no half-baked "进行中" line).
+        const p = ev.payload
+        if (p && isSubAgentSource(p.source)) {
+          if (p.source !== 'watcher_running') {
+            subAgentBuf.set(subAgentKey(p), {
+              source: p.source!,
+              label: p.monitor_label || p.brief || '',
+              text: ''
+            })
+          }
+
+          return
+        }
         resetAgentsNudgeTurnState()
         turnController.startMessage()
 
         return
+      }
       case 'status.update': {
         const p = ev.payload
 
@@ -869,7 +598,7 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
           return
         }
 
-        sys('💳 Open this link to allow Remote Spending:')
+        sys('💳 Open this link to grant terminal billing access:')
         sys(url)
 
         if (code) {
@@ -919,19 +648,6 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
       }
 
       case 'voice.transcript': {
-        // Explicit user-intent stop: the user said (or typed) a bare stop
-        // phrase. The backend already halted the capture loop and flipped
-        // voice mode off — mirror it here like a manual /voice off, and say
-        // so (this is intent, not the no-speech timeout below).
-        if (ev.payload?.stop_phrase) {
-          setVoiceEnabled(false)
-          setVoiceRecording(false)
-          setVoiceProcessing(false)
-          sys('voice: stop phrase — voice chat ended')
-
-          return
-        }
-
         // CLI parity: the 3-strikes silence detector flipped off automatically.
         // Mirror that on the UI side and tell the user why the mode is off.
         if (ev.payload?.no_speech_limit) {
@@ -949,62 +665,16 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
           return
         }
 
-        void getFullConfigOnce().then(cfg => {
-          const submitMode = normalizeVoiceSubmitMode(cfg?.config?.voice?.submit_mode)
-
-          if (submitMode === 'draft') {
-            setInput(current => (current.trim() ? `${current.trimEnd()} ${text}` : text))
-
-            return
-          }
-
-          // Default to CLI parity. Clear + defer submit so the cleared input
-          // is committed before submit reads it; invalid config also falls
-          // back to this established direct-submit behavior.
-          setInput('')
-          setTimeout(() => submitRef.current(text), 0)
-        })
-
-        return
-      }
-
-      case 'wake.detected': {
-        // "Hey Hermes": optionally open a fresh session (start_new_session),
-        // then arm voice capture so the user can speak hands-free. Mirrors CLI.
-        void (async () => {
-          // Multi-profile routing: the TUI is a single-profile process, so a
-          // phrase enrolled by ANOTHER profile can't be routed here — surface
-          // the switch command instead of starting voice on the wrong profile.
-          const wakeProfile = ev.payload?.profile?.trim()
-          const ownProfile = getUiState().info?.profile_name || 'default'
-
-          if (wakeProfile && wakeProfile !== ownProfile) {
-            sys(`wake phrase for profile '${wakeProfile}' — run: hermes -p ${wakeProfile} --tui`)
-            await rpc('wake.resume', {}).catch(() => undefined)
-
-            return
-          }
-
-          if (ev.payload?.start_new_session !== false) {
-            await newSession()
-          }
-
-          const sid = getUiState().sid
-
-          if (!sid) {
-            await rpc('wake.resume', {}).catch(() => undefined)
-
-            return
-          }
-
-          setVoiceEnabled(true)
-          await rpc('voice.toggle', { action: 'on' })
-          await rpc('voice.record', { action: 'start', session_id: sid })
-        })().catch((e: unknown) => {
-          sys(`wake: ${rpcErrorMessage(e)}`)
-
-          void rpc('wake.resume', {}).catch(() => undefined)
-        })
+        // CLI parity: _pending_input.put(transcript) unconditionally feeds
+        // the transcript to the agent as its next turn — draft handling
+        // doesn't apply because voice-mode users are speaking, not typing.
+        //
+        // We can't branch on composer input from inside a setInput updater
+        // (React strict mode double-invokes it, duplicating the submit).
+        // Just clear + defer submit so the cleared input is committed before
+        // submit reads it.
+        setInput('')
+        setTimeout(() => submitRef.current(text), 0)
 
         return
       }
@@ -1080,25 +750,6 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
         // through the normal message stream. No committed transcript entry.
         return
 
-      case 'moa.progress':
-        // Live fan-out progress — one activity line, replaced in place as each
-        // reference completes ("MoA: refs 2/3"), so the user sees movement
-        // during the (potentially long) reference phase without transcript spam.
-        if (typeof ev.payload?.refs_done === 'number' && typeof ev.payload?.refs_total === 'number') {
-          turnController.pushActivity(`MoA: refs ${ev.payload.refs_done}/${ev.payload.refs_total}`, 'info', 'MoA')
-        }
-
-        return
-
-      case 'moa.phase':
-        // Phase transition — currently only phase="aggregator" (fan-out done,
-        // aggregator acting). Swap the progress line for aggregator copy.
-        if (ev.payload?.phase === 'aggregator') {
-          turnController.pushActivity('MoA: aggregating…', 'info', 'MoA')
-        }
-
-        return
-
       case 'tool.progress':
         if (ev.payload?.preview && ev.payload.name) {
           turnController.recordToolProgress(ev.payload.name, ev.payload.preview)
@@ -1110,14 +761,6 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
         if (ev.payload?.name) {
           turnController.pushTrail(`drafting ${ev.payload.name}…`)
         }
-
-        return
-
-      case 'reaction':
-        // Core-detected affection (ily / <3 / good bot): flash the ♥ and let the
-        // pet celebrate. Same signal drives the desktop's floating hearts.
-        flashGoodVibes()
-        flashPet('jump')
 
         return
 
@@ -1182,13 +825,7 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
         const allowPermanent = ev.payload.allow_permanent !== false
 
         patchOverlayState({
-          approval: {
-            allowPermanent,
-            choices: ev.payload.choices,
-            command: String(ev.payload.command ?? ''),
-            description,
-            smartDenied: ev.payload.smart_denied === true
-          }
+          approval: { allowPermanent, command: String(ev.payload.command ?? ''), description }
         })
         setStatus('approval needed')
 
@@ -1206,16 +843,6 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
           secret: { envVar: ev.payload.env_var, prompt: ev.payload.prompt, requestId: ev.payload.request_id }
         })
         setStatus('secret input needed')
-
-        return
-
-      case 'sudo.expire':
-        patchOverlayState(prev => (prev.sudo?.requestId === ev.payload.request_id ? { ...prev, sudo: null } : prev))
-
-        return
-
-      case 'secret.expire':
-        patchOverlayState(prev => (prev.secret?.requestId === ev.payload.request_id ? { ...prev, secret: null } : prev))
 
         return
 
@@ -1338,21 +965,46 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
 
         return
 
-      case 'message.delta':
+      case 'message.delta': {
+        // Sub-agent delta: append to its buffer, not the main turn.
+        const p = ev.payload
+        if (p && isSubAgentSource(p.source)) {
+          const key = subAgentKey(p)
+          const cur = subAgentBuf.get(key)
+          if (cur) cur.text += p.text || ''
+          else subAgentBuf.set(key, { source: p.source!, label: '', text: p.text || '' })
+
+          return
+        }
         turnController.recordMessageDelta(ev.payload ?? {})
 
         return
-      case 'message.interim': {
-        const text = ev.payload?.text
+      }
+      case 'message.complete': {
+        // Sub-agent turn: emit ONE standalone bubble (display-only, never enters
+        // context) and skip the main-turn completion path entirely.
+        const sp = ev.payload
+        if (sp && isSubAgentSource(sp.source)) {
+          // watcher_running with status!=complete is just the placeholder
+          // heartbeat — ignore; the real answer arrives as its own complete.
+          if (sp.source === 'watcher_running' && sp.status !== 'complete') {
+            return
+          }
+          const key = subAgentKey(sp)
+          const buf = subAgentBuf.get(key)
+          subAgentBuf.delete(key)
+          const body = (sp.text || buf?.text || '').trim()
+          if (body) {
+            const label = sp.monitor_label || sp.brief || buf?.label || ''
+            appendMessage({
+              role: 'system',
+              text: `${subAgentPrefix(sp.source!, label)}\n${body}`
+            })
+          }
 
-        if (typeof text === 'string' && text.trim()) {
-          turnController.recordInterimMessage(text)
+          return
         }
 
-        return
-      }
-
-      case 'message.complete': {
         const { finalMessages, finalText, wasInterrupted } = turnController.recordMessageComplete(ev.payload ?? {})
 
         if (!wasInterrupted) {
@@ -1371,35 +1023,6 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
 
         if (ev.payload?.usage) {
           patchUiState(state => ({ ...state, usage: { ...state.usage, ...ev.payload!.usage } }))
-        }
-
-        // Billing wall (out of credits / payment required): open a proper
-        // confirm dialog with the one recovery action, not a truncating status
-        // notice. The transcript already carries the full provider guidance;
-        // this is the actionable layer. Set AFTER recordMessageComplete() so the
-        // turn-idle resetFlowOverlays() (which clears `confirm`) can't wipe it;
-        // the top-of-loop guard already scopes this to the active session.
-        if (ev.payload?.billing) {
-          const block = ev.payload.billing
-          const copy = billingDialogCopy(block)
-
-          patchOverlayState({
-            confirm: {
-              cancelLabel: copy.cancelLabel,
-              confirmLabel: copy.confirmLabel,
-              detail: copy.detail,
-              onConfirm: () => {
-                if (block.is_nous) {
-                  submitRef.current('/topup')
-                } else if (block.billing_url) {
-                  openExternalUrl(block.billing_url)
-                } else {
-                  submitRef.current('/model')
-                }
-              },
-              title: copy.title
-            }
-          })
         }
 
         return

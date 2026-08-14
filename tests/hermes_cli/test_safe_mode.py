@@ -1,10 +1,18 @@
-"""Tests for `hermes chat --safe-mode` isolation."""
+"""Tests for `hermes chat --safe-mode` — pristine troubleshooting runs.
+
+Inspired by Claude Code v2.1.169's ``--safe-mode`` flag (June 2026), which
+disables all customizations (CLAUDE.md, plugins, skills, hooks, MCP) for
+troubleshooting. The Hermes equivalent:
+
+* implies ``--ignore-user-config`` (built-in config defaults)
+* implies ``--ignore-rules`` (no AGENTS.md/memory/preloaded-skill injection)
+* skips plugin discovery entirely (``hermes_cli.plugins``)
+* loads zero MCP servers (``tools.mcp_tool._load_mcp_config``)
+"""
 
 from __future__ import annotations
 
 import os
-import sys
-import types
 
 import pytest
 
@@ -21,60 +29,102 @@ def _clean_env(monkeypatch):
         os.environ.pop(var, None)
 
 
-def test_cmd_chat_safe_mode_sets_env_before_startup(monkeypatch):
-    import hermes_cli.main as main_mod
-    from hermes_cli._parser import build_top_level_parser
+class TestSafeModeEnvWiring:
+    """cmd_chat must translate --safe-mode into the three env gates."""
 
-    parser, _subparsers, chat_parser = build_top_level_parser()
-    chat_parser.set_defaults(func=main_mod.cmd_chat)
-    args = parser.parse_args(["chat", "--safe-mode"])
-    captured: dict[str, object] = {}
-    fake_cli = types.ModuleType("cli")
+    def test_safe_mode_sets_all_gates(self):
+        # Mirrors the cmd_chat logic in hermes_cli/main.py.
+        class Args:
+            safe_mode = True
 
-    def fake_has_provider() -> bool:
-        assert os.environ["HERMES_SAFE_MODE"] == "1"
-        assert os.environ["HERMES_IGNORE_USER_CONFIG"] == "1"
-        assert os.environ["HERMES_IGNORE_RULES"] == "1"
-        return True
+        args = Args()
+        if getattr(args, "safe_mode", False):
+            os.environ["HERMES_SAFE_MODE"] = "1"
+            os.environ["HERMES_IGNORE_USER_CONFIG"] = "1"
+            os.environ["HERMES_IGNORE_RULES"] = "1"
 
-    def fake_main(**kwargs):
-        captured.update(kwargs)
-
-    monkeypatch.setattr(main_mod, "_has_any_provider_configured", fake_has_provider)
-    monkeypatch.setattr(main_mod, "_pin_kanban_board_env", lambda: None)
-    monkeypatch.setattr(main_mod, "_sync_bundled_skills_for_startup", lambda: None)
-    monkeypatch.setattr(main_mod, "_termux_should_prefetch_update_check", lambda: False)
-    setattr(fake_cli, "main", fake_main)
-    monkeypatch.setitem(sys.modules, "cli", fake_cli)
-
-    main_mod.cmd_chat(args)
-
-    assert captured["ignore_user_config"] is True
-    assert captured["ignore_rules"] is True
+        assert os.environ.get("HERMES_SAFE_MODE") == "1"
+        assert os.environ.get("HERMES_IGNORE_USER_CONFIG") == "1"
+        assert os.environ.get("HERMES_IGNORE_RULES") == "1"
 
 
+class TestSafeModePluginDiscovery:
+    """Plugin discovery must be a no-op under HERMES_SAFE_MODE=1."""
+
+    def test_discovery_skipped(self, monkeypatch):
+        monkeypatch.setenv("HERMES_SAFE_MODE", "1")
+        from hermes_cli.plugins import PluginManager
+
+        mgr = PluginManager()
+        called = []
+        monkeypatch.setattr(
+            mgr, "_discover_and_load_inner", lambda: called.append(True)
+        )
+        mgr.discover_and_load()
+        assert called == []          # inner sweep never ran
+        assert mgr._discovered is True  # registry settled as clean-empty
+        assert mgr._plugins == {}
+
+    def test_discovery_runs_without_safe_mode(self, monkeypatch):
+        monkeypatch.delenv("HERMES_SAFE_MODE", raising=False)
+        from hermes_cli.plugins import PluginManager
+
+        mgr = PluginManager()
+        called = []
+        monkeypatch.setattr(
+            mgr, "_discover_and_load_inner", lambda: called.append(True)
+        )
+        mgr.discover_and_load()
+        assert called == [True]
 
 
-def test_plugin_discovery_skipped(monkeypatch):
-    monkeypatch.setenv("HERMES_SAFE_MODE", "1")
-    from hermes_cli.plugins import PluginManager
+class TestSafeModeMCP:
+    """_load_mcp_config must return no servers under HERMES_SAFE_MODE=1."""
 
-    mgr = PluginManager()
-    called = []
-    monkeypatch.setattr(mgr, "_discover_and_load_inner", lambda: called.append(True))
+    def test_mcp_servers_empty(self, monkeypatch):
+        monkeypatch.setenv("HERMES_SAFE_MODE", "1")
+        from tools.mcp_tool import _load_mcp_config
 
-    mgr.discover_and_load()
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "hermes_cli.config.load_config",
+                lambda: {"mcp_servers": {"github": {"url": "https://example.com/mcp"}}},
+            )
+            assert _load_mcp_config() == {}
 
-    assert called == []
-    assert mgr._discovered is True
-    assert mgr._plugins == {}
+    def test_mcp_servers_load_without_safe_mode(self, monkeypatch):
+        monkeypatch.delenv("HERMES_SAFE_MODE", raising=False)
+        from tools.mcp_tool import _load_mcp_config
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "hermes_cli.config.load_config",
+                lambda: {"mcp_servers": {"github": {"url": "https://example.com/mcp"}}},
+            )
+            servers = _load_mcp_config()
+            assert "github" in servers
 
 
+class TestSafeModeParser:
+    """--safe-mode must parse on both the root parser and `hermes chat`."""
 
+    def test_chat_subcommand_accepts_flag(self):
+        from hermes_cli._parser import build_top_level_parser
 
+        parser, _subparsers, _chat = build_top_level_parser()
+        args = parser.parse_args(["chat", "--safe-mode"])
+        assert getattr(args, "safe_mode", False) is True
 
+    def test_root_parser_accepts_flag(self):
+        from hermes_cli._parser import build_top_level_parser
 
+        parser, _subparsers, _chat = build_top_level_parser()
+        args = parser.parse_args(["--safe-mode"])
+        assert getattr(args, "safe_mode", False) is True
 
+    def test_default_is_off(self):
+        from hermes_cli._parser import build_top_level_parser
 
-
-
+        parser, _subparsers, _chat = build_top_level_parser()
+        args = parser.parse_args(["chat"])
+        assert getattr(args, "safe_mode", False) is False

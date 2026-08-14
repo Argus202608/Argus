@@ -50,7 +50,7 @@ export const it: Translations = {
   },
 
   app: {
-    brand: "Hermes Agent",
+    brand: "Argus Agent",
     brandShort: "HA",
     closeNavigation: "Chiudi navigazione",
     closeModelTools: "Chiudi modello e strumenti",
@@ -120,8 +120,8 @@ export const it: Translations = {
     starting: "Avvio in corso",
     startedInBackground: "Avviato in background — controlla i log per i progressi",
     stopped: "Arrestato",
-    updateHermes: "Aggiorna Hermes",
-    updatingHermes: "Aggiornamento di Hermes…",
+    updateHermes: "Aggiorna Argus",
+    updatingHermes: "Aggiornamento di Argus…",
     waitingForOutput: "In attesa di output…",
   },
 
@@ -129,14 +129,8 @@ export const it: Translations = {
     title: "Sessioni",
     history: "Cronologia",
     overview: "Panoramica",
-    filterChats: "Chat",
-    filterAutomation: "Automazione",
-    filterAll: "Tutte",
-    sourceFilter: "Origine della sessione",
-    anySource: "Qualsiasi origine",
     searchPlaceholder: "Cerca nel contenuto dei messaggi...",
     noSessions: "Nessuna sessione",
-    noSessionsInFilter: "Nessuna sessione in questo filtro",
     noMatch: "Nessuna sessione corrisponde alla ricerca",
     startConversation: "Avvia una conversazione per vederla qui",
     noMessages: "Nessun messaggio",
@@ -326,7 +320,7 @@ export const it: Translations = {
     enableRuntime: "Abilita",
     forceReinstall: "Forza reinstallazione (elimina prima la cartella esistente)",
     headline:
-      "Scopri, installa, abilita e aggiorna i plugin Hermes (parità con `hermes plugins`).",
+      "Scopri, installa, abilita e aggiorna i plugin Argus (parità con `hermes plugins`).",
     identifierLabel: "URL Git o owner/repo",
     inactive: "inattivo",
     installBtn: "Installa",
@@ -439,32 +433,21 @@ export const it: Translations = {
     replaceCurrentValue: "Sostituisci valore corrente ({preview})",
     showValue: "Mostra valore reale",
     hideValue: "Nascondi valore",
-    customTitle: "Chiavi personalizzate",
-    customHint: "Variabili d'ambiente arbitrarie salvate nel tuo .env che Hermes non riconosce. Usale per iniettare variabili d'ambiente per skill, server MCP o i tuoi strumenti.",
-    customConfigured: "{count} chiave/i personalizzata/e impostata/e",
-    addCustomKey: "Aggiungi una chiave personalizzata",
-    customKeyName: "Nome della variabile",
-    customKeyNamePlaceholder: "es. MY_SERVICE_API_KEY",
-    add: "Aggiungi",
-    invalidKeyName: "Usa solo lettere, numeri e trattini bassi (deve iniziare con una lettera o un trattino basso).",
   },
 
   oauth: {
     title: "Accessi provider (OAuth)",
     providerLogins: "Accessi provider (OAuth)",
-    description:
-      "{connected} di {total} provider OAuth connessi. Usa Accedi per i flussi supportati dalla dashboard; i comandi CLI restano disponibili per configurazioni esterne o di riserva.",
+    description: "{connected} di {total} provider OAuth connessi. I flussi di accesso vengono attualmente eseguiti tramite la CLI; clicca Copia comando e incolla in un terminale per configurare.",
     connected: "Connesso",
     expired: "Scaduto",
-    notConnected: "Non connesso. Usa Accedi se disponibile, oppure esegui {command} in un terminale.",
+    notConnected: "Non connesso. Esegui {command} in un terminale.",
     runInTerminal: "in un terminale.",
     noProviders: "Nessun provider compatibile con OAuth rilevato.",
     login: "Accedi",
     disconnect: "Disconnetti",
     managedExternally: "Gestito esternamente",
     copied: "Copiato ✓",
-    copyCode: "Copia codice",
-    copyFailed: "Impossibile copiare automaticamente. Seleziona il codice e copialo manualmente.",
     cli: "Copia",
     copyCliCommand: "Copia comando CLI (per uso esterno / fallback)",
     connect: "Connetti",
@@ -502,11 +485,11 @@ export const it: Translations = {
   achievements: {
     hero: {
       kicker: "Agentic Gamerscore",
-      title: "Hermes Achievements",
+      title: "Argus Achievements",
       subtitle:
-        "Badge Hermes da collezione, ottenuti dalla cronologia reale delle sessioni. Gli achievement noti non completati vengono mostrati come Scoperti; gli achievement segreti restano nascosti finché non compare il primo comportamento corrispondente.",
+        "Badge Argus da collezione, ottenuti dalla cronologia reale delle sessioni. Gli achievement noti non completati vengono mostrati come Scoperti; gli achievement segreti restano nascosti finché non compare il primo comportamento corrispondente.",
       scan_subtitle:
-        "Scansione della cronologia delle sessioni Hermes in corso. La prima scansione può richiedere 5–10 secondi su cronologie ampie.",
+        "Scansione della cronologia delle sessioni Argus in corso. La prima scansione può richiedere 5–10 secondi su cronologie ampie.",
     },
     actions: {
       rescan: "Riscansiona",
@@ -521,7 +504,7 @@ export const it: Translations = {
       highest_tier: "Livello più alto",
       highest_tier_hint: "Copper → Silver → Gold → Diamond → Olympian",
       latest: "Più recente",
-      latest_hint_empty: "usa Hermes di più",
+      latest_hint_empty: "usa Argus di più",
       none_yet: "Nessuno ancora",
     },
     state: {
@@ -552,10 +535,10 @@ export const it: Translations = {
       tiers_header: "Livelli",
       secret_header: "Achievement segreti",
       secret_body:
-        "I segreti nascondono il loro trigger esatto. Quando Hermes rileva un segnale correlato, la carta passa a Scoperto e mostra il requisito.",
+        "I segreti nascondono il loro trigger esatto. Quando Argus rileva un segnale correlato, la carta passa a Scoperto e mostra il requisito.",
       scan_status_header: "Stato della scansione",
       scan_status_body:
-        "Hermes sta scansionando la cronologia locale una sola volta, poi le carte appariranno automaticamente. Non è bloccato nulla se richiede qualche secondo.",
+        "Argus sta scansionando la cronologia locale una sola volta, poi le carte appariranno automaticamente. Non è bloccato nulla se richiede qualche secondo.",
       what_scanned_header: "Cosa viene scansionato",
       what_scanned_body:
         "Sessioni, chiamate agli strumenti, metadati del modello, errori, achievement e stato di sblocco locale.",
@@ -602,7 +585,7 @@ export const it: Translations = {
         "Condividi su X apre un post precompilato in una nuova scheda. Clicca prima su Copia immagine se vuoi allegare il badge 1200×630 — X ti permette di incollarlo direttamente nell'editor del tweet. Scarica PNG salva il file per l'uso ovunque.",
       clipboard_unsupported:
         "La copia delle immagini negli appunti non è supportata in questo browser — usa Scarica invece.",
-      tweet_text: "Just unlocked {tier_part}\"{name}\" in Hermes Agent ☤",
+      tweet_text: "Just unlocked {tier_part}\"{name}\" in Argus Agent ☤",
     },
   },
   kanban: {

@@ -17,8 +17,6 @@ import pytest
 
 @pytest.fixture()
 def server():
-    # Mocks are scoped to the initial import only (see
-    # tests/tui_gateway/test_protocol.py for the rationale).
     with patch.dict(
         "sys.modules",
         {
@@ -30,8 +28,7 @@ def server():
             "hermes_state": MagicMock(),
         },
     ):
-        mod = importlib.import_module("tui_gateway.server")
-    yield mod
+        yield importlib.import_module("tui_gateway.server")
 
 
 def _capture(server, monkeypatch):
@@ -65,3 +62,12 @@ def test_manual_compressing_kind_is_preserved(server, monkeypatch):
     assert events[0]["kind"] == "compressing"
 
 
+def test_compaction_status_contains_marker():
+    # Contract: the gateway matches COMPACTION_STATUS_MARKER inside the emitted
+    # status text. If the message is reworded, the marker must survive.
+    from agent.conversation_compression import (
+        COMPACTION_STATUS,
+        COMPACTION_STATUS_MARKER,
+    )
+
+    assert COMPACTION_STATUS_MARKER in COMPACTION_STATUS
