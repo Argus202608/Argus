@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/banner.png" alt="Argus" width="100%">
+  <img src="assets/mmargus_logo.jpeg" alt="MM-Argus logo" width="420">
 </p>
 
 # Argus
@@ -47,7 +47,7 @@ compatibility with inherited integrations.
 ## Install from source
 
 ```bash
-git clone https://github.com/Argus202608/argus.git
+git clone https://github.com/Argus202608/Argus.git
 cd argus
 
 uv venv --python 3.11 .venv
@@ -121,7 +121,7 @@ npm --workspace apps/desktop run test:desktop
 ## Documentation and support
 
 - [Documentation source](website/docs)
-- [Issues](https://github.com/Argus202608/argus/issues)
+- [Issues](https://github.com/Argus202608/Argus/issues)
 - [Security policy](SECURITY.md)
 - [Contributing](CONTRIBUTING.md)
 

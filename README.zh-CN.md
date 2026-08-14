@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/banner.png" alt="Argus" width="100%">
+  <img src="assets/mmargus_logo.jpeg" alt="MM-Argus 标志" width="420">
 </p>
 
 # Argus
@@ -43,7 +43,7 @@ PyPI 包名是 `mm-argus`，推荐命令是 `argus`。为兼容继承自 Hermes 
 ## 从源码安装
 
 ```bash
-git clone https://github.com/Argus202608/argus.git
+git clone https://github.com/Argus202608/Argus.git
 cd argus
 
 uv venv --python 3.11 .venv
@@ -114,7 +114,7 @@ npm --workspace apps/desktop run test:desktop
 ## 文档与反馈
 
 - [文档源码](website/docs)
-- [问题反馈](https://github.com/Argus202608/argus/issues)
+- [问题反馈](https://github.com/Argus202608/Argus/issues)
 - [安全策略](SECURITY.md)
 - [贡献指南](CONTRIBUTING.md)
 

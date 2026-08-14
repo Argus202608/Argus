@@ -1,7 +1,7 @@
 <div dir="rtl">
 
 <p align="center">
-  <img src="assets/banner.png" alt="Argus" width="100%">
+  <img src="assets/mmargus_logo.jpeg" alt="MM-Argus logo" width="420">
 </p>
 
 # آرگس (Argus)
@@ -43,7 +43,7 @@ PyPI پیکیج کا نام `mm-argus` اور بنیادی کمانڈ `argus` ہ
 <div dir="ltr">
 
 ```bash
-git clone https://github.com/Argus202608/argus.git
+git clone https://github.com/Argus202608/Argus.git
 cd argus
 uv venv --python 3.11 .venv
 source .venv/bin/activate
@@ -72,7 +72,7 @@ API keys، tokens اور passwords رکھیں۔ حقیقی credentials کبھی 
 ## روابط
 
 - [دستاویزات](website/docs)
-- [مسائل](https://github.com/Argus202608/argus/issues)
+- [مسائل](https://github.com/Argus202608/Argus/issues)
 - [سیکیورٹی پالیسی](SECURITY.md)
 - [تعاون](CONTRIBUTING.md)
 

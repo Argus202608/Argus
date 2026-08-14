@@ -24,13 +24,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Argus202608/argus.git"
+    "url": "git+https://github.com/Argus202608/Argus.git"
   },
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/Argus202608/argus/issues"
+    "url": "https://github.com/Argus202608/Argus/issues"
   },
-  "homepage": "https://github.com/Argus202608/argus#readme",
+  "homepage": "https://github.com/Argus202608/Argus#readme",
   "dependencies": {
     "@streamdown/math": "^1.0.2",
     "agent-browser": "^0.26.0",
