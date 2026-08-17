@@ -2140,12 +2140,12 @@ DEFAULT_CONFIG = {
         "watcher_answer_temperature": 0.4,
         "watcher_answer_max_tokens": 1536,
         # ④ SearchWorker — external retrieval (resident under Router)
-        # Uses the bundled agent/multimodal/sly_search_tool.py (RAG image/text
-        # search via a configured endpoint and optional proxy — set
-        # MM_SEARCH_RAG_API_URL / MM_SEARCH_PROXY_URL). Set enable_search false,
-        # or search_tool_path to point at a different tool module.
+        # text_search runs on the AnySearch backend (see the model.*.anysearch
+        # block) and needs nothing local. search_tool_path is an optional extension
+        # point for the deprecated image_search_* tools: point it at a module
+        # exposing unified_image_search(); empty means those report "not configured".
         "enable_search": True,
-        "search_tool_path": "",      # "" = use bundled sly_search_tool.py
+        "search_tool_path": "",      # "" = image search disabled
         "search_temperature": 0.2,
         "search_max_tokens": 4096,
         "search_max_tool_rounds": 3,

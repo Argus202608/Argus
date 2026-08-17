@@ -63,17 +63,16 @@ from openai import AsyncOpenAI
 log = logging.getLogger("hermes.multimodal")
 
 
-# External image/text search tool path. A working sly_search_tool.py IS bundled
-# beside this package (agent/multimodal/sly_search_tool.py), so default to it —
-# otherwise SearchWorker silently degrades to "no external retrieval" and the
-# deep-research agent can never look anything up (problem #1). A user can still
-# override via multimodal.search_tool_path. Resolved lazily (see below) so it
-# works regardless of CWD.
-import os as _os
-DEFAULT_SEARCH_TOOL_PATH = _os.path.join(
-    _os.path.dirname(_os.path.abspath(__file__)), "sly_search_tool.py")
-if not _os.path.isfile(DEFAULT_SEARCH_TOOL_PATH):
-    DEFAULT_SEARCH_TOOL_PATH = ""
+# Optional external *image* search tool. Argus ships no implementation: the
+# module is a deployment-specific extension point (it has to talk to whatever
+# image-retrieval service you run), so the default is empty and the image_search_*
+# tools degrade to a clean "not configured" observation instead of failing hard.
+# To enable them, point multimodal.search_tool_path at a Python file exposing
+#   async unified_image_search(image, keys=[...], threshold=0.6) -> list[dict]
+# (or the older ``image_search_observation(image, image_search_keys=[...])``).
+# NOTE: text search does NOT need this — it goes through the AnySearch backend,
+# see the anysearch_* fields below.
+DEFAULT_SEARCH_TOOL_PATH = ""
 
 
 # ★ Edge rel_type 白名单 (writer 建图去污染): LLM 乱编的 rel_type 会污染图谱,
@@ -400,8 +399,9 @@ class Config:
     # ---- 工具 (search_tool 外接) ----
     enable_search: bool = True
     search_tool_path: str = DEFAULT_SEARCH_TOOL_PATH   # 图搜(暂废弃)仍用它 importlib 加载
-    text_search_keys: str = "google,xhs"
-    image_search_keys: str = "google,xhs"
+    # 检索源标签, 逗号分隔。原样透传给外接 search tool, 由它决定认哪些 key。
+    text_search_keys: str = "google"
+    image_search_keys: str = "google"
     search_threshold: float = 0.6
     text_search_topk: int = 10
     image_search_max_side: int = 720

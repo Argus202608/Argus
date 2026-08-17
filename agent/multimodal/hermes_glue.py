@@ -1382,25 +1382,18 @@ def build_config(hermes_cfg: Optional[Dict[str, Any]] = None, *,
                 session_id=session_id, runtime_id=runtime_id))
     except Exception as e:  # pragma: no cover - fall back to dataclass defaults
         log.debug("[multimodal] path re-root skipped: %s", e)
-    # External search tool: the bundled agent/multimodal/sly_search_tool.py
-    # provides the RAG image/text search (SearchWorker calls unified_text_search /
-    # unified_image_search). Default to it; allow an explicit config override.
-    # NOTE: it talks to an internal RAG endpoint via an internal proxy — override
-    # MM_SEARCH_RAG_API_URL / MM_SEARCH_PROXY_URL env vars for other environments.
+    # Optional external image-search module. Nothing is bundled — this is a pure
+    # extension point, so an unset multimodal.search_tool_path leaves it empty and
+    # the image_search_* tools report "not configured" (they are deprecated and no
+    # longer declared in the system prompt anyway, so the LLM won't dispatch them).
     explicit = mm.get("search_tool_path")
-    if explicit:
-        cfg.search_tool_path = explicit
-    else:
-        bundled = os.path.join(os.path.dirname(__file__), "sly_search_tool.py")
-        cfg.search_tool_path = bundled if os.path.exists(bundled) else ""
-    # enable_search follows config (default True) but auto-disables if no tool
-    # file. cfg.search_tool_path was set above to a path that already exists
-    # (bundled branch) or to an explicit override, so we don't re-stat it here:
-    # an explicit override that doesn't exist is the operator's problem to see,
-    # and the bundled path was existence-checked when assigned. An explicit
-    # enable_search=False is respected via bool(enable).
+    cfg.search_tool_path = str(explicit).strip() if explicit else ""
+    # enable_search gates the whole SearchWorker, and text_search runs on the
+    # AnySearch backend, which needs no local module. So it must NOT be ANDed with
+    # search_tool_path — doing that would silently kill deep-research web search
+    # for everyone who hasn't wired up an image-search module.
     enable = mm.get("enable_search", True)
-    cfg.enable_search = bool(enable) and bool(cfg.search_tool_path)
+    cfg.enable_search = bool(enable)
 
     # WatcherAgent / Memory workers call the LLM with cfg.model. By default that
     # should FOLLOW the main agent's resolved model (set at engine/backend build

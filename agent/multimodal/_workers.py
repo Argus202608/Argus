@@ -385,12 +385,16 @@ class ToolBox:
         if self._load_err is not None:
             raise RuntimeError(self._load_err)
         path = self.cfg.search_tool_path
+        if not path:
+            self._load_err = ("no image-search tool configured "
+                              "(set multimodal.search_tool_path)")
+            raise RuntimeError(self._load_err)
         if not os.path.exists(path):
             self._load_err = f"search tool file does not exist: {path}"
             raise RuntimeError(self._load_err)
         try:
             spec = importlib.util.spec_from_file_location(
-                "_sly_search_tool_mem", path
+                "_mm_search_tool_mem", path
             )
             if spec is None or spec.loader is None:
                 raise RuntimeError(f"could not load spec: {path}")
