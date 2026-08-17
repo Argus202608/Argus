@@ -58,7 +58,12 @@ _OPENROUTER_PROVIDER_SORT_VALUES = {"throughput", "latency", "price"}
 # billing reasons keep their own 60s cooldown (set above); this is the
 # narrower non-rate-limit case.  See issue #24996.
 _FALLBACK_EXHAUSTED_COOLDOWN_S = 5.0
-_MESSAGES_PROXY_MODELS = {"gpt-5.6 luna", "kimi/kimi-k3"}
+# Models that MUST bypass the standard OpenAI SDK and hit /v1/messages directly.
+# ★ GPT-5.6 Luna 已迁移到 /v1/chat/completions (OpenAI wire, 官方文档支持):
+#   → 从这个集合移除, 让主 agent 走标准 OpenAI SDK 路径.
+#   → 内部服务如果强制走 /v1/messages, 只需把 "gpt-5.6 luna" 加回来 + config
+#     里 base_url 恢复 /v1/messages 结尾即可无损回滚.
+_MESSAGES_PROXY_MODELS = {"kimi/kimi-k3"}
 
 
 def _ra():

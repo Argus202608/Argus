@@ -62,16 +62,28 @@ def _memory_prefers_messages_endpoint(model: str) -> bool:
 def _prefers_messages_transport(model: str, base_url: str) -> bool:
     """Whether an explicit backend should use the Messages client.
 
-    Keep the historical model-name routing for Luna/K3, while treating an
-    explicit ``/v1/messages`` leaf as the authoritative transport signal for
-    other models.  A generic ``/v1`` OpenAI-compatible root is deliberately
-    not enough to select this transport.
+    Transport signal precedence (endpoint > model name):
+      1. endpoint ends with ``/chat/completions`` (or ``/v1/chat/completions``)
+         → OpenAI wire, HARD OVERRIDE. Even when the model is Luna/K3, the
+         user has explicitly targeted the chat_completions leaf and expects
+         OpenAI-compatible request format (e.g. a hosted Luna endpoint 在 chat/
+         completions 端点支持 multi-image + text via OpenAI wire, but the
+         same model on /v1/messages proxy strips vision — the endpoint is
+         what actually differs).
+      2. endpoint ends with ``/v1/messages`` → Messages wire (Anthropic).
+      3. otherwise fall back to the historical model-name heuristic (Luna/K3
+         default to Messages when the endpoint doesn't disambiguate).
     """
     endpoint = (base_url or "").strip().rstrip("/").lower()
-    return (
-        endpoint.endswith("/v1/messages")
-        or _memory_prefers_messages_endpoint(model)
-    )
+    # ★ Endpoint HARD OVERRIDE: explicit chat_completions leaf wins over any
+    #   model-name-based routing. Fixes recall @ Luna @ chat/completions being
+    #   silently redirected to MessagesMemoryClient by the "gpt-5.6 luna" in
+    #   model-name substring match, which would then fail on the wrong wire.
+    if endpoint.endswith("/chat/completions"):
+        return False
+    if endpoint.endswith("/v1/messages"):
+        return True
+    return _memory_prefers_messages_endpoint(model)
 
 
 def _messages_endpoint(base_url: str) -> str:
@@ -672,6 +684,13 @@ _REVIEWER_BACKEND_KEYS = (
     "reviewer_provider", "reviewer_base_url", "reviewer_base_urls",
     "reviewer_api_key", "reviewer_model",
 )
+# ★ Recall decide/distill 【独立端点】4 件套 (post-v33 新增)。空 → recall_client
+#   fallback 到 memory_client (老行为)。用于 writer/recall 分家: writer 保留
+#   K2.6 MaaS (高频便宜), recall 切 Luna @ chat/completions (视觉多图+文)。
+_RECALL_BACKEND_KEYS = (
+    "recall_provider", "recall_base_url",
+    "recall_api_key", "recall_model",
+)
 _RECALL_VERIFY_BACKEND_KEYS = (
     "recall_verify_provider", "recall_verify_base_url",
     "recall_verify_api_key", "recall_verify_model",
@@ -1193,11 +1212,12 @@ def flatten_mm_config(hermes_cfg: Dict[str, Any]) -> Dict[str, Any]:
             for src_key, flat_key in _MEM_ABILITY_MAP:
                 if src_key in sub and sub[src_key] is not None:
                     out[flat_key] = sub[src_key]
-            # ★ v33: NO memory.recall / memory.reviewer endpoint 4-tuple — both
-            #   build directly from model.memory (same as writer). Only their
-            #   BEHAVIOR knobs (recall.topk_micro / reviewer.total_frames /
-            #   reviewer.event_gate.* …) are flattened via the deep-path walker;
-            #   there is no recall_provider/reviewer_provider/model.
+            # ★ post-v33: memory.recall 【可选】endpoint 4-tuple (provider/
+            #   base_url/api_key/model) — 通过 _DEEP_PATH_PREFIX["model.memory.
+            #   recall"]="recall" 前缀规则平铺成 recall_*, 由 recall_client() 消费。
+            #   memory.reviewer 依旧没有独立 4-tuple (由下方 _REVIEWER_BACKEND_KEYS
+            #   走 reviewer_base_urls 多路径专有解析)。行为 knobs (recall.topk_micro
+            #   / reviewer.total_frames / …) 依旧走 deep-path walker。
         # ★ embedding 角色除 4-tuple 外, 二期带 mm_* 三件套 (帧图像 embedding,
         #   DashScope multimodal-embedding-v1, 与文本向量独立客户端):
         #     model.embedding.mm_model/mm_base_url/mm_api_key
@@ -1330,6 +1350,7 @@ def build_config(hermes_cfg: Optional[Dict[str, Any]] = None, *,
     for key in (_MEMORY_BACKEND_KEYS + _WORKER_BACKEND_KEYS
                 + _MONITOR_BACKEND_KEYS
                 + _REVIEWER_BACKEND_KEYS
+                + _RECALL_BACKEND_KEYS
                 + _RECALL_VERIFY_BACKEND_KEYS
                 + _EMBEDDING_BACKEND_KEYS + _OCR_BACKEND_KEYS
                 + _ANYSEARCH_KEYS):
@@ -1636,6 +1657,56 @@ def wrap_kimi_client(client: Any, *, dialect: str = "moonshot") -> Any:
     return client
 
 
+def wrap_luna_client(client: Any, *, model: str = "") -> Any:
+    """Wrap an OpenAI-compatible client so chat.completions.create() strips
+    sampling params that GPT-5.6 Luna's custom OpenAI-compatible endpoint rejects.
+
+    Luna server-side only accepts temperature=1 (its default); an explicit
+    temperature=0.2 returns HTTP 400 "Unsupported value: 'temperature' does not
+    support 0.2 with this model." The same 400 applies to top_p /
+    presence_penalty / frequency_penalty when a non-default value is pinned.
+    Strip these keys so the request falls back to Luna's server-side defaults.
+
+    Idempotent (marks completions._luna_wrapped); no-op unless model contains
+    "gpt-5.6 luna" (case-insensitive). Only use on OWNED clients.
+
+    Historical context: the equivalent shim _fixed_temperature_for_model in
+    agent/auxiliary_client.py catches Luna for the MAIN agent path. Submodule
+    clients built via build_submodule_client / _memory_client_from_config
+    bypass that path — the watcher's react_step / answer calls pin
+    temperature=0.2 / 0.4 from cfg. This wrap patches those paths.
+    """
+    if client is None:
+        return client
+    m = (model or "").strip().lower()
+    if "gpt-5.6 luna" not in m:
+        return client
+    try:
+        completions = client.chat.completions
+    except Exception:
+        return client
+    if getattr(completions, "_luna_wrapped", False):
+        return client
+    orig_create = completions.create
+
+    _STRIP_KEYS = ("temperature", "top_p",
+                   "presence_penalty", "frequency_penalty")
+
+    def wrapped_create(*args, **kwargs):
+        for k in _STRIP_KEYS:
+            kwargs.pop(k, None)
+        return orig_create(*args, **kwargs)
+
+    try:
+        completions.create = wrapped_create
+        completions._luna_wrapped = True
+        log.info("[multimodal] wrapped client for Luna: strip %s from chat.completions.create",
+                 list(_STRIP_KEYS))
+    except Exception:
+        log.warning("[multimodal] could not wrap client for Luna sampling params")
+    return client
+
+
 def _submodule_http_client(provider: str, model: str):
     """Build an httpx.AsyncClient whose request timeout follows the MAIN agent's
     config — resolved via ``get_provider_request_timeout``, which honors (in
@@ -1743,6 +1814,11 @@ def build_submodule_client(
     # while resident submodules can deterministically close a dedicated pool on
     # their owning event loop.
     client = wrap_kimi_client(client, dialect=dialect)
+    # ★ Luna 的 custom endpoint 只允许 temperature=1 等默认 sampling params;
+    #   watcher react_step / answer 从 cfg 显式发 temperature=0.2 / 0.4 会被
+    #   服务端 400 拒绝. wrap_luna_client 是一个 no-op for 非 Luna model,
+    #   Luna model 时 patch chat.completions.create 去掉不兼容 sampling params.
+    client = wrap_luna_client(client, model=model)
     client._hermes_submodule_owned = True  # type: ignore[attr-defined]
     return client, model
 
@@ -1859,16 +1935,35 @@ class HermesClientFactory(LLMClientFactory):
     def recall_client(self) -> Tuple[Any, str]:
         """Resolve the RecallAgent client (multimodal memory-recall sub-agent).
 
-        v33: recall has NO dedicated endpoint — it uses the SAME endpoint/model as
-        model.memory (built from the memory_* fields, like reviewer). Returns
-        (client_or_memory_wrapper, model)."""
+        Dedicated endpoint (post-v33): if model.memory.recall.base_url is set,
+        the recall sub-agent uses its OWN backend (built by
+        _memory_client_from_config, same path as reviewer/verify). Otherwise it
+        falls back to model.memory (same client as MemoryWriter, historical
+        behavior).
+
+        Typical split:
+          * memory writer @ K2.6 MaaS  (无审查, non-thinking 快, 10s 高频便宜)
+          * recall decide/distill @ Luna @ /v1/chat/completions
+            (多图+文视觉, 命中率优先, tools 不需要)
+
+        Returns (client_or_memory_wrapper, model). RecallAgent supports both a
+        raw AsyncOpenAI client and a MemoryLLMClient wrapper (e.g.
+        MessagesMemoryClient for Luna's /v1/messages proxy)."""
+        cfg = self.cfg
+        recall_base = str(getattr(cfg, "recall_base_url", "") or "").strip() if cfg else ""
+        if recall_base:
+            client = self._memory_client_from_config(
+                provider=str(getattr(cfg, "recall_provider", "") or ""),
+                base_url=recall_base,
+                api_key=str(getattr(cfg, "recall_api_key", "") or ""),
+                model=str(getattr(cfg, "recall_model", "") or ""),
+                role_label="recall",
+            )
+            return client, getattr(client, "model", "") or str(
+                getattr(cfg, "recall_model", "") or "")
+        # Fallback: share MemoryWriter's client/model (historical v33 behavior).
         mc = self.memory_client(None)
         model = getattr(mc, "model", "") or ""
-        # RecallAgent can call either a raw AsyncOpenAI client or a
-        # MemoryLLMClient wrapper such as MessagesMemoryClient. Returning the
-        # wrapper is important for GPT-5.6 Luna's local /v1/messages proxy: it
-        # has no ``.client`` attribute, and falling back to _resolve() silently
-        # moved recall back onto the watcher model.
         return mc, model
 
     def recall_verify_client(
@@ -2064,6 +2159,8 @@ class HermesClientFactory(LLMClientFactory):
             mem_dialect = _detect_thinking_provider(
                 provider, base_url, mem_model)
             mem_oai = wrap_kimi_client(mem_oai, dialect=mem_dialect)
+            # ★ Luna sampling params 拦截 (跟 build_submodule_client 同款).
+            mem_oai = wrap_luna_client(mem_oai, model=mem_model)
             log.info("[multimodal] %s backend: %s endpoint=%s model=%s dialect=%s",
                      role_label, provider or "(oai)", base_url,
                      mem_model or "(main)", mem_dialect)

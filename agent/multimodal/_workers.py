@@ -1680,11 +1680,11 @@ WATCHER_REACT_TOOLS = [
         "function": {
             "name": "mark_completion_candidate",
             "description": (
-                "Mark any plausible ending so the watcher can perform one prompt "
-                "visual confirmation if no new scene arrives. "
+                "Mark a plausible but not yet conclusive ending so the watcher can "
+                "perform one delayed visual confirmation if no new scene arrives. "
                 "Use this for conclusion-style closing speech, a progress bar near "
                 "the end, a possible replay button, an end card, credits, or another "
-                "credible terminal cue when buffering/loading or incomplete UI evidence "
+                "strong terminal cue when buffering/loading or incomplete UI evidence "
                 "prevents calling finish_watching now. Do not use this for an ordinary "
                 "pause, a generic static scene, or lack of new frames alone. This is "
                 "an internal lifecycle hint, not an external action."
@@ -2209,12 +2209,10 @@ Available tools:
 - recall_memory(brief): recall prior memory/subtitles. Use for "earlier" or
   "just now" references.
 - mark_completion_candidate(reason, final_observation): use when the current
-  segment has plausible ending cues (for example conclusion-style closing speech,
+  segment has strong ending cues (for example conclusion-style closing speech,
   a nearly finished progress bar, credits, a possible replay button, or an end
-  card) but the visible state is still ambiguous. Do not wait for conclusive
-  proof before marking it. This does not end the task; if no new scene follows,
-  the runtime performs one separate visual check and promptly returns the report
-  when completion is more likely than playback continuation.
+  card) but the visible state is still ambiguous. This does not end the task;
+  if no new scene follows, the runtime performs one separate visual check.
 - finish_watching(reason, final_observation): use only when the task itself has
   a finite completion condition and the attached frames conclusively prove that
   condition is now satisfied. A visibly ended media player counts. An exact
@@ -2227,7 +2225,7 @@ Available tools:
 Finite-task lifecycle rule:
 - For tasks such as "watch until this video ends", inspect every segment for
   terminal cues. If the ending is conclusive, call finish_watching. If strong
-  or plausible closing cues exist but a spinner, loading state, or incomplete controls make
+  closing cues exist but a spinner, loading state, or incomplete controls make
   them ambiguous, call mark_completion_candidate instead of merely describing
   the ambiguity in prose. If there are no meaningful closing cues, continue the
   ordinary segment analysis.
@@ -2291,15 +2289,12 @@ Requirements:
 - Start with the report itself, without an opening filler sentence.
 """
 
-WATCHER_COMPLETION_CONFIRM_SYSTEM = """You are a decisive visual verifier for a
+WATCHER_COMPLETION_CONFIRM_SYSTEM = """You are a strict visual verifier for a
 continuous video watcher. A completion check was triggered either by a previous
 segment's plausible ending or by the capture pipeline observing no dHash-novel
 scene for the configured interval. Inspect the chronological raw captures from
 before and after that static boundary and decide whether the watched media or
-user-specified finite task is likely to have completed. Timely completion is the
-product priority: once a plausible ending is supported by the images and there
-is no affirmative evidence that playback resumed, end the observation instead
-of waiting for perfect certainty.
+user-specified finite task has actually completed.
 
 Return strict JSON only, without Markdown:
 {
@@ -2309,28 +2304,54 @@ Return strict JSON only, without Markdown:
   "final_observation": "final content/state to add to the report"
 }
 
-Decision rules:
-- Return ended=true for strong completion evidence such as a replay/restart
-  control, explicit end card, credits, a progress indicator at its duration, an
-  explicit final slide, or a coherent conclusion/closing interaction followed
-  by a terminal player state across the timestamped captures.
-- Also return ended=true for a plausible ending: at least one credible closing
-  cue (closing speech, final interaction, near-end progress, stable end-like
-  screen, credits, or terminal-looking controls) persists across the static
-  boundary and no later frame shows resumed playback or new program content.
-  A spinner or incomplete player controls do not veto such a likely ending.
-- Use confidence 0.60-0.79 for a likely/suspected ending and 0.80-1.00 for an
-  explicit or conclusive ending. If the evidence is more consistent with
-  completion than continuation, return ended=true.
-- Return ended=false only when the captures show affirmative continuation
-  evidence, an ordinary mid-video pause/buffer, a network/error page, a progress
-  bar visibly short of the end, or visual sameness with no credible closing cue.
-- A spinner, pause icon, frozen frame, silence, or sameness alone is not an
-  ending; it must be paired with a credible closing cue.
+★ PRIMARY CHECK — Progress bar / elapsed-duration display (highest priority):
+Read the elapsed/duration display from every frame (e.g. "01:56 / 02:28",
+"00:10 / 02:28"). If the display is visible, apply these hard rules FIRST
+before any other reasoning:
+
+  • END ZONE — elapsed >= duration - 10s, OR elapsed / duration >= 0.90:
+    Return ended=true with confidence >= 0.85 whenever the near-end progress
+    bar is combined with ANY ONE of the following terminal cues:
+    - loading spinner or buffering indicator persisting across frames
+    - freeze frame / no visible motion for the static interval
+    - closing speech ("谢谢", "关注", "点赞", "拜拜", "byebye", "thanks",
+      "subscribe", host waving, formal sign-off)
+    - fade to black, end card, credits, replay/restart control
+    - the video repeating from the start (progress reset to 00:00)
+    In this zone, DO NOT require elapsed to hit exactly duration. Many
+    players park the progress indicator a few seconds before the true end
+    when the last frame contains an end-of-content spinner or overlay.
+
+  • START/PAUSE ZONE — elapsed <= duration * 0.10 (below 10%):
+    Return ended=false. This is either not-yet-started or paused near the
+    beginning. Play button, static screen, or spinner in this zone is NEVER
+    completion.
+
+  • MID ZONE — 10% < elapsed / duration < 0.90:
+    Fall through to the strong-cue rules below. A spinner alone is NOT
+    completion in the mid zone; require strong closing cues.
+
+Decision rules (when no progress display is visible, or in the mid zone):
+- Strong completion evidence includes a replay/restart control, explicit end
+  card, credits, a progress indicator at its duration, an explicit final slide,
+  or a coherent conclusion/closing interaction followed by a terminal player
+  state across the timestamped captures.
+- A spinner, buffering indicator, pause icon, frozen frame, silence, or visual
+  sameness alone is not completion outside the END ZONE.
+- A semantic conclusion may combine with persistent terminal-looking player UI,
+  but ordinary mid-video speech followed by buffering must remain ended=false.
+- For an INITIAL check, stay conservative when a spinner is the only ambiguous
+  UI signal. For a FOLLOW-UP extended-stall check, raw capture has continued
+  across the required total-static interval (including the initial verifier's
+  latency). If strong semantic closing/end-card evidence has persisted during
+  that interval, no new content or playback-resume evidence appeared, and the
+  only remaining ambiguity is the same player
+  spinner, treat the finite task as completed. Do not apply this escalation to
+  an ordinary mid-video frame, a network/error page, or a visible progress bar
+  that is not at the end.
 - Judge only the supplied task, candidate evidence, report, and pixels. Do not
   invent player metadata that is not visible.
-- Do not defer a suspected ending merely because explicit duration or replay UI
-  is unavailable. This check runs once; make the best terminal decision now.
+- When uncertain, return ended=false and explain what remains ambiguous.
 """
 
 
@@ -6819,7 +6840,7 @@ class WatcherWorker:
         except (TypeError, ValueError):
             confidence = 0.0
         threshold = max(0.0, min(1.0, float(getattr(
-            self.cfg, "watch_completion_confirm_min_confidence", 0.6) or 0.6)))
+            self.cfg, "watch_completion_confirm_min_confidence", 0.8) or 0.8)))
         reason = str(parsed.get("reason") or "").strip()
         observation = str(parsed.get("final_observation") or "").strip()
         confirmed = bool(ended and confidence >= threshold)

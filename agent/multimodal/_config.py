@@ -135,9 +135,17 @@ class Config:
     # the standard Authorization bearer token and an ``api-key`` header. Keep
     # this opt-in and Monitor-only so every existing endpoint stays unchanged.
     monitor_send_api_key_header: bool = False
-    # Recall decide/distill use model.memory. Visual verification may use a
-    # dedicated endpoint so a large Writer/Reviewer request cannot starve the
-    # exact-text correctness gate. Empty fields keep the historical fallback.
+    # ★ Recall decide/distill 【独立端点】(v33 之后新增, 允许 recall 与 memory
+    #   writer 分家): 空 → 回退到 model.memory (跟 writer 共用 client, 老行为)。
+    #   典型用法: writer 走 K2.6 MaaS (无审查, non-thinking 快, 10s 高频便宜),
+    #   recall 走 Luna @ /v1/chat/completions (视觉多图+文, tools 不
+    #   需要, 命中率优先)。
+    recall_provider: str = ""
+    recall_base_url: str = ""
+    recall_api_key: str = ""
+    recall_model: str = ""
+    # Recall 末尾视觉验收也可独立端点, 隔离 Writer/Reviewer 长请求对正确性 gate 的
+    # 抢占。verify_base_url 空 → 回退到 recall_client (再回退 memory)。
     recall_verify_provider: str = ""
     recall_verify_base_url: str = ""
     recall_verify_api_key: str = ""

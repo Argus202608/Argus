@@ -311,8 +311,13 @@ def _fixed_temperature_for_model(
     if _is_kimi_model(model):
         logger.debug("Omitting temperature for Kimi model %r (server-managed)", model)
         return OMIT_TEMPERATURE
+    # ★ bare is lowercase (see .lower() above), so the comparison MUST be
+    #   lowercase too. Previously "GPT-5.6 Luna" (uppercase literal) was used,
+    #   which never matched — Luna was silently missed by this shim and
+    #   subsequent calls that pinned a temperature returned 400 from Luna's
+    #   custom endpoint. Fixed 2026-08-17.
     bare = (model or "").strip().lower().rsplit("/", 1)[-1]
-    if bare == "GPT-5.6 Luna" or bare.startswith("GPT-5.6 Luna-"):
+    if bare == "gpt-5.6 luna" or bare.startswith("gpt-5.6 luna-"):
         return OMIT_TEMPERATURE
     if _is_arcee_trinity_thinking(model):
         return 0.5
