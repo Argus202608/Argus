@@ -22,7 +22,7 @@ def _reset_backend():
     from tools.computer_use.tool import reset_backend_for_tests
     reset_backend_for_tests()
     # Force the noop backend.
-    with patch.dict(os.environ, {"HERMES_COMPUTER_USE_BACKEND": "noop"}, clear=False):
+    with patch.dict(os.environ, {"ARGUS_COMPUTER_USE_BACKEND": "noop"}, clear=False):
         yield
     reset_backend_for_tests()
 
@@ -654,6 +654,155 @@ class TestCaptureResponse:
             "the truncation note describes a payload field that isn't present"
         )
         assert "truncated to" not in out["text_summary"]
+
+
+class TestMainWindowScoring:
+    """Verify main-window picking on multi-window / chrome-heavy layouts.
+
+    Fixtures are drawn from a real 腾讯会议 incident (7 windows: one
+    1280x720 main + one 720x480 room + one 500x500 popover + four 1512x37
+    menu-bar-shaped chrome strips), plus synthetic Slack-huddle /
+    Chrome-PWA / Xcode multi-panel shapes.
+    """
+
+    # ── 腾讯会议: real capture that mispicked a 1512x37 chrome strip ──
+    _TENCENT_MEETING_WINDOWS = [
+        {"app_name": "腾讯会议", "pid": 31841, "window_id": 8038,
+         "title": "TencentMeeting", "z_index": 213, "layer": 0,
+         "is_on_screen": False,
+         "bounds": {"x": 0.0, "y": 262.0, "width": 1280.0, "height": 720.0}},
+        {"app_name": "腾讯会议", "pid": 31841, "window_id": 8034,
+         "title": "", "z_index": 212, "layer": 0, "is_on_screen": False,
+         "bounds": {"x": 0.0, "y": 482.0, "width": 500.0, "height": 500.0}},
+        {"app_name": "腾讯会议", "pid": 31841, "window_id": 8036,
+         "title": "腾讯会议", "z_index": 95, "layer": 0, "is_on_screen": False,
+         "bounds": {"x": 396.0, "y": 260.0, "width": 720.0, "height": 480.0}},
+        {"app_name": "腾讯会议", "pid": 31841, "window_id": 8025,
+         "title": "", "z_index": 89, "layer": 0, "is_on_screen": False,
+         "bounds": {"x": 0.0, "y": 0.0, "width": 1512.0, "height": 37.0}},
+        {"app_name": "腾讯会议", "pid": 31841, "window_id": 8024,
+         "title": "", "z_index": 85, "layer": 0, "is_on_screen": False,
+         "bounds": {"x": 0.0, "y": 0.0, "width": 1512.0, "height": 37.0}},
+        {"app_name": "腾讯会议", "pid": 31841, "window_id": 8023,
+         "title": "", "z_index": 82, "layer": 0, "is_on_screen": False,
+         "bounds": {"x": 0.0, "y": 0.0, "width": 1512.0, "height": 37.0}},
+        {"app_name": "腾讯会议", "pid": 31841, "window_id": 8022,
+         "title": "", "z_index": 80, "layer": 0, "is_on_screen": False,
+         "bounds": {"x": 0.0, "y": 0.0, "width": 1512.0, "height": 37.0}},
+    ]
+
+    def _rank(self, raws, app_query=None):
+        """Filter chrome + score, return [(window_id, score), ...] sorted."""
+        from tools.computer_use.cua_backend import (
+            _is_chrome_strip, _is_cua_driver_own_window, _score_main_window,
+        )
+        remaining = []
+        for w in raws:
+            if _is_cua_driver_own_window(w):
+                continue
+            if _is_chrome_strip(w):
+                continue
+            remaining.append({
+                **w,
+                "off_screen": not w.get("is_on_screen", True),
+            })
+        scored = [(w, _score_main_window(w, remaining, app_query))
+                  for w in remaining]
+        scored.sort(key=lambda ws: ws[1], reverse=True)
+        return [(w["window_id"], round(s, 3)) for w, s in scored]
+
+    def test_tencent_meeting_picks_1280x720_main(self):
+        """Regression: 8022 (1512x37 chrome) was picked over 8038 main."""
+        from tools.computer_use.cua_backend import _is_chrome_strip
+        # All four 1512x37 empty-title strips should be hard-excluded.
+        excluded = [w for w in self._TENCENT_MEETING_WINDOWS
+                    if _is_chrome_strip(w)]
+        assert {w["window_id"] for w in excluded} == {8022, 8023, 8024, 8025}
+        # Of the three survivors, the 1280x720 titled window wins.
+        ranking = self._rank(self._TENCENT_MEETING_WINDOWS, app_query="腾讯会议")
+        assert ranking[0][0] == 8038
+
+    def test_chrome_strip_hard_filter_semantics(self):
+        """Hard filter should NOT eat titled thin windows (e.g. a HUD)."""
+        from tools.computer_use.cua_backend import _is_chrome_strip
+        # Same shape as tencent chrome but with a title → survives.
+        titled_strip = {
+            "app_name": "SomeApp", "title": "Now playing",
+            "bounds": {"x": 0.0, "y": 0.0, "width": 1512.0, "height": 37.0},
+        }
+        assert _is_chrome_strip(titled_strip) is False
+        # Same shape but not at y=0 (floating HUD lower on screen) → survives.
+        floating = {
+            "app_name": "SomeApp", "title": "",
+            "bounds": {"x": 100.0, "y": 400.0, "width": 400.0, "height": 30.0},
+        }
+        assert _is_chrome_strip(floating) is False
+        # Real menu bar shape → excluded.
+        menu_bar = {
+            "app_name": "SomeApp", "title": "",
+            "bounds": {"x": 0.0, "y": 0.0, "width": 1512.0, "height": 37.0},
+        }
+        assert _is_chrome_strip(menu_bar) is True
+
+    def test_slack_huddle_floating_panel_loses_to_main(self):
+        """Slack huddle overlay (layer > 0, small) shouldn't beat the main."""
+        windows = [
+            {"app_name": "Slack", "pid": 100, "window_id": 1,
+             "title": "Slack | #general | Acme", "z_index": 50, "layer": 0,
+             "is_on_screen": True,
+             "bounds": {"x": 0.0, "y": 40.0, "width": 1400.0, "height": 900.0}},
+            # Huddle panel: smaller, on a floating layer.
+            {"app_name": "Slack", "pid": 100, "window_id": 2,
+             "title": "Huddle", "z_index": 10, "layer": 3,
+             "is_on_screen": True,
+             "bounds": {"x": 100.0, "y": 100.0, "width": 320.0, "height": 200.0}},
+        ]
+        ranking = self._rank(windows, app_query="Slack")
+        assert ranking[0][0] == 1
+
+    def test_on_screen_beats_off_screen_when_area_similar(self):
+        """Two similarly-sized main windows: prefer the visible one."""
+        windows = [
+            {"app_name": "MyApp", "pid": 200, "window_id": 10, "title": "MyApp — doc",
+             "z_index": 20, "layer": 0, "is_on_screen": False,
+             "bounds": {"x": 0.0, "y": 0.0, "width": 1200.0, "height": 800.0}},
+            {"app_name": "MyApp", "pid": 200, "window_id": 11, "title": "MyApp — doc",
+             "z_index": 21, "layer": 0, "is_on_screen": True,
+             "bounds": {"x": 0.0, "y": 0.0, "width": 1200.0, "height": 800.0}},
+        ]
+        ranking = self._rank(windows, app_query="MyApp")
+        assert ranking[0][0] == 11
+
+    def test_all_off_screen_still_picks_biggest_titled(self):
+        """腾讯会议 case generalized: no on-screen window, main still wins."""
+        windows = [
+            # Empty popover, medium sized, off-screen.
+            {"app_name": "App", "pid": 1, "window_id": 1, "title": "",
+             "z_index": 10, "layer": 0, "is_on_screen": False,
+             "bounds": {"x": 100.0, "y": 100.0, "width": 400.0, "height": 400.0}},
+            # Real main window, titled, larger, off-screen.
+            {"app_name": "App", "pid": 1, "window_id": 2, "title": "App — Main",
+             "z_index": 20, "layer": 0, "is_on_screen": False,
+             "bounds": {"x": 0.0, "y": 0.0, "width": 1200.0, "height": 800.0}},
+        ]
+        ranking = self._rank(windows, app_query="App")
+        assert ranking[0][0] == 2
+
+
+class TestCaptureSanityCheck:
+    def test_empty_capture_dimensions_flagged(self):
+        from tools.computer_use.cua_backend import _capture_looks_empty
+        # 1553x38: exactly the tencent-meeting incident dimensions.
+        assert _capture_looks_empty(1553, 38, 4523) is True
+        # 90px wide: definitely chrome.
+        assert _capture_looks_empty(90, 500, 12000) is True
+        # Real main window capture.
+        assert _capture_looks_empty(1280, 720, 45000) is False
+
+    def test_zero_dimensions_not_flagged_as_empty(self):
+        """No dims == no PNG at all; caller handles that separately."""
+        from tools.computer_use.cua_backend import _capture_looks_empty
+        assert _capture_looks_empty(0, 0, 0) is False
 
 
 class TestCuaCaptureImageDimensions:
@@ -1391,9 +1540,14 @@ def _make_cua_backend_with_windows(windows: List[Dict[str, Any]]):
     return backend
 
 
-# A valid 1x1 PNG (base64) for capture responses that need decodable image bytes.
+# A valid 200x200 PNG (base64) for capture responses that need decodable image
+# bytes. Was 1x1 originally, bumped to 200x200 after the sanity-check gate
+# (width<100 || height<50 → treat as empty capture) landed — a 1x1 return
+# tripped the gate, which is correct behavior in production but not what these
+# path-plumbing tests want to exercise.
 _TINY_PNG_B64 = (
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    "iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAAAAACIM/FCAAAAPUlEQVR4nO3BAQ0AAADCoPdPbQ8HFAAAAAA"
+    "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA8GadCAABYe850QAAAABJRU5ErkJggg=="
 )
 
 
@@ -1948,7 +2102,7 @@ class TestMcpInvocationResolution:
 
     def test_falls_back_when_manifest_missing_command(self):
         """If the manifest knows the args but not the command, keep our
-        resolved driver path (so HERMES_CUA_DRIVER_CMD still wins)."""
+        resolved driver path (so ARGUS_CUA_DRIVER_CMD still wins)."""
         from unittest.mock import patch
         from tools.computer_use.cua_backend import _resolve_mcp_invocation
 
@@ -2177,11 +2331,15 @@ class TestStructuredElementsConsumption:
             "windows": [{
                 "app_name": "Demo", "pid": 9, "window_id": 1,
                 "is_on_screen": True, "title": "Demo", "z_index": 0,
+                "bounds": {"x": 0, "y": 0, "width": 800, "height": 600},
             }],
         }
+        # 200x200 synthetic PNG — see _TINY_PNG_B64 note above about why the
+        # historical 1x1 no longer works with the sanity-check gate.
         png_b64 = (
-            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42m"
-            "NkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
+            "iVBORw0KGgoAAAANSUhEUgAAAMgAAADICAAAAACIM/FCAAAAPUlEQVR4nO3BAQ0AAADCoPdPbQ8H"
+            "FAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA8GadCAABYe850QAAAABJRU5E"
+            "rkJggg=="
         )
 
         def fake_call_tool(name, args):
@@ -2206,8 +2364,8 @@ class TestStructuredElementsConsumption:
         assert tool_names == ["set_config", "list_windows", "get_window_state"]
         assert cap.png_b64 == png_b64
         assert cap.image_mime_type == "image/png"
-        assert cap.width == 1
-        assert cap.height == 1
+        assert cap.width == 200
+        assert cap.height == 200
         # Vision mode stays free of AX element noise.
         assert cap.elements == []
 

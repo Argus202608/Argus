@@ -48,7 +48,7 @@ This installs the `agent-client-protocol` dependency and enables:
 For Zed registry installs, Zed launches Hermes through the official ACP Registry entry. That entry uses a `uvx` distribution that runs:
 
 ```bash
-uvx --from 'hermes-agent[acp]==<version>' hermes-acp
+uvx --from 'mm-argus[acp]==<version>' hermes-acp
 ```
 
 Make sure `uv` is available on `PATH` before using the registry install path.
@@ -136,7 +136,7 @@ Zed v0.221.x and newer installs external agents through the official ACP Registr
 Prerequisites:
 
 - Configure Hermes provider credentials first with `hermes model`, or set them in `~/.hermes/.env` / `~/.hermes/config.yaml`.
-- Install `uv` so the registry launcher can run `uvx --from 'hermes-agent[acp]==<version>' hermes-acp`.
+- Install `uv` so the registry launcher can run `uvx --from 'mm-argus[acp]==<version>' hermes-acp`.
 
 For local development before the registry entry is available, use a custom agent server in Zed settings:
 
@@ -171,10 +171,10 @@ acp_registry/icon.svg
 
 The upstream registry PR copies those files into the top-level `hermes-agent/` directory in `agentclientprotocol/registry`.
 
-The registry entry uses a `uvx` distribution that points directly at the `hermes-agent` PyPI release:
+The registry entry uses a `uvx` distribution that points directly at the `mm-argus` PyPI release:
 
 ```text
-uvx --from 'hermes-agent[acp]==<version>' hermes-acp
+uvx --from 'mm-argus[acp]==<version>' hermes-acp
 ```
 
 The registry CI verifies that the pinned version exists on PyPI, so the manifest's `version` and uvx `package` pin must always match `pyproject.toml`. `scripts/release.py` keeps them in lockstep automatically.

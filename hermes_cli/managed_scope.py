@@ -2,9 +2,9 @@
 
 A system-level directory (default ``/etc/hermes``, root-owned and not
 user-writable) supplies ``config.yaml`` and ``.env`` values that WIN over the
-user's ``~/.hermes/config.yaml`` and ``~/.hermes/.env`` on a per-leaf-key basis.
+user's ``~/.argus/config.yaml`` and ``~/.argus/.env`` on a per-leaf-key basis.
 
-This is DISTINCT from ``hermes_cli.config.is_managed()`` / ``HERMES_MANAGED``,
+This is DISTINCT from ``hermes_cli.config.is_managed()`` / ``ARGUS_MANAGED``,
 which is a coarse package-manager write-lock (declarative-distro / formula
 installs). That lock blocks all mutation; this layer injects specific immutable
 values. The two are independent and may coexist.
@@ -43,7 +43,7 @@ def _under_pytest() -> bool:
 
     Used to ignore the system default ``/etc/hermes`` during tests so a real
     managed scope on a developer/CI box can't leak policy into the suite. Tests
-    that exercise managed scope set ``HERMES_MANAGED_DIR`` explicitly, which is
+    that exercise managed scope set ``ARGUS_MANAGED_DIR`` explicitly, which is
     still honored (the override path below runs before this guard takes effect).
     """
     return "PYTEST_CURRENT_TEST" in os.environ
@@ -53,7 +53,7 @@ def get_managed_dir() -> Optional[Path]:
     """Resolve the managed-scope directory, or None when no scope is present.
 
     Resolution (highest priority first):
-      1. ``$HERMES_MANAGED_DIR`` — deployment/bootstrap path override (IT-only;
+      1. ``$ARGUS_MANAGED_DIR`` — deployment/bootstrap path override (IT-only;
          never persisted to any .env). Honored only when set to a non-empty value
          AND the directory exists.
       2. ``/etc/hermes`` — POSIX default, when it exists. Ignored under pytest so
@@ -62,7 +62,7 @@ def get_managed_dir() -> Optional[Path]:
     A non-existent directory at either tier resolves to None (no managed scope),
     which is the common case and must be cheap + side-effect-free.
     """
-    override = os.environ.get("HERMES_MANAGED_DIR", "").strip()
+    override = os.environ.get("ARGUS_MANAGED_DIR", "").strip()
     if override:
         p = Path(override)
         return p if p.is_dir() else None

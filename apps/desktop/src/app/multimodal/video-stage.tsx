@@ -2,6 +2,7 @@ import { useStore } from '@nanostores/react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { Button } from '@/components/ui/button'
+import { useI18n } from '@/i18n'
 import { Bug, Eye, Monitor, Square } from '@/lib/icons'
 import { $mmSessionId } from '@/store/multimodal'
 import {
@@ -27,6 +28,7 @@ import { MemoryDebugPanel, resolveMemoryDebugSessionIds } from './memory-debug-p
  * <video> is purely a preview mirror.
  */
 export function VideoStage() {
+  const { t } = useI18n()
   const source = useStore($mmSource)
   const stream = useStore($mmStream)
   const capStats = useStore($mmCapStats)
@@ -45,8 +47,8 @@ export function VideoStage() {
   )
 
   const capturePhaseLabel = captureDebug.code === 'gateway_not_open'
-    ? '连接中断，记录已暂停'
-    : '正在启动记录'
+    ? t.multimodal.video.connectionPaused
+    : t.multimodal.video.startingRecord
 
   const restoringStoredSession = Boolean(selectedStoredSessionId && !liveSessionId)
 
@@ -76,7 +78,7 @@ export function VideoStage() {
     try {
       await startCameraCapture()
     } catch (e) {
-      setCapError(`摄像头开启失败：${e instanceof Error ? e.message : String(e)}`)
+      setCapError(t.multimodal.video.cameraError(e instanceof Error ? e.message : String(e)))
     }
   }
 
@@ -86,9 +88,7 @@ export function VideoStage() {
     try {
       await startScreenCapture()
     } catch (e) {
-      setCapError(
-        `屏幕共享开启失败：${e instanceof Error ? e.message : String(e)}（macOS 需在“系统设置 → 隐私与安全 → 屏幕录制”授权）`
-      )
+      setCapError(t.multimodal.video.screenError(e instanceof Error ? e.message : String(e)))
     }
   }
 
@@ -106,18 +106,18 @@ export function VideoStage() {
         />
         {!capturing ? (
           <div className="absolute left-2 top-2 rounded bg-black/60 px-2 py-1 text-xs text-white/90 backdrop-blur-sm">
-            未开启画面
+            {t.multimodal.video.notStarted}
           </div>
         ) : recording ? (
           <div className="absolute right-2 top-2 flex items-center gap-1 rounded bg-black/60 px-2 py-1 text-xs text-white backdrop-blur-sm">
             <span className="size-2 animate-pulse rounded-full bg-red-500" />
-            REC · {source === 'camera' ? '摄像头' : '屏幕'} · {capStats.sent} 帧
-            {capStats.dropped > 0 ? `（丢 ${capStats.dropped}）` : ''}
+            {t.multimodal.video.recLabel(source, capStats.sent)}
+            {capStats.dropped > 0 ? ` ${t.multimodal.video.recDropped(capStats.dropped)}` : ''}
           </div>
         ) : (
           <div className="absolute right-2 top-2 flex items-center gap-1 rounded bg-black/60 px-2 py-1 text-xs text-white backdrop-blur-sm">
             <span className="size-2 animate-pulse rounded-full bg-amber-400" />
-            预览 · {source === 'camera' ? '摄像头' : '屏幕'} · {capturePhaseLabel}
+            {t.multimodal.video.previewLabel(source, capturePhaseLabel)}
           </div>
         )}
       </div>
@@ -130,7 +130,7 @@ export function VideoStage() {
             size="sm"
             variant="secondary"
           >
-            <Eye className="mr-1 size-3.5" /> 摄像头
+            <Eye className="mr-1 size-3.5" /> {t.multimodal.video.startCamera}
           </Button>
           <Button
             disabled={restoringStoredSession}
@@ -138,23 +138,23 @@ export function VideoStage() {
             size="sm"
             variant="secondary"
           >
-            <Monitor className="mr-1 size-3.5" /> 屏幕共享
+            <Monitor className="mr-1 size-3.5" /> {t.multimodal.video.startScreen}
           </Button>
         </div>
       ) : (
         <Button onClick={() => stopCaptureAndNotify()} size="sm" variant="destructive">
-          <Square className="mr-1 size-3.5" /> 停止{source === 'camera' ? '摄像头' : '屏幕共享'}
+          <Square className="mr-1 size-3.5" /> {t.multimodal.video.stopCapture(source)}
         </Button>
       )}
       {!capturing && restoringStoredSession && (
         <div className="rounded-md bg-amber-500/10 px-2 py-1 text-xs text-amber-600 dark:text-amber-300">
-          正在恢复当前会话，完成后可开启画面记录。
+          {t.multimodal.video.resuming}
         </div>
       )}
       {capError && <div className="text-xs text-(--ui-red)">{capError}</div>}
       {capturing && (capStats.sent === 0 || captureDebug.code !== 'sending') && (
         <div className="rounded-md bg-amber-500/10 px-2 py-1 text-xs text-amber-600 dark:text-amber-300">
-          采集诊断：{captureDebug.detail}
+          {t.multimodal.video.captureDiag(captureDebug.detail)}
         </div>
       )}
       <Button

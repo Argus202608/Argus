@@ -217,14 +217,15 @@ COMPUTER_USE_SCHEMA: Dict[str, Any] = {
             "raise_window": {
                 "type": "boolean",
                 "description": (
-                    "Only for action='focus_app'. If true, actually brings the "
-                    "window to the front (needed to switch to an app and type into "
-                    "it; DISRUPTS the user's current focus). Default false — input "
-                    "is routed to the app without raising, matching the background "
-                    "co-work model. Note: if the window is on another Space / "
-                    "minimized, the raise may fail on macOS — the focus_app result "
-                    "says so; do NOT loop-retry, ask the user to move the window to "
-                    "the current Space instead."
+                    "Only for action='focus_app'. Default TRUE — brings the "
+                    "window to the front so a subsequent capture/click can "
+                    "actually see it. Set FALSE only for background input "
+                    "routing where you already know the window is visible "
+                    "and you deliberately don't want to disturb the user's "
+                    "z-order. Note: if the window is on another Space / "
+                    "minimized, the raise may fail on macOS — the focus_app "
+                    "result says so; do NOT loop-retry, ask the user to move "
+                    "the window to the current Space instead."
                 ),
             },
             # ── launch_app ─────────────────────────────────────────

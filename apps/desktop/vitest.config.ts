@@ -17,6 +17,19 @@ export default mergeConfig(
       // means a bare `npx vitest run` behaves the same, instead of failing with
       // `document is not defined`.
       environment: 'jsdom',
+      // `build/hermes-src/` is a staged copy of the whole repo source (written
+      // by scripts/stage-hermes-source.cjs and gitignored). Without excluding
+      // it, vitest globs those stale duplicates too — they fail on missing
+      // aliases and on `node:test` files, drowning the real results.
+      // `electron/` and `scripts/` are `node:test` suites, not vitest ones;
+      // they run via `npm run test:desktop:platforms`.
+      exclude: [
+        '**/node_modules/**',
+        '**/dist/**',
+        'build/**',
+        'electron/**',
+        'scripts/**'
+      ],
       // Loads the jsdom shims (CSS.escape) before any test module evaluates.
       setupFiles: ['./src/test-setup.ts']
     }

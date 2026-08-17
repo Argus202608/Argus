@@ -138,6 +138,20 @@ function autoLinkRawUrls(text: string): string {
   })
 }
 
+// CommonMark emphasis right-flanking fix for CJK:
+// `**提示：**午后` fails because the closing `**` is preceded by Unicode
+// punctuation (`：`) and followed by a non-punctuation non-whitespace char
+// (`午`), violating the right-flanking delimiter rule. Insert a zero-width
+// space (U+200B) between the emphasis close and the following text so the
+// parser sees it as followed-by-whitespace-like-char and accepts the close.
+// Pattern: (Unicode punctuation)(** or *)(letter or number)
+//
+// `*` and `_` are themselves \p{P}, so the leading class must exclude them:
+// otherwise `- **bold**` matched with the FIRST `*` as the "punctuation" and
+// the ZWSP landed inside the opening delimiter (`**​bold**`), breaking every
+// bold/italic span in ordinary prose.
+const EMPHASIS_CJK_FIX_RE = /((?![*_])[\p{P}])(\*{1,2})([\p{L}\p{N}])/gu
+
 function normalizeVisibleProse(text: string): string {
   return text
     .split(INLINE_CODE_SPLIT_RE)
@@ -145,7 +159,11 @@ function normalizeVisibleProse(text: string): string {
       part.startsWith('`')
         ? part
         : autoLinkRawUrls(
-            part.replace(/`{3,}/g, '').replace(LOCAL_PREVIEW_URL_RE, '$1').replace(CITATION_MARKER_RE, '')
+            part
+              .replace(/`{3,}/g, '')
+              .replace(LOCAL_PREVIEW_URL_RE, '$1')
+              .replace(CITATION_MARKER_RE, '')
+              .replace(EMPHASIS_CJK_FIX_RE, '$1$2​$3')
           )
     )
     .join('')

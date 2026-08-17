@@ -25,9 +25,9 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def _isolate_home(tmp_path, monkeypatch):
-    hermes_home = tmp_path / ".hermes"
+    hermes_home = tmp_path / ".argus"
     hermes_home.mkdir()
-    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+    monkeypatch.setenv("ARGUS_HOME", str(hermes_home))
     yield hermes_home
 
 
@@ -173,9 +173,9 @@ def test_start_spawns_subprocess_and_writes_active_pointer(tmp_path):
     assert res["ok"] is True
     assert res["meeting_id"] == "abc-defg-hij"
     assert res["pid"] == 99999
-    assert captured_env["HERMES_MEET_URL"] == "https://meet.google.com/abc-defg-hij"
-    assert captured_env["HERMES_MEET_GUEST_NAME"] == "Test Bot"
-    assert captured_env["HERMES_MEET_DURATION"] == "15m"
+    assert captured_env["ARGUS_MEET_URL"] == "https://meet.google.com/abc-defg-hij"
+    assert captured_env["ARGUS_MEET_GUEST_NAME"] == "Test Bot"
+    assert captured_env["ARGUS_MEET_DURATION"] == "15m"
     # python -m plugins.google_meet.meet_bot
     assert any("plugins.google_meet.meet_bot" in a for a in captured_argv)
 
@@ -189,7 +189,7 @@ def test_start_spawns_subprocess_and_writes_active_pointer(tmp_path):
 def test_transcript_reads_last_n_lines(tmp_path):
     from plugins.google_meet import process_manager as pm
 
-    meeting_dir = Path(os.environ["HERMES_HOME"]) / "workspace" / "meetings" / "abc-defg-hij"
+    meeting_dir = Path(os.environ["ARGUS_HOME"]) / "workspace" / "meetings" / "abc-defg-hij"
     meeting_dir.mkdir(parents=True)
     (meeting_dir / "transcript.txt").write_text(
         "[10:00:00] Alice: one\n"
@@ -385,7 +385,7 @@ def test_enqueue_say_no_active_meeting():
 def test_enqueue_say_rejects_transcribe_mode(tmp_path):
     from plugins.google_meet import process_manager as pm
 
-    out_dir = Path(os.environ["HERMES_HOME"]) / "workspace" / "meetings" / "abc-defg-hij"
+    out_dir = Path(os.environ["ARGUS_HOME"]) / "workspace" / "meetings" / "abc-defg-hij"
     out_dir.mkdir(parents=True)
     pm._write_active({
         "pid": 0, "meeting_id": "abc-defg-hij",
@@ -400,7 +400,7 @@ def test_enqueue_say_rejects_transcribe_mode(tmp_path):
 def test_enqueue_say_writes_jsonl_in_realtime_mode():
     from plugins.google_meet import process_manager as pm
 
-    out_dir = Path(os.environ["HERMES_HOME"]) / "workspace" / "meetings" / "abc-defg-hij"
+    out_dir = Path(os.environ["ARGUS_HOME"]) / "workspace" / "meetings" / "abc-defg-hij"
     out_dir.mkdir(parents=True)
     pm._write_active({
         "pid": 0, "meeting_id": "abc-defg-hij",
@@ -456,11 +456,11 @@ def test_start_realtime_env_vars_threaded_through():
             realtime_instructions="Be brief.",
             realtime_api_key="sk-test",
         )
-    assert captured_env["HERMES_MEET_MODE"] == "realtime"
-    assert captured_env["HERMES_MEET_REALTIME_MODEL"] == "gpt-realtime"
-    assert captured_env["HERMES_MEET_REALTIME_VOICE"] == "alloy"
-    assert captured_env["HERMES_MEET_REALTIME_INSTRUCTIONS"] == "Be brief."
-    assert captured_env["HERMES_MEET_REALTIME_KEY"] == "sk-test"
+    assert captured_env["ARGUS_MEET_MODE"] == "realtime"
+    assert captured_env["ARGUS_MEET_REALTIME_MODEL"] == "gpt-realtime"
+    assert captured_env["ARGUS_MEET_REALTIME_VOICE"] == "alloy"
+    assert captured_env["ARGUS_MEET_REALTIME_INSTRUCTIONS"] == "Be brief."
+    assert captured_env["ARGUS_MEET_REALTIME_KEY"] == "sk-test"
 
 
 def test_meet_join_accepts_realtime_mode():

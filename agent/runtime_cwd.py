@@ -17,7 +17,7 @@ from typing import Any
 
 _UNSET: Any = object()
 
-_SESSION_CWD: ContextVar = ContextVar("HERMES_SESSION_CWD", default=_UNSET)
+_SESSION_CWD: ContextVar = ContextVar("ARGUS_SESSION_CWD", default=_UNSET)
 
 
 def set_session_cwd(cwd: str | None) -> Token:

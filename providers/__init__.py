@@ -73,6 +73,72 @@ def get_provider_profile(name: str) -> ProviderProfile | None:
     return _REGISTRY.get(canonical)
 
 
+#: Canonical names of profiles that describe "some OpenAI-compatible endpoint"
+#: rather than a specific vendor, so a URL identifying a real vendor should win
+#: over them.
+_GENERIC_PROVIDER_NAMES = frozenset({"custom", "openai"})
+
+
+def _is_generic_provider(name: str) -> bool:
+    """True for an empty name, or one resolving to a generic profile.
+
+    Resolves through aliases rather than matching literals: ``custom`` alone
+    carries ollama/local/vllm/llamacpp/… , and a hardcoded list silently misses
+    them (``local`` + a GLM URL kept the ollama wire shape until a test caught
+    it).
+    """
+    if not name:
+        return True
+    return _ALIASES.get(name, name) in _GENERIC_PROVIDER_NAMES
+
+
+def resolve_provider_profile(
+    name: str | None = "",
+    base_url: str | None = "",
+) -> ProviderProfile | None:
+    """Look up a profile by name, falling back to the endpoint's hostname.
+
+    WHY: a provider profile holds every vendor request quirk (thinking-toggle
+    spelling, temperature limits, reasoning placement). Those quirks are
+    properties of the *endpoint*, but ``get_provider_profile`` keys off the
+    *configured name* only. So the same vendor reached as a hand-configured
+    custom endpoint got the generic ``custom`` profile and none of its quirks —
+    despite the repo already knowing that hostname.
+
+    That is not a niche path: pointing ``custom`` at a vendor URL (or at a
+    gateway/proxy in front of one) is how most self-hosted and China-region
+    setups are configured. It is how GLM's thinking toggle silently did nothing:
+    ``custom:open.bigmodel.cn`` resolved to ``CustomProfile``, whose "disable
+    thinking" emits Ollama's ``think: false``, while the correct
+    ``thinking: {"type": "disabled"}`` lived in the never-consulted ``zai``
+    profile.
+
+    A named, non-generic provider always wins — an explicit choice is never
+    overridden. The hostname is consulted only for generic/unknown names, and
+    only when it maps to a known vendor.
+    """
+    explicit = (name or "").strip().lower()
+    profile = get_provider_profile(explicit)
+
+    if profile is not None and not _is_generic_provider(explicit):
+        return profile
+
+    if base_url:
+        try:
+            from agent.model_metadata import _infer_provider_from_url
+
+            inferred = _infer_provider_from_url(base_url)
+        except Exception:
+            inferred = None
+
+        if inferred and inferred != explicit:
+            by_host = get_provider_profile(inferred)
+            if by_host is not None:
+                return by_host
+
+    return profile
+
+
 def list_providers() -> list[ProviderProfile]:
     """Return all registered provider profiles (one per canonical name)."""
     if not _discovered:

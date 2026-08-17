@@ -81,19 +81,19 @@ def test_ssh_last_directive_wins(monkeypatch):
 def test_container_no_mount_flags(monkeypatch, tmp_path):
     monkeypatch.setattr(audit, "_in_container", lambda: True)
     monkeypatch.setattr(audit, "_path_is_mounted", lambda p: False)
-    msg = audit._container_no_volume_mount(tmp_path / ".hermes")
+    msg = audit._container_no_volume_mount(tmp_path / ".argus")
     assert msg and "persistent volume" in msg
 
 
 def test_container_with_mount_silent(monkeypatch, tmp_path):
     monkeypatch.setattr(audit, "_in_container", lambda: True)
     monkeypatch.setattr(audit, "_path_is_mounted", lambda p: True)
-    assert audit._container_no_volume_mount(tmp_path / ".hermes") is None
+    assert audit._container_no_volume_mount(tmp_path / ".argus") is None
 
 
 def test_not_in_container_silent(monkeypatch, tmp_path):
     monkeypatch.setattr(audit, "_in_container", lambda: False)
-    assert audit._container_no_volume_mount(tmp_path / ".hermes") is None
+    assert audit._container_no_volume_mount(tmp_path / ".argus") is None
 
 
 # ── network listener without auth ──────────────────────────────────────────

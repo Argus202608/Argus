@@ -178,13 +178,15 @@ function ChatHeader({
  * 窗口缩小时视频列不再自动隐藏, 由用户点此手动收起/调出。
  */
 function RailCollapseButton() {
+  const { t } = useI18n()
   const collapsed = useStore($mmRailCollapsed)
+  const label = collapsed ? t.multimodal.chat.showVideo : t.multimodal.chat.hideVideo
   return (
     <Button
-      aria-label={collapsed ? '显示视频流' : '隐藏视频流'}
+      aria-label={label}
       className="pointer-events-auto flex size-6 shrink-0 items-center justify-center border border-transparent bg-transparent p-0 text-(--ui-text-secondary) hover:border-(--ui-stroke-tertiary) hover:bg-(--ui-control-hover-background) hover:text-foreground [-webkit-app-region:no-drag]"
       onClick={() => toggleMmRail()}
-      title={collapsed ? '显示视频流' : '隐藏视频流'}
+      title={label}
       type="button"
       variant="ghost"
     >

@@ -1,4 +1,4 @@
-"""Tests for the `hermes setup multimodal` section (hermes_cli.setup).
+"""Tests for the `argus setup multimodal` section (hermes_cli.setup).
 
 Drives the pure logic — anysearch-block discovery, key writes, and env-skip —
 with mocked prompts so no TTY / network is needed. Guards against the

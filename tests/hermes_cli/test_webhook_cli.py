@@ -16,7 +16,7 @@ from hermes_cli.webhook import (
 
 @pytest.fixture(autouse=True)
 def _isolate(tmp_path, monkeypatch):
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ARGUS_HOME", str(tmp_path))
     # Default: webhooks enabled (most tests need this)
     monkeypatch.setattr(
         "hermes_cli.webhook._is_webhook_enabled", lambda: True
@@ -176,7 +176,7 @@ class TestWebhookEnabledGate:
         webhook_command(_make_args(webhook_action="subscribe", name="blocked"))
         out = capsys.readouterr().out
         assert "not enabled" in out.lower()
-        assert "hermes gateway setup" in out
+        assert "argus gateway setup" in out
         assert _load_subscriptions() == {}
 
     def test_blocks_list_when_disabled(self, capsys, monkeypatch):

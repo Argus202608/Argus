@@ -26,7 +26,7 @@ def _cap(report, key):
 def _clear_mm_env(monkeypatch):
     monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)
     monkeypatch.delenv("ANYSEARCH_API_KEY", raising=False)
-    monkeypatch.delenv("HERMES_HOME", raising=False)
+    monkeypatch.delenv("ARGUS_HOME", raising=False)
 
 
 # --------------------------------------------------------------------------- #
@@ -130,7 +130,7 @@ def _raw(local_path):
 
 def test_local_models_missing(monkeypatch, tmp_path):
     _clear_mm_env(monkeypatch)
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("ARGUS_HOME", str(tmp_path / "home"))
     monkeypatch.chdir(tmp_path)  # so relative "weights/..." fallback misses too
     r = R.probe_mm_readiness(None, _raw(str(tmp_path / "nope")))
     assert _cap(r, "local_models")["status"] == R.MISSING
@@ -138,7 +138,7 @@ def test_local_models_missing(monkeypatch, tmp_path):
 
 def test_local_models_ok(monkeypatch, tmp_path):
     _clear_mm_env(monkeypatch)
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("ARGUS_HOME", str(tmp_path / "home"))
     d = tmp_path / "bitcpm4"
     d.mkdir()
     (d / "config.json").write_text("{}", encoding="utf-8")
@@ -150,7 +150,7 @@ def test_local_models_reads_nested_path_not_flat_field(monkeypatch, tmp_path):
     # Regression for the field-name bug: the path must come from the nested
     # auxiliary.voice_intent.local_path, and a bogus flat field is ignored.
     _clear_mm_env(monkeypatch)
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("ARGUS_HOME", str(tmp_path / "home"))
     monkeypatch.chdir(tmp_path)
     d = tmp_path / "w"
     d.mkdir()

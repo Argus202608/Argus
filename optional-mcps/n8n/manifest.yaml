@@ -9,7 +9,7 @@ description: Manage and inspect n8n workflows from Hermes (stdio bridge, no publ
 source: https://github.com/CyberSamuraiX/hermes-n8n-mcp
 
 # How to launch the server once installed. The keys here map 1:1 to the
-# `mcp_servers.<name>` block written into ~/.hermes/config.yaml by the
+# `mcp_servers.<name>` block written into ~/.argus/config.yaml by the
 # existing `_save_mcp_server()` helper in hermes_cli/mcp_config.py.
 transport:
   type: stdio
@@ -35,7 +35,7 @@ install:
     - ".venv/bin/pip install -r requirements.txt"
 
 # Authentication. Three shapes:
-#   type: api_key  — prompt for env vars, write to ~/.hermes/.env
+#   type: api_key  — prompt for env vars, write to ~/.argus/.env
 #   type: oauth    — provider-mediated or remote MCP native OAuth (case 1/2)
 #   type: none     — no credentials needed
 auth:

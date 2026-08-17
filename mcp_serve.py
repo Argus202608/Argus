@@ -13,8 +13,8 @@ Matches OpenClaw's 9-tool MCP channel bridge surface:
 Plus: channels_list (Hermes-specific extra)
 
 Usage:
-    hermes mcp serve
-    hermes mcp serve --verbose
+    argus mcp serve
+    argus mcp serve --verbose
 
 MCP client config (e.g. claude_desktop_config.json):
     {
@@ -65,7 +65,7 @@ def _get_sessions_dir() -> Path:
         from hermes_constants import get_hermes_home
         return get_hermes_home() / "sessions"
     except ImportError:
-        return Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes")) / "sessions"
+        return Path(os.environ.get("ARGUS_HOME", Path.home() / ".argus")) / "sessions"
 
 
 def _get_session_db():
@@ -109,7 +109,7 @@ def _load_channel_directory() -> dict:
         directory_file = get_hermes_home() / "channel_directory.json"
     except ImportError:
         directory_file = Path(
-            os.environ.get("HERMES_HOME", Path.home() / ".hermes")
+            os.environ.get("ARGUS_HOME", Path.home() / ".argus")
         ) / "channel_directory.json"
 
     if not directory_file.exists():
@@ -372,7 +372,7 @@ class EventBridge:
             from hermes_constants import get_hermes_home
             db_file = get_hermes_home() / "state.db"
         except ImportError:
-            db_file = Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes")) / "state.db"
+            db_file = Path(os.environ.get("ARGUS_HOME", Path.home() / ".argus")) / "state.db"
 
         try:
             db_mtime = db_file.stat().st_mtime if db_file.exists() else 0.0

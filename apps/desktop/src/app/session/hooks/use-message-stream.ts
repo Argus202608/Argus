@@ -58,6 +58,7 @@ import { broadcastSessionsChanged } from '@/store/session-sync'
 import { clearSessionSubagents, pruneDelegateFallbackSubagents, upsertSubagent } from '@/store/subagents'
 import { setSessionTodos } from '@/store/todos'
 import { recordToolDiff } from '@/store/tool-diffs'
+import { clearSessionGeneratingTool, setSessionGeneratingTool } from '@/store/tool-generating'
 import { notifyWorkspaceChanged, toolMayMutateFiles } from '@/store/workspace-events'
 import type { RpcEvent } from '@/types/hermes'
 
@@ -106,6 +107,9 @@ interface CompleteAssistantMessageOptions {
   preserveForeground?: boolean
   requestId?: string
   streamId?: string
+  /** Gateway turn outcome ("error" | "interrupted" | "complete"). Authoritative
+   *  signal that this completion is a failure — see completionErrorText. */
+  status?: string
 }
 
 /** Sub-role tag captured from a turn's message.start, attached to the assistant
@@ -183,17 +187,34 @@ function hasSessionInfoStatePatch(patch: SessionRuntimeStatePatch): boolean {
 // `scripts/profile-typing-lag.md` for the measurement work behind this.
 const STREAM_DELTA_FLUSH_MS = 33
 
-// Gateway/provider failures sometimes arrive as message.complete text instead
-// of an explicit error event. Treat matches as inline assistant errors so they
-// persist like real error events and don't get erased by hydrate fallback.
+// Gateway/provider failures arrive as message.complete text rather than an
+// explicit error event. They must be marked as inline assistant errors, or the
+// post-turn hydrate fallback erases them: a failed turn is deliberately NOT
+// persisted as assistant text (gateway/run.py:10580 — the error is a
+// gateway-generated hint, not model output), so re-reading the stored session
+// returns a turn with no reply and overwrites the visible message.
+//
+// The gateway already tells us this on every completion via `status`
+// ("error" | "interrupted" | "complete"), so trust that first. The text
+// patterns below are only a fallback for older gateways that predate the
+// status field — they cannot be relied on alone, because the gateway prepends
+// "Error: " when the backend produced no visible text, which defeats every
+// ^-anchored pattern here (quota, billing, context-overflow, content-policy).
 const COMPLETION_ERROR_PATTERNS = [
   /^API call failed after \d+ retries:/i,
   /^HTTP\s+\d{3}\b/i,
   /^(Provider|Gateway)\s+error:/i
 ]
 
-function completionErrorText(finalText: string): string | null {
+function completionErrorText(finalText: string, status?: string): string | null {
   const text = finalText.trim()
+
+  // An errored turn often has no usable text at all (the backend bailed before
+  // producing any), so fall back to a generic label rather than dropping the
+  // error signal and letting hydrate erase the bubble.
+  if (status === 'error') {
+    return text || translateNow('errors.turnFailed')
+  }
 
   return text && COMPLETION_ERROR_PATTERNS.some(re => re.test(text)) ? text : null
 }
@@ -726,7 +747,7 @@ export function useMessageStream({
 
         const streamId = options.streamId ?? state.streamId
         const finalText = renderMediaTags(text).trim()
-        const completionError = completionErrorText(finalText)
+        const completionError = completionErrorText(finalText, options.status)
         const normalize = (value: string) => value.replace(/\s+/g, ' ').trim()
 
         const replaceTextPart = (parts: ChatMessagePart[]) => {
@@ -780,6 +801,7 @@ export function useMessageStream({
           requestId: options.requestId,
           role: 'assistant',
           parts: completionError ? [] : [assistantTextPart(finalText)],
+          pending: false,
           branchGroupId: options.preserveForeground ? undefined : state.pendingBranchGroup ?? undefined,
           ...(completionError && { error: completionError }),
           // A complete-only monitor/deep-research turn (no prior streamed
@@ -798,11 +820,16 @@ export function useMessageStream({
 
         const prev = state.messages
         let nextMessages = prev
+        // A failed turn frequently carries no text (the backend bailed before
+        // producing any), but it still needs a bubble to host the error —
+        // otherwise the turn ends with a bare user message and no trace of
+        // why nothing came back.
+        const hasRenderableCompletion = Boolean(finalText || completionError)
 
         if (streamId) {
           nextMessages = prev.some(m => m.id === streamId)
             ? prev.map(m => (m.id === streamId ? completeMessage(m) : m))
-            : finalText
+            : hasRenderableCompletion
               ? [...prev, newAssistantFromCompletion()]
               : prev
         } else {
@@ -819,10 +846,10 @@ export function useMessageStream({
               nextMessages = prev.map((message, messageIndex) =>
                 messageIndex === index ? completeMessage(message) : message
               )
-            } else if (finalText) {
+            } else if (hasRenderableCompletion) {
               nextMessages = [...prev, newAssistantFromCompletion()]
             }
-          } else if (finalText) {
+          } else if (hasRenderableCompletion) {
             nextMessages = [...prev, newAssistantFromCompletion()]
           }
         }
@@ -1087,6 +1114,10 @@ export function useMessageStream({
         flushQueuedDeltas(sessionId)
         clearSessionSubagents(sessionId)
         setSessionCompacting(sessionId, false)
+        // A new turn starts with nothing in flight. Stale from a previous turn
+        // (e.g. one that died between tool.generating and tool.start) would
+        // otherwise show a "preparing" line for a tool that will never run.
+        clearSessionGeneratingTool(sessionId)
         compactedTurnRef.current.delete(sessionId)
         nativeSubagentSessionsRef.current.delete(sessionId)
 
@@ -1213,6 +1244,7 @@ export function useMessageStream({
         const requestId = gatewayRequestId(payload)
         const isDeferredQueryWorker = payload?.source === 'query_worker' && Boolean(requestId)
         const ephemeralControl = isEphemeralControl(payload)
+        const completionStatus = typeof payload?.status === 'string' ? payload.status : undefined
 
         if (isDeferredQueryWorker) {
           // QueryWorker owns an older answer slot after the main agent has
@@ -1226,6 +1258,7 @@ export function useMessageStream({
           completeAssistantMessage(sessionId, finalText, {
             preserveForeground: true,
             requestId,
+            status: completionStatus,
             streamId: routedStreamId
           })
           forgetRequestStream(sessionId, requestId)
@@ -1240,6 +1273,10 @@ export function useMessageStream({
         clearAllPrompts(sessionId)
         clearClarifyRequest(undefined, sessionId)
         setSessionCompacting(sessionId, false)
+        // Turn over: nothing is being prepared any more. Load-bearing for the
+        // case where the model emitted tool.generating and then answered without
+        // ever calling the tool — the line would otherwise never clear.
+        clearSessionGeneratingTool(sessionId)
 
         flushQueuedDeltas(sessionId)
 
@@ -1251,8 +1288,8 @@ export function useMessageStream({
           sessionId,
           finalText,
           routedStreamId
-            ? { ephemeralControl, requestId, streamId: routedStreamId }
-            : { ephemeralControl, requestId }
+            ? { ephemeralControl, requestId, status: completionStatus, streamId: routedStreamId }
+            : { ephemeralControl, requestId, status: completionStatus }
         )
         forgetRequestStream(sessionId, requestId)
         // Turn's sub-role tag is consumed — the next start re-sets it (or clears).
@@ -1366,13 +1403,26 @@ export function useMessageStream({
         }
 
         // `tool.generating` is a pre-call signal ("the model is still writing
-        // this tool call's arguments") and arrives with tool_id=None. Creating a
-        // tool card for it left an orphaned "Running <tool>" row that the later
-        // id-bearing tool.start couldn't always merge into — the "two identical
-        // tool rows" bug. The authoritative row starts at tool.start (matches the
-        // web client, which ignores tool.generating entirely). We still flip the
-        // pet to "tool running" so the activity indicator reacts immediately.
-        if (event.type !== 'tool.generating') {
+        // this tool call's arguments") and arrives with tool_id=None. It must NOT
+        // become a tool part: an id-less row is one the later id-bearing
+        // tool.start can't always merge into — the old "two identical tool rows"
+        // bug. So it goes to a transient store instead (see tool-generating.ts),
+        // which the process block renders as a header-only "preparing" line with
+        // no row.
+        //
+        // Why surface it at all: the backend fires tool.start only after the
+        // arguments are fully written AND the guardrail/plugin/checkpoint
+        // preflight has run, and for a multi-call batch it fires for the whole
+        // batch at once. Dropping tool.generating outright therefore left the
+        // entire pre-call window with no parts to render — the turn looked idle
+        // for seconds, then the process block appeared already listing 2-3 tools.
+        if (event.type === 'tool.generating') {
+          setSessionGeneratingTool(sessionId, String(payload?.name || ''))
+        } else {
+          // The authoritative row exists now, so the placeholder has served its
+          // purpose — clear it or it would sit above the real rows for the rest
+          // of the turn.
+          clearSessionGeneratingTool(sessionId)
           flushQueuedDeltas(sessionId)
           upsertToolCall(sessionId, toTodoPayload(payload) ?? payload, 'running', event.type)
         }
@@ -1603,6 +1653,7 @@ export function useMessageStream({
           clearAllPrompts(sessionId)
           clearClarifyRequest(undefined, sessionId)
           setSessionCompacting(sessionId, false)
+          clearSessionGeneratingTool(sessionId)
           compactedTurnRef.current.delete(sessionId)
         }
 

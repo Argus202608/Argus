@@ -58,7 +58,7 @@ export type FetchJSON = <T = unknown>(
  * binary/blob downloads). Same auth handling as ``fetchJSON`` but returns
  * the raw ``Response``, does not parse, does not throw on non-2xx, and does
  * not run the 401 redirect. Plugins MUST use this (or ``fetchJSON``) instead
- * of calling ``fetch`` with a hand-read ``window.__HERMES_SESSION_TOKEN__``.
+ * of calling ``fetch`` with a hand-read ``window.__ARGUS_SESSION_TOKEN__``.
  */
 export type AuthedFetch = (url: string, init?: RequestInit) => Promise<Response>;
 

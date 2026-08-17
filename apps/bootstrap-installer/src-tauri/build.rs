@@ -83,13 +83,13 @@ fn main() {
     println!("cargo:rerun-if-env-changed=HERMES_BUILD_PIN_BRANCH");
 
     // -----------------------------------------------------------------
-    // Tauri windows manifest. See hermes-setup.manifest for rationale —
+    // Tauri windows manifest. See argus-setup.manifest for rationale —
     // declares level="asInvoker" so Windows's installer-detection
     // heuristic doesn't refuse to launch us without UAC elevation.
     // -----------------------------------------------------------------
     #[cfg(target_os = "windows")]
     let attrs = {
-        let manifest = include_str!("hermes-setup.manifest");
+        let manifest = include_str!("argus-setup.manifest");
         let win = tauri_build::WindowsAttributes::new().app_manifest(manifest);
         tauri_build::Attributes::new().windows_attributes(win)
     };

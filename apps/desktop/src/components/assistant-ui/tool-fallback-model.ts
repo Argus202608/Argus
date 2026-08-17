@@ -298,6 +298,109 @@ export const selectMessageHasVisibleText = (state: { message: { content?: unknow
   return false
 }
 
+// Streaming-stable "does this message still have a tool awaiting its result".
+// Mirrors ToolEntry's own `isPending` test (`result === undefined`), minus the
+// messageRunning half — callers already hold that signal.
+//
+// Load-bearing for approvals: `PendingToolApproval` (the Run / Reject bar) is
+// mounted ONLY inside a pending tool row, so if the tool pile is collapsed away
+// while a tool is still awaiting a decision, the user has no way to answer and
+// the turn deadlocks. Text and tool parts interleave in one message (the model
+// narrates "let me check" *before* calling the tool), so gating the pile purely
+// on "has visible text" hid the approval on the common path, not an edge case.
+export const selectMessageHasPendingTool = (state: { message: { content?: unknown } }): boolean => {
+  const content = state.message.content
+
+  if (!Array.isArray(content)) {
+    return false
+  }
+
+  for (const part of content) {
+    const row = part as { result?: unknown; type?: unknown } | null
+
+    if (row && typeof row === 'object' && row.type === 'tool-call' && row.result === undefined) {
+      return true
+    }
+  }
+
+  return false
+}
+
+// ── Tool-batch summary ───────────────────────────────────────────────────────
+// "Read 2 files · Ran 1 command" instead of a bare "3 tool calls". Derived
+// purely from tool NAMES, so it carries information with thinking mode off —
+// which is the case where a finished turn otherwise shows no rationale at all.
+//
+// Family-based on purpose: per-tool summaries come from the gateway's
+// `_tool_summary`, which only produces text for `web_search` / `web_extract`
+// (2 of ~74 tools). The name is the one field every call has.
+const STEP_FAMILY_ORDER = ['read', 'edit', 'run', 'search', 'browse', 'look'] as const
+
+type StepFamily = (typeof STEP_FAMILY_ORDER)[number]
+
+function stepFamilyOf(toolName: string): StepFamily | null {
+  const n = toolName.toLowerCase()
+
+  if (/^(read_file|view_file|read|cat|list_dir|glob|find)/.test(n)) return 'read'
+  if (/^(edit_file|write_file|apply_patch|patch|str_replace)/.test(n)) return 'edit'
+  if (/^(terminal|bash|shell|execute_code|run)/.test(n)) return 'run'
+  if (/^(web_search|search|grep|ripgrep|recall)/.test(n)) return 'search'
+  if (/^(browser_|web_extract|fetch|open_url)/.test(n)) return 'browse'
+  if (/^(get_current_frame|query_multimodal|show_memory_frame|screenshot)/.test(n)) return 'look'
+
+  return null
+}
+
+export interface ToolStepCopy {
+  stepBrowse: (n: number) => string
+  stepCall: (n: number) => string
+  stepEdit: (n: number) => string
+  stepFailed: (n: number) => string
+  stepLook: (n: number) => string
+  stepRead: (n: number) => string
+  stepRun: (n: number) => string
+  stepSearch: (n: number) => string
+}
+
+/** One-line "what this batch did". Empty string when there is nothing to say. */
+export function summarizeToolSteps(
+  parts: readonly { isError?: boolean; toolName?: string; type?: string }[],
+  copy: ToolStepCopy
+): string {
+  const counts = new Map<StepFamily | 'other', number>()
+  let failed = 0
+
+  for (const part of parts) {
+    if (part.type !== 'tool-call' || !part.toolName) continue
+    if (part.isError) failed += 1
+    const family = stepFamilyOf(part.toolName) ?? 'other'
+    counts.set(family, (counts.get(family) ?? 0) + 1)
+  }
+
+  const verbs: Record<StepFamily, (n: number) => string> = {
+    browse: copy.stepBrowse,
+    edit: copy.stepEdit,
+    look: copy.stepLook,
+    read: copy.stepRead,
+    run: copy.stepRun,
+    search: copy.stepSearch
+  }
+
+  // Fixed order, not Map insertion order, so the same batch always reads the same.
+  const out = STEP_FAMILY_ORDER.flatMap(family => {
+    const n = counts.get(family)
+
+    return n ? [verbs[family](n)] : []
+  })
+
+  const other = counts.get('other')
+
+  if (other) out.push(copy.stepCall(other))
+  if (failed) out.push(copy.stepFailed(failed))
+
+  return out.join(' · ')
+}
+
 function titleForTool(name: string): string {
   const normalized = name.replace(/^browser_/, '').replace(/^web_/, '')
 

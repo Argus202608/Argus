@@ -1,7 +1,7 @@
 """`hermes checkpoints` CLI subcommand.
 
 Gives users direct visibility and control over the filesystem checkpoint
-store at ``~/.hermes/checkpoints/``.  Actions:
+store at ``~/.argus/checkpoints/``.  Actions:
 
     hermes checkpoints               # same as `status`
     hermes checkpoints status        # total size, project count, breakdown
@@ -99,7 +99,7 @@ def cmd_status(args: argparse.Namespace) -> int:
         for arch in sorted(legacy, key=lambda a: a.get("mtime", 0), reverse=True):
             print(f"  {arch['name']:<40}  {_fmt_bytes(arch['size_bytes']):>10}")
         print()
-        print("Clear with: hermes checkpoints clear-legacy")
+        print("Clear with: argus checkpoints clear-legacy")
     return 0
 
 

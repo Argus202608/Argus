@@ -249,7 +249,7 @@ def _make_cli(model="anthropic/claude-opus-4.6", **kwargs):
         "agent": {},
         "terminal": {"env_type": "local"},
     }
-    clean_env = {"LLM_MODEL": "", "HERMES_MAX_ITERATIONS": ""}
+    clean_env = {"LLM_MODEL": "", "ARGUS_MAX_ITERATIONS": ""}
     with (
         patch("cli.get_tool_definitions", return_value=[]),
         patch.dict("os.environ", clean_env, clear=False),
@@ -348,7 +348,7 @@ class TestNormalizeModelForProvider:
         # Don't pass model= so _model_is_default is True
         with (
             patch("cli.get_tool_definitions", return_value=[]),
-            patch.dict("os.environ", {"LLM_MODEL": "", "HERMES_MAX_ITERATIONS": ""}, clear=False),
+            patch.dict("os.environ", {"LLM_MODEL": "", "ARGUS_MAX_ITERATIONS": ""}, clear=False),
             patch.dict(_cli_mod.__dict__, {"CLI_CONFIG": _clean_config}),
         ):
             from cli import HermesCLI
@@ -379,7 +379,7 @@ class TestNormalizeModelForProvider:
         }
         with (
             patch("cli.get_tool_definitions", return_value=[]),
-            patch.dict("os.environ", {"LLM_MODEL": "", "HERMES_MAX_ITERATIONS": ""}, clear=False),
+            patch.dict("os.environ", {"LLM_MODEL": "", "ARGUS_MAX_ITERATIONS": ""}, clear=False),
             patch.dict(_cli_mod.__dict__, {"CLI_CONFIG": _clean_config}),
         ):
             from cli import HermesCLI

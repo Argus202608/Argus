@@ -115,8 +115,8 @@ def agent_env():
 
     test_home = tempfile.mkdtemp(prefix="hermes_e2e_47967_")
     os.makedirs(os.path.join(test_home, ".hermes"))
-    prev_home = os.environ.get("HERMES_HOME")
-    os.environ["HERMES_HOME"] = os.path.join(test_home, ".hermes")
+    prev_home = os.environ.get("ARGUS_HOME")
+    os.environ["ARGUS_HOME"] = os.path.join(test_home, ".hermes")
 
     # Import fresh so the patched conversation_loop is exercised even when the
     # module was imported earlier in the same worker.
@@ -140,9 +140,9 @@ def agent_env():
         srv.shutdown()
         shutil.rmtree(test_home, ignore_errors=True)
         if prev_home is None:
-            os.environ.pop("HERMES_HOME", None)
+            os.environ.pop("ARGUS_HOME", None)
         else:
-            os.environ["HERMES_HOME"] = prev_home
+            os.environ["ARGUS_HOME"] = prev_home
 
 
 def _tool_results(handler) -> list[str]:

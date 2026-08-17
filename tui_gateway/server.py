@@ -72,7 +72,7 @@ load_hermes_dotenv(
 # JSON-RPC pipe (TUI side parses it, doesn't log raw), the root logger
 # only catches handled warnings, and the subprocess exits before stderr
 # flushes through the stderr->gateway.stderr event pump. This hook
-# appends every unhandled exception to ~/.hermes/logs/tui_gateway_crash.log
+# appends every unhandled exception to ~/.argus/logs/tui_gateway_crash.log
 # AND re-emits a one-line summary to stderr so the TUI can surface it in
 # Activity — exactly what was missing when the voice-mode turns started
 # exiting the gateway mid-TTS.
@@ -164,7 +164,7 @@ _cfg_mtime: float | None = None
 _cfg_path = None
 _session_resume_lock = threading.Lock()
 try:
-    _slash_timeout = float(os.environ.get("HERMES_TUI_SLASH_TIMEOUT_S") or "45")
+    _slash_timeout = float(os.environ.get("ARGUS_TUI_SLASH_TIMEOUT_S") or "45")
 except (ValueError, TypeError):
     _slash_timeout = 45.0
 _SLASH_WORKER_TIMEOUT_S = max(5.0, _slash_timeout)
@@ -181,7 +181,7 @@ _SLASH_WORKER_TIMEOUT_S = max(5.0, _slash_timeout)
 # Set to 0 to disable (park forever, pre-fix behaviour).
 try:
     _ws_orphan_reap_grace = float(
-        os.environ.get("HERMES_TUI_WS_ORPHAN_REAP_GRACE_S") or "20"
+        os.environ.get("ARGUS_TUI_WS_ORPHAN_REAP_GRACE_S") or "20"
     )
 except (ValueError, TypeError):
     _ws_orphan_reap_grace = 20.0
@@ -219,6 +219,13 @@ _LONG_HANDLERS = frozenset(
         # runtime before acknowledging. Keep that wait off the dispatcher so
         # frame/interrupt/approval traffic remains responsive.
         "multimodal.source_stopped",
+        # Realtime ASR start can wait for runtime promotion + upstream WS
+        # readiness; manual stop intentionally waits for a bounded
+        # session.finish/session.finished flush.  Both must stay off the reader
+        # thread so stop-before-start cancellation, audio/event traffic, and
+        # unrelated chat streaming remain responsive.
+        "multimodal.asr_start",
+        "multimodal.asr_stop",
         # Pet RPCs hit the network (manifest fetch / spritesheet download) or do
         # per-frame PNG decode/encode (pet.cells): inline they serialize on the
         # reader thread, so picker previews trickle in one at a time and the
@@ -267,7 +274,7 @@ _LONG_HANDLERS = frozenset(
 
 try:
     _rpc_pool_workers = max(
-        2, int(os.environ.get("HERMES_TUI_RPC_POOL_WORKERS") or "4")
+        2, int(os.environ.get("ARGUS_TUI_RPC_POOL_WORKERS") or "4")
     )
 except (ValueError, TypeError):
     _rpc_pool_workers = 4
@@ -596,6 +603,14 @@ def _finalize_session(session: dict | None, end_reason: str = "tui_close") -> No
     stop_event = session.get("_notif_stop")
     if stop_event is not None:
         stop_event.set()
+    try:
+        _abort_active_asr_turn(
+            session,
+            reason="session_finalized",
+            reopenable=False,
+        )
+    except Exception:
+        logger.debug("ASR abort during session finalize failed", exc_info=True)
     # Voice can submit into the Watcher/TTS loop, so stop it before either of
     # the resident engines it references. VoiceAgent.stop is idempotent and
     # performs its own bounded join.
@@ -871,23 +886,88 @@ def _close_sessions_for_transport(
 
     Returns ``(reaped, detached)`` counts for disconnect-path observability."""
     with _sessions_lock:
-        owned = [(sid, s) for sid, s in _sessions.items() if s.get("transport") is transport]
+        owned = [
+            (sid, s) for sid, s in _sessions.items()
+            if s.get("transport") is transport
+        ]
     reaped = 0
     detached = 0
     for sid, session in owned:
         if session.get("close_on_disconnect"):
-            _close_session_by_id(sid, end_reason=end_reason)
-            reaped += 1
+            # Serialize the ownership re-check with session.resume.  The
+            # disconnect callback may run after a new renderer has already
+            # rebound this live session; in that case it no longer owns the
+            # session and must not reap it.
+            with _session_resume_lock:
+                with _sessions_lock:
+                    still_owned = (
+                        _sessions.get(sid) is session
+                        and session.get("transport") is transport
+                    )
+                if still_owned and _close_session_by_id(
+                        sid, end_reason=end_reason):
+                    reaped += 1
         else:
-            # Point detached sessions at the drop sentinel (NOT real stdio) so
-            # _ws_session_is_orphaned recognizes them and the grace-reap can
-            # actually fire; a standalone `hermes --tui` keeps real _stdio.
-            session["transport"] = _detached_ws_transport
-            detached += 1
+            # Park the dead transport *before* any potentially blocking ASR
+            # teardown.  Otherwise a cold asr_start can retain A as the owner
+            # while this disconnect callback waits for its capture lock, and a
+            # later unconditional sentinel assignment can overwrite renderer
+            # B after session.resume has already rebound it.
+            #
+            # Keep the capture lock after releasing the resume lock: B may
+            # rebind immediately while abortive close is in flight, but its
+            # asr_start cannot transfer/reuse A's logical turn until A has been
+            # retired.  Once abort completes we never touch session.transport
+            # again, so B's binding wins deterministically.
+            capture_lock = session.setdefault(
+                "_mm_capture_lock", threading.RLock())
+            parked = False
+            with _session_resume_lock:
+                with _sessions_lock:
+                    still_live = _sessions.get(sid) is session
+                if not still_live:
+                    continue
+                history_lock = session.get("history_lock")
+                if history_lock is not None:
+                    with history_lock:
+                        if session.get("transport") is transport:
+                            session["transport"] = _detached_ws_transport
+                            parked = True
+                elif session.get("transport") is transport:
+                    session["transport"] = _detached_ws_transport
+                    parked = True
+                # Acquire only after the synchronous park.  A start already in
+                # promotion will observe the sentinel in its final ownership
+                # check and refuse to publish a late ASR connection.
+                capture_lock.acquire()
             try:
-                _schedule_ws_orphan_reap(sid)
-            except Exception:
-                pass
+                turn = session.get("_mm_asr_turn")
+                # If B won the resume + start race before this disconnect
+                # callback acquired the resume lock, its turn ownership is no
+                # longer A's and must be preserved.  A mere resume (without a
+                # new start) leaves owner_transport=A, so the stale upstream
+                # microphone is still cancelled and made reopenable for B.
+                if (isinstance(turn, dict)
+                        and turn.get("owner_transport") is transport):
+                    try:
+                        _abort_active_asr_turn(
+                            session,
+                            reason="transport_disconnected",
+                            reopenable=True,
+                        )
+                    except Exception:
+                        logger.debug(
+                            "ASR abort on transport detach failed",
+                            exc_info=True,
+                        )
+            finally:
+                capture_lock.release()
+            if parked:
+                detached += 1
+                try:
+                    _schedule_ws_orphan_reap(sid)
+                except Exception:
+                    pass
     return reaped, detached
 
 
@@ -902,7 +982,7 @@ def _shutdown_sessions() -> None:
 # hours-scale because last_active freezes during a long turn and on passive
 # viewing — running/pending/starting/live-transport are hard exemptions instead.
 try:
-    _SESSION_TTL_S = float(os.environ.get("HERMES_TUI_SESSION_TTL_S") or 6 * 3600)
+    _SESSION_TTL_S = float(os.environ.get("ARGUS_TUI_SESSION_TTL_S") or 6 * 3600)
 except (TypeError, ValueError):
     _SESSION_TTL_S = float(6 * 3600)
 _SESSION_TTL_S = max(0.0, _SESSION_TTL_S)
@@ -2893,9 +2973,9 @@ def _clear_session_context(tokens: list) -> None:
 
 def _enable_gateway_prompts() -> None:
     """Route approvals through gateway callbacks instead of CLI input()."""
-    os.environ["HERMES_GATEWAY_SESSION"] = "1"
-    os.environ["HERMES_EXEC_ASK"] = "1"
-    os.environ["HERMES_INTERACTIVE"] = "1"
+    os.environ["ARGUS_GATEWAY_SESSION"] = "1"
+    os.environ["ARGUS_EXEC_ASK"] = "1"
+    os.environ["ARGUS_INTERACTIVE"] = "1"
 
 
 # ── Blocking prompt factory ──────────────────────────────────────────
@@ -2959,8 +3039,8 @@ def resolve_skin() -> dict:
 
 def _resolve_model() -> str:
     env = (
-        os.environ.get("HERMES_MODEL", "")
-        or os.environ.get("HERMES_INFERENCE_MODEL", "")
+        os.environ.get("ARGUS_MODEL", "")
+        or os.environ.get("ARGUS_INFERENCE_MODEL", "")
     ).strip()
     if env:
         return env
@@ -2975,9 +3055,9 @@ def _resolve_model() -> str:
 def _config_model_target() -> tuple[str, str]:
     """(model, provider) currently selected by config (env as fallback).
 
-    config.yaml wins over HERMES_MODEL / HERMES_INFERENCE_MODEL here, the
+    config.yaml wins over ARGUS_MODEL / ARGUS_INFERENCE_MODEL here, the
     reverse of `_resolve_model()`'s startup order. Those env vars are a
-    provision-time seed (hosted instances set HERMES_INFERENCE_MODEL in the
+    provision-time seed (hosted instances set ARGUS_INFERENCE_MODEL in the
     container env); if they outranked config.yaml, the per-turn sync would
     stay pinned to the seed forever and dashboard/CLI model changes would
     never reach an open chat — the exact bug this sync exists to fix.
@@ -2999,13 +3079,13 @@ def _config_model_target() -> tuple[str, str]:
 
 def _resolve_startup_runtime() -> tuple[str, str | None]:
     model = _resolve_model()
-    explicit_provider = os.environ.get("HERMES_TUI_PROVIDER", "").strip()
+    explicit_provider = os.environ.get("ARGUS_TUI_PROVIDER", "").strip()
     if explicit_provider:
         return model, explicit_provider
 
     explicit_model = (
-        os.environ.get("HERMES_MODEL", "")
-        or os.environ.get("HERMES_INFERENCE_MODEL", "")
+        os.environ.get("ARGUS_MODEL", "")
+        or os.environ.get("ARGUS_INFERENCE_MODEL", "")
     ).strip()
     if not explicit_model:
         return model, None
@@ -3020,7 +3100,7 @@ def _resolve_startup_runtime() -> tuple[str, str | None]:
                 if isinstance(cfg, dict)
                 else ""
             )
-            or os.environ.get("HERMES_INFERENCE_PROVIDER", "").strip().lower()
+            or os.environ.get("ARGUS_INFERENCE_PROVIDER", "").strip().lower()
             or "auto"
         )
         detected = detect_static_provider_for_model(explicit_model, current_provider)
@@ -3395,7 +3475,7 @@ def _load_memory_notifications() -> str:
 
 
 def _load_tool_progress_mode() -> str:
-    env = os.environ.get("HERMES_TUI_TOOL_PROGRESS", "").strip().lower()
+    env = os.environ.get("ARGUS_TUI_TOOL_PROGRESS", "").strip().lower()
     if env in {"off", "new", "all", "verbose"}:
         return env
     raw = (_load_cfg().get("display") or {}).get("tool_progress", "all")
@@ -3410,7 +3490,7 @@ def _load_tool_progress_mode() -> str:
 def _load_enabled_toolsets() -> list[str] | None:
     explicit = [
         item.strip()
-        for item in os.environ.get("HERMES_TUI_TOOLSETS", "").split(",")
+        for item in os.environ.get("ARGUS_TUI_TOOLSETS", "").split(",")
         if item.strip()
     ]
     cfg = None
@@ -3462,7 +3542,7 @@ def _load_enabled_toolsets() -> list[str] | None:
             ignored = [name for name in explicit if name not in {"all", "*"}]
             if ignored:
                 print(
-                    "[tui] HERMES_TUI_TOOLSETS=all enables every toolset; "
+                    "[tui] ARGUS_TUI_TOOLSETS=all enables every toolset; "
                     f"ignoring additional entries: {', '.join(ignored)}",
                     file=sys.stderr,
                     flush=True,
@@ -3506,13 +3586,13 @@ def _load_enabled_toolsets() -> list[str] | None:
 
         if unknown:
             print(
-                f"[tui] ignoring unknown HERMES_TUI_TOOLSETS entries: {', '.join(unknown)}",
+                f"[tui] ignoring unknown ARGUS_TUI_TOOLSETS entries: {', '.join(unknown)}",
                 file=sys.stderr,
                 flush=True,
             )
         if disabled:
             print(
-                "[tui] ignoring disabled MCP servers in HERMES_TUI_TOOLSETS "
+                "[tui] ignoring disabled MCP servers in ARGUS_TUI_TOOLSETS "
                 "(set enabled: true in config.yaml to use): "
                 f"{', '.join(disabled)}",
                 file=sys.stderr,
@@ -3523,7 +3603,7 @@ def _load_enabled_toolsets() -> list[str] | None:
             return valid
 
         fallback_notice = (
-            "[tui] no valid HERMES_TUI_TOOLSETS entries; using configured CLI toolsets"
+            "[tui] no valid ARGUS_TUI_TOOLSETS entries; using configured CLI toolsets"
         )
 
     try:
@@ -3553,7 +3633,7 @@ def _load_enabled_toolsets() -> list[str] | None:
     except Exception:
         if fallback_notice is not None:
             print(
-                "[tui] no valid HERMES_TUI_TOOLSETS entries and configured CLI toolsets could not be loaded; enabling all toolsets",
+                "[tui] no valid ARGUS_TUI_TOOLSETS entries and configured CLI toolsets could not be loaded; enabling all toolsets",
                 file=sys.stderr,
                 flush=True,
             )
@@ -3774,8 +3854,8 @@ def _apply_model_switch(
     # session (e.g. /new via _reset_session_agent, or resume) re-derives the
     # user's chosen model/provider instead of falling back to global config.
     #
-    # We deliberately do NOT write process-global env vars (HERMES_MODEL /
-    # HERMES_INFERENCE_MODEL / HERMES_TUI_PROVIDER / HERMES_INFERENCE_PROVIDER)
+    # We deliberately do NOT write process-global env vars (ARGUS_MODEL /
+    # ARGUS_INFERENCE_MODEL / ARGUS_TUI_PROVIDER / ARGUS_INFERENCE_PROVIDER)
     # here. The desktop backend hosts every same-profile session in ONE process,
     # so mutating os.environ on a /model switch leaked the new model/provider
     # into every OTHER live session's next agent rebuild — switching the model
@@ -3811,67 +3891,44 @@ def _apply_mm_deep_thinking(agent, session) -> None:
       * ``{"enabled": False}`` → thinking OFF (was: legacy deep_thinking=False)
       * anything else (missing / ``{"enabled": True, "effort": ...}``) → ON
 
-    Provider-specific param name:
-      - Kimi / Moonshot: ``thinking: {"type": "enabled"|"disabled"}``
-        (``enable_thinking`` is ignored by Kimi). Thinking-only models
-        (k2.7-code) reject ``disabled`` with HTTP 400 → always send enabled.
-      - Qwen custom / vLLM: top-level ``enable_thinking`` + nested
-        ``chat_template_kwargs`` form.
-      - Other OpenAI-compatible models (including the user's GPT-5.6 Luna
-        proxy): no non-standard thinking fields. Those gateways may reject
-        vLLM-only keys before the model runs.
+    The per-vendor wire spelling is NOT decided here — it comes from the
+    endpoint's ``ProviderProfile.build_api_kwargs_extras`` (see
+    ``providers/README.md``), resolved by name AND hostname so a vendor reached
+    through a hand-configured ``custom`` endpoint still gets its own quirks.
+
+    ★ This used to be an inline ``if is_kimi / elif is_qwenish / else`` chain, and
+      that is how GLM broke: it matched neither branch, fell into the catch-all
+      that emitted ``{}``, and since Zhipu defaults ``thinking`` to ``enabled``,
+      "off" silently became "on". Three separate copies of the vendor table
+      existed (here, the transport, the multimodal submodule glue) and GLM was
+      missing from all three. Add a provider profile, never a branch here.
+
+    The remaining special case is genuinely session-scoped rather than
+    vendor-scoped: a multimodal session forces thinking ON for its own turns when
+    the user has not explicitly turned it off, because the visual workers depend
+    on it. That is why this function exists at all.
     """
     if agent is None:
         return
     rc = getattr(agent, "reasoning_config", None)
-    if isinstance(rc, dict) and rc.get("enabled") is False:
-        think = False
-    else:
-        think = True
+    think = not (isinstance(rc, dict) and rc.get("enabled") is False)
     try:
-        from utils import base_url_host_matches
-        _burl = getattr(agent, "base_url", "") or ""
-        is_kimi = (base_url_host_matches(_burl, "moonshot.cn")
-                   or base_url_host_matches(_burl, "moonshot.ai")
-                   or base_url_host_matches(_burl, "kimi.com"))
-    except Exception:
-        is_kimi = False
-    try:
-        from agent.moonshot_schema import is_thinking_only_moonshot_model
-        thinking_only = is_thinking_only_moonshot_model(
-            getattr(agent, "model", "") or "")
-    except Exception:
-        thinking_only = False
-    model_name = str(getattr(agent, "model", "") or "").strip().lower()
-    base_url = str(getattr(agent, "base_url", "") or "").strip().lower()
-    provider = str(getattr(agent, "provider", "") or "").strip().lower()
-    is_qwenish = (
-        "qwen" in model_name
-        or "dashscope" in base_url
-        or "aliyuncs" in base_url
-        or provider in {"qwen", "qwen-portal", "alibaba", "dashscope"}
-    )
-    try:
-        if is_kimi:
-            if thinking_only:
-                # Always-thinking model: only `enabled` is accepted (disabled →
-                # HTTP 400). Keep the dict truthy so multimodal-session detection
-                # (diag + history-image stripping) still fires.
-                agent._extra_body_additions = {"thinking": {"type": "enabled"}}
-            else:
-                agent._extra_body_additions = {
-                    "thinking": {"type": "enabled" if think else "disabled"}}
-        elif is_qwenish:
-            agent._extra_body_additions = {
-                "enable_thinking": think,
-                "chat_template_kwargs": {"enable_thinking": think},
-            }
-        else:
-            # GPT/Claude/Gemini-style OpenAI-compatible proxies commonly reject
-            # both Qwen's enable_thinking and vLLM's chat_template_kwargs. Keep
-            # multimodal identity on ``agent._multimodal_session`` instead of
-            # abusing request extra_body as a marker.
+        from providers import resolve_provider_profile
+
+        profile = resolve_provider_profile(
+            getattr(agent, "provider", "") or "",
+            getattr(agent, "base_url", "") or "",
+        )
+        if profile is None:
             agent._extra_body_additions = {}
+            return
+
+        extra_body, _top_level = profile.build_api_kwargs_extras(
+            reasoning_config={"enabled": bool(think)},
+            model=getattr(agent, "model", "") or "",
+            base_url=getattr(agent, "base_url", "") or "",
+        )
+        agent._extra_body_additions = extra_body or {}
     except Exception:
         pass
 
@@ -4397,8 +4454,8 @@ def _get_usage(agent) -> dict:
     except Exception:
         pass
     # Dev-only live credits-spent readout (L0 usage-aware-credits). Gated on
-    # HERMES_DEV_CREDITS so the payload stays clean when the flag is off.
-    if is_truthy_value(os.environ.get("HERMES_DEV_CREDITS")):
+    # ARGUS_DEV_CREDITS so the payload stays clean when the flag is off.
+    if is_truthy_value(os.environ.get("ARGUS_DEV_CREDITS")):
         try:
             spent = agent.get_credits_spent_micros()
             if spent is not None:
@@ -4483,12 +4540,21 @@ def _session_info(agent, session: dict | None = None) -> dict:
     cfg_personality = ((_load_cfg().get("display") or {}).get("personality") or "")
     personality = (session or {}).get("personality", cfg_personality)
     reasoning_config = getattr(agent, "reasoning_config", None)
+    # ★ Thinking-OFF must report the explicit "none", not "". Empty string is
+    #   the "no explicit level, use the default" signal, and every client maps
+    #   it to medium/on — so echoing "" for a disabled config made turning
+    #   thinking OFF impossible: the client optimistically switched the toggle
+    #   off, this event arrived with "", and the toggle snapped straight back on
+    #   (desktop isThinkingEnabled('') === true; web normalizeEffort('') ===
+    #   "medium"). "none" round-trips through parse_reasoning_effort, and both
+    #   clients already have a label for it (desktop REASONING_LABELS.none →
+    #   "Off"), it was simply never reachable.
     reasoning_effort = ""
-    if (
-        isinstance(reasoning_config, dict)
-        and reasoning_config.get("enabled") is not False
-    ):
-        reasoning_effort = str(reasoning_config.get("effort", "") or "")
+    if isinstance(reasoning_config, dict):
+        if reasoning_config.get("enabled") is False:
+            reasoning_effort = "none"
+        else:
+            reasoning_effort = str(reasoning_config.get("effort", "") or "")
     service_tier = getattr(agent, "service_tier", None) or ""
     # Effective approval-bypass state — the same three sources that
     # check_all_command_guards() ORs together: persistent config
@@ -5640,7 +5706,7 @@ def _apply_personality_to_session(
 
 def _cfg_max_turns(cfg: dict, default: int) -> int:
     try:
-        env_max = int(os.environ.get("HERMES_TUI_MAX_TURNS", "") or 0)
+        env_max = int(os.environ.get("ARGUS_TUI_MAX_TURNS", "") or 0)
         if env_max > 0:
             return env_max
     except (TypeError, ValueError):
@@ -5650,7 +5716,7 @@ def _cfg_max_turns(cfg: dict, default: int) -> int:
 
 
 def _parse_tui_skills_env() -> list[str]:
-    raw = os.environ.get("HERMES_TUI_SKILLS", "")
+    raw = os.environ.get("ARGUS_TUI_SKILLS", "")
     skills: list[str] = []
     seen: set[str] = set()
     for part in raw.replace("\n", ",").split(","):
@@ -6147,11 +6213,11 @@ def _make_agent(
         session_id=session_id or key,
         session_db=session_db if session_db is not None else _get_db(),
         ephemeral_system_prompt=system_prompt or None,
-        checkpoints_enabled=is_truthy_value(os.environ.get("HERMES_TUI_CHECKPOINTS")),
-        pass_session_id=is_truthy_value(os.environ.get("HERMES_TUI_PASS_SESSION_ID")),
+        checkpoints_enabled=is_truthy_value(os.environ.get("ARGUS_TUI_CHECKPOINTS")),
+        pass_session_id=is_truthy_value(os.environ.get("ARGUS_TUI_PASS_SESSION_ID")),
         skip_context_files=(skip_context_files if skip_context_files is not None
-                            else is_truthy_value(os.environ.get("HERMES_IGNORE_RULES"))),
-        skip_memory=is_truthy_value(os.environ.get("HERMES_IGNORE_RULES")),
+                            else is_truthy_value(os.environ.get("ARGUS_IGNORE_RULES"))),
+        skip_memory=is_truthy_value(os.environ.get("ARGUS_IGNORE_RULES")),
         fallback_model=_load_fallback_model(),
         **_agent_cbs(sid),
     )
@@ -6802,15 +6868,18 @@ def _drain_queued_prompt(rid, sid: str, session: dict) -> bool:
             "text": _inflight_text(queued.get("text")),
             "client_request_id": str(queued.get("client_request_id") or ""),
         })
+        run_kwargs = {
+            "user_originated": bool(queued.get("user_originated", True)),
+            "client_request_id": str(queued.get("client_request_id") or ""),
+            "internal_origin": internal_origin,
+        }
+        if queued.get("anchor_frozen"):
+            run_kwargs.update({
+                "anchor_ts": _optional_finite_float(queued.get("anchor_ts")),
+                "anchor_frozen": True,
+            })
         _run_prompt_submit(
-            rid,
-            sid,
-            session,
-            queued["text"],
-            user_originated=bool(queued.get("user_originated", True)),
-            client_request_id=str(queued.get("client_request_id") or ""),
-            internal_origin=internal_origin,
-        )
+            rid, sid, session, queued["text"], **run_kwargs)
     except Exception as exc:
         print(
             f"[tui_gateway] queued prompt dispatch failed: "
@@ -7103,7 +7172,7 @@ def _(rid, params: dict) -> dict:
         # Resume picker should surface human conversation sessions from every
         # user-facing surface — CLI, TUI, all gateway platforms (including new
         # ones not enumerated here), ACP adapter clients, webhook sessions,
-        # custom `HERMES_SESSION_SOURCE` values, and older installs with
+        # custom `ARGUS_SESSION_SOURCE` values, and older installs with
         # different source labels. We deny-list only the noisy internal
         # sources (``tool`` sub-agent runs) rather than allow-listing a
         # fixed set of platform names that goes stale whenever a new
@@ -8165,7 +8234,7 @@ def _(rid, params: dict) -> dict:
 
     Desktop parity with the CLI ``/handoff`` command: we only write
     ``handoff_state='pending'`` onto the persisted session row. The actual
-    transfer is performed by the separate ``hermes gateway`` process, whose
+    transfer is performed by the separate ``argus gateway`` process, whose
     ``_handoff_watcher`` claims the row, re-binds the session to the platform's
     home channel, and forges a synthetic turn. The desktop then polls
     ``handoff.state`` for the terminal result.
@@ -8989,7 +9058,7 @@ _PET_REFERENCE_MIME_EXT = {
 try:
     _PET_REFERENCE_MAX_BYTES = max(
         1,
-        int(os.environ.get("HERMES_PET_REFERENCE_MAX_BYTES") or str(16 * 1024 * 1024)),
+        int(os.environ.get("ARGUS_PET_REFERENCE_MAX_BYTES") or str(16 * 1024 * 1024)),
     )
 except (TypeError, ValueError):
     _PET_REFERENCE_MAX_BYTES = 16 * 1024 * 1024
@@ -9764,7 +9833,7 @@ def _(rid, params: dict) -> dict:
 
     agent = session["agent"]
     # Mirror the classic CLI /save: snapshot under the Hermes profile home
-    # (~/.hermes/sessions/saved/) rather than the project/workspace CWD, and
+    # (~/.argus/sessions/saved/) rather than the project/workspace CWD, and
     # include the system prompt so the export matches the dashboard save.
     saved_dir = get_hermes_home() / "sessions" / "saved"
     try:
@@ -12523,14 +12592,21 @@ def _run_prompt_submit(rid, sid: str, session: dict, text: Any,
             #   get_current_frame。这里只 stamp 锚点, 不注入任何帧。
             try:
                 _fb = getattr(agent, "frame_buffer", None)
-                _raw_anchor = (
-                    getattr(_fb, "monitor_latest_ts", None)
-                    if _fb is not None else None
-                )
+                # Push-to-talk manual ASR snapshots this value at the user's
+                # stop click, before waiting for the upstream final transcript.
+                # Prefer that explicit per-turn boundary so QueryWorker cannot
+                # accidentally see frames that arrived during ASR flush.
+                _raw_anchor = _optional_finite_float(anchor_ts)
+                if not anchor_frozen:
+                    _raw_anchor = (
+                        getattr(_fb, "monitor_latest_ts", None)
+                        if _fb is not None else None
+                    )
                 # Older/custom FrameBuffer implementations expose only the
                 # sparse timestamp. Preserve compatibility while production
                 # uses the raw server-received ring.
-                if _raw_anchor is None and _fb is not None:
+                if (not anchor_frozen and _raw_anchor is None
+                        and _fb is not None):
                     _raw_anchor = getattr(_fb, "latest_ts", None)
                 session["_mm_send_anchor_ts"] = _raw_anchor
             except Exception:
@@ -13651,6 +13727,12 @@ def _(rid, params: dict) -> dict:
                 jpeg_b64, source_type=source_type,
                 source_id=source_id, source_name=source_name,
             )
+            _record_mm_capture_anchor_pair(
+                session,
+                capture_attempt_id=capture_attempt_id,
+                client_ts=params.get("ts"),
+                server_ts=res.get("ts"),
+            )
             # Monitor owns a short raw 2fps queue and must wake even when the same
             # frame was dropped from the long-term dHash-deduped buffer. Fall back to
             # ``stored`` for older/custom FrameBuffer implementations.
@@ -14153,14 +14235,236 @@ def _(rid, params: dict) -> dict:
 
 # --------------------------------------------------------------------------- #
 # Streaming realtime ASR (DashScope Qwen) — user speaks, server-side VAD
-# segments speech, partial transcripts stream back as `multimodal.asr_partial`,
-# and each final segment is submitted as a normal user turn (the same semantic
-# multimodal routing applies). Backed by the per-session WatcherAgent's loop.
+# segments speech and partial transcripts stream back as
+# `multimodal.asr_partial`. Continuous Voice Dialog remains VAD-driven; a
+# manual_turn buffers every final segment and commits exactly once on explicit
+# finish. Backed by the per-session WatcherAgent's loop.
 # Gracefully returns enabled:false when no dashscope_api_key is configured.
 # --------------------------------------------------------------------------- #
+_MM_ASR_RETIRED_TURNS_MAX = 32
+_MM_CAPTURE_ANCHOR_EPOCHS_MAX = 8
+_MM_CAPTURE_ANCHOR_PAIRS_MAX = 64
+
+
+def _join_asr_segments(segments: list) -> str:
+    """Join final VAD segments while preserving natural CJK/ASCII spacing."""
+    joined = ""
+    for raw in list(segments or []):
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        if (joined and joined[-1].isascii() and joined[-1].isalnum()
+                and text[0].isascii() and text[0].isalnum()):
+            joined += " "
+        joined += text
+    return joined.strip()
+
+
+def _snapshot_mm_frame_anchor(session: dict) -> Optional[float]:
+    """Sample the server-authoritative latest frame timestamp for one turn."""
+    try:
+        agent = session.get("agent")
+        frame_buffer = getattr(agent, "frame_buffer", None) if agent else None
+        raw = (
+            getattr(frame_buffer, "monitor_latest_ts", None)
+            if frame_buffer is not None else None
+        )
+        if raw is None and frame_buffer is not None:
+            raw = getattr(frame_buffer, "latest_ts", None)
+        return _optional_finite_float(raw)
+    except Exception:
+        return None
+
+
+def _mm_capture_anchor_epoch(
+    session: dict, capture_attempt_id: str = "",
+) -> str:
+    """Stable key for one client/server capture-clock mapping epoch."""
+    attempt_id = str(
+        capture_attempt_id or session.get("_mm_capture_attempt_id") or ""
+    ).strip()
+    if attempt_id:
+        return f"attempt:{attempt_id}"
+    # Legacy Web captures may not yet send an attempt id.  Their client id,
+    # generation, and start marker together still identify one clock epoch.
+    return "legacy:{client}:{generation}:{started}".format(
+        client=str(session.get("_mm_capture_client_id") or ""),
+        generation=str(session.get("_mm_capture_generation") or ""),
+        started=str(session.get("_mm_capture_client_started_at_ms") or ""),
+    )
+
+
+def _record_mm_capture_anchor_pair(
+    session: dict,
+    *,
+    capture_attempt_id: str,
+    client_ts: Any,
+    server_ts: Any,
+) -> None:
+    """Record a bounded client-frame-ts -> FrameBuffer-ts correspondence."""
+    client_value = _optional_finite_float(client_ts)
+    server_value = _optional_finite_float(server_ts)
+    if client_value is None or server_value is None:
+        return
+    epoch = _mm_capture_anchor_epoch(session, capture_attempt_id)
+    epochs = session.setdefault("_mm_capture_anchor_pairs", {})
+    rows = epochs.setdefault(epoch, [])
+    rows.append((client_value, server_value))
+    if len(rows) > _MM_CAPTURE_ANCHOR_PAIRS_MAX:
+        del rows[:-_MM_CAPTURE_ANCHOR_PAIRS_MAX]
+    # Dict insertion order is our epoch LRU. Refresh the active epoch and bound
+    # old source/attempt mappings so long-lived desktop sessions stay constant.
+    epochs.pop(epoch, None)
+    epochs[epoch] = rows
+    while len(epochs) > _MM_CAPTURE_ANCHOR_EPOCHS_MAX:
+        epochs.pop(next(iter(epochs)), None)
+
+
+def _resolve_mm_capture_anchor(
+    session: dict,
+    *,
+    capture_attempt_id: str,
+    client_anchor_ts: Any,
+) -> Optional[float]:
+    """Map a click-time client anchor onto the server FrameBuffer timeline.
+
+    Select the latest frame whose client timestamp was at/before the click and
+    return that frame's actual server timestamp.  Never compare or copy raw
+    client-relative seconds into the server-monotonic FrameBuffer epoch.
+    """
+    client_anchor = _optional_finite_float(client_anchor_ts)
+    if client_anchor is None:
+        return _snapshot_mm_frame_anchor(session)
+    epoch = _mm_capture_anchor_epoch(session, capture_attempt_id)
+    rows = list((session.get("_mm_capture_anchor_pairs") or {}).get(epoch) or [])
+    eligible = [
+        (client_ts, server_ts)
+        for client_ts, server_ts in rows
+        if client_ts <= client_anchor
+    ]
+    if not eligible:
+        if str(capture_attempt_id or "").strip():
+            # Exact owner + finite click time, but every accepted frame belongs
+            # to the future of that click.  Freeze "no frame"; falling back to
+            # stop-time latest would admit the first post-click frame while ASR
+            # was flushing.
+            return None
+        return _snapshot_mm_frame_anchor(session)
+    # Concurrent frame RPCs can arrive out of client order. max() by client
+    # time (and server time as a stable tie-break) still picks the click-bound
+    # frame without admitting a post-click capture.
+    return max(eligible, key=lambda pair: (pair[0], pair[1]))[1]
+
+
+def _retire_asr_turn(session: dict, turn_id: str, result: dict) -> None:
+    """Keep a small idempotency/tombstone cache for stopped ASR turns."""
+    turn_id = str(turn_id or "").strip()
+    if not turn_id:
+        return
+    retired = session.setdefault("_mm_asr_retired_turns", {})
+    retired.pop(turn_id, None)
+    retired[turn_id] = dict(result)
+    while len(retired) > _MM_ASR_RETIRED_TURNS_MAX:
+        retired.pop(next(iter(retired)), None)
+
+
+def _abort_active_asr_turn(
+    session: dict,
+    *,
+    reason: str,
+    reopenable: bool,
+) -> Optional[dict]:
+    """Abort the session-owned ASR without emitting/submitting a user turn.
+
+    Used by transport detach and session finalization, where relying on a
+    renderer cancellation RPC is unsafe because that socket may already be
+    closed.  A detach tombstone is explicitly reopenable by the *new current*
+    transport using the same logical turn id; ordinary stop/cancel tombstones
+    remain terminal.
+    """
+    capture_lock = session.setdefault("_mm_capture_lock", threading.RLock())
+    with capture_lock:
+        turn = session.get("_mm_asr_turn")
+        if not isinstance(turn, dict):
+            return None
+        with turn["lock"]:
+            state = str(turn.get("state") or "")
+            if state == "stopped":
+                return dict(turn.get("result") or {})
+            if state == "stopping":
+                # An explicit graceful finish may already own the Watcher key.
+                # Flip its effective disposition before its trailing callbacks
+                # or commit phase; that leader will publish the terminal result.
+                abort_won = not bool(turn.get("stop_committed", False))
+                if abort_won:
+                    turn["disposition"] = "cancel"
+                    turn["abort_reason"] = str(reason or "cancelled")
+                session["_mm_asr_on"] = False
+                turn_id = str(turn.get("turn_id") or "")
+                reopenable_turns = session.setdefault(
+                    "_mm_asr_reopenable_turns", {})
+                if reopenable and abort_won:
+                    reopenable_turns[turn_id] = turn.get("owner_transport")
+                else:
+                    reopenable_turns.pop(turn_id, None)
+                return None
+            turn["state"] = "stopping"
+            turn["disposition"] = "cancel"
+            turn["abort_reason"] = str(reason or "cancelled")
+            turn_id = str(turn.get("turn_id") or "")
+            mode = str(turn.get("mode") or "continuous")
+            key = str(turn.get("key") or "")
+            old_owner = turn.get("owner_transport")
+
+    session["_mm_asr_on"] = False
+    engine = session.get("_mm_live_watcher_agent")
+    if engine is not None:
+        try:
+            try:
+                engine.asr_stop(key, graceful=False)
+            except TypeError:
+                engine.asr_stop(key)
+        except Exception:
+            logger.debug("abortive ASR close failed: %s", reason, exc_info=True)
+
+    result = {
+        "ok": True,
+        "turn_id": turn_id,
+        "mode": mode,
+        "disposition": "cancel",
+        "transcript": "",
+        "submitted": False,
+        "reason": str(reason or "cancelled"),
+        "anchor_ts": None,
+        "graceful": False,
+    }
+    with turn["lock"]:
+        turn["state"] = "stopped"
+        turn["result"] = dict(result)
+    with capture_lock:
+        _retire_asr_turn(session, turn_id, result)
+        reopenable_turns = session.setdefault(
+            "_mm_asr_reopenable_turns", {})
+        if reopenable:
+            reopenable_turns[turn_id] = old_owner
+            while len(reopenable_turns) > _MM_ASR_RETIRED_TURNS_MAX:
+                reopenable_turns.pop(next(iter(reopenable_turns)), None)
+        else:
+            reopenable_turns.pop(turn_id, None)
+    turn["stop_event"].set()
+    return result
+
+
 @method("multimodal.asr_start")
 def _(rid, params: dict) -> dict:
-    """Open a streaming ASR session. params: {session_id}"""
+    """Open a streaming ASR session.
+
+    Modern Desktop callers pass ``{session_id, turn_id, mode}``, where mode is
+    ``manual_turn`` (push once to record, push again to finish one user turn) or
+    ``continuous`` (Voice Dialog's existing VAD-driven behavior).  ``turn_id``
+    is the ownership token for every subsequent audio/stop RPC.  Legacy callers
+    without a mode remain continuous for protocol compatibility.
+    """
     # Voice-only Desktop sessions start life as ordinary ``source=tui``
     # runtimes. Promote on demand before looking up the watcher/ASR engine;
     # unlike source_started this does not mark video capture active or couple
@@ -14169,88 +14473,289 @@ def _(rid, params: dict) -> dict:
     if err:
         return err
     _sid = str(params.get("session_id") or "")
+    requested_mode = str(params.get("mode") or "").strip().lower()
+    if requested_mode not in {"", "manual_turn", "continuous"}:
+        return _err(rid, 4004, "mode must be manual_turn or continuous")
+    raw_turn_id = str(params.get("turn_id") or "").strip()
+    modern = bool(requested_mode or raw_turn_id)
+    mode = requested_mode or "continuous"
+    explicit_manual = requested_mode == "manual_turn"
+    explicit_continuous = requested_mode == "continuous"
+    if session.get("_mm_voice_dialog_on") and not explicit_manual:
+        # Voice Dialog is deliberately VAD-driven and multi-turn.  Never let a
+        # legacy/unspecified start downgrade its established semantics.  A
+        # modern explicit manual_turn is authoritative, however: after a WS
+        # disconnect the renderer's dialog-off RPC may never have arrived, and
+        # forcing that stale flag here would make an ordinary push-to-talk mic
+        # unexpectedly auto-submit at every VAD pause.
+        mode = "continuous"
+    if len(raw_turn_id) > 128:
+        return _err(rid, 4004, "turn_id exceeds 128 characters")
+    supplied_turn_id = raw_turn_id
+    if mode == "manual_turn" and not supplied_turn_id:
+        return _err(rid, 4002, "turn_id is required for manual_turn")
+    turn_id = supplied_turn_id or f"legacy-asr-{uuid.uuid4().hex}"
     capture_lock = session.setdefault("_mm_capture_lock", threading.RLock())
     request_transport = current_transport()
-    runtime_tokens: list = []
-    runtime_home_token = None
-    try:
-        runtime_tokens = _set_session_context(
-            str(session.get("session_key") or _sid),
-            str(session.get("cwd") or ""),
-        )
-        if profile_home := session.get("profile_home"):
-            runtime_home_token = set_hermes_home_override(profile_home)
-        with capture_lock:
-            owner = session.get("transport")
-            if (request_transport is not None and owner is not None \
-                    and owner is not request_transport):
-                return _ok(rid, {"enabled": False, "reason": "stale_transport"})
-            _start_agent_build(_sid, session)
-            wait_error = _wait_agent(
-                session, rid, timeout=_MM_CAPTURE_ACTIVATION_TIMEOUT_SEC)
-            if wait_error:
-                return wait_error
-            if (session.get("_mm_live_watcher_agent") is None
-                    and not _promote_session_to_multimodal(_sid, session)):
-                return _err(
-                    rid, 5027,
-                    "could not initialize the multimodal runtime for voice",
-                )
-    finally:
-        if runtime_home_token is not None:
-            reset_hermes_home_override(runtime_home_token)
-        _clear_session_context(runtime_tokens)
-
     key = f"asr:{_sid}"
+    turn = {
+        "turn_id": turn_id,
+        "mode": mode,
+        "modern": modern,
+        "key": key,
+        "segments": [],
+        "partial": "",
+        "state": "starting",
+        "stop_event": threading.Event(),
+        "lock": threading.RLock(),
+        "owner_transport": request_transport,
+        "started_at": time.monotonic(),
+        "audio_delivery_failed": False,
+        "result": None,
+    }
+    with capture_lock:
+        owner = session.get("transport")
+        if (request_transport is not None and owner is not None
+                and owner is not request_transport):
+            return _ok(rid, {"enabled": False, "reason": "stale_transport"})
+        retired = session.get("_mm_asr_retired_turns") or {}
+        if modern and turn_id in retired:
+            reopenable_turns = session.get("_mm_asr_reopenable_turns") or {}
+            old_owner = reopenable_turns.get(turn_id)
+            can_reopen = bool(
+                turn_id in reopenable_turns
+                and request_transport is not None
+                and session.get("transport") is request_transport
+                and request_transport is not old_owner
+            )
+            if can_reopen:
+                retired.pop(turn_id, None)
+                reopenable_turns.pop(turn_id, None)
+            else:
+                return _ok(rid, {
+                    "enabled": False,
+                    "reason": "retired_turn",
+                    "turn_id": turn_id,
+                    "mode": mode,
+                })
+        active_turn = session.get("_mm_asr_turn")
+        if (isinstance(active_turn, dict)
+                and active_turn.get("state") in {
+                    "starting", "connecting", "recording", "stopping",
+                }):
+            if (modern and active_turn.get("turn_id") == turn_id
+                    and active_turn.get("state") == "recording"):
+                active_owner = active_turn.get("owner_transport")
+                if (request_transport is not None and active_owner is not None
+                        and request_transport is not active_owner):
+                    if session.get("transport") is request_transport:
+                        # A resumed live session has explicitly rebound its
+                        # transport.  The session-owned Qwen connection remains
+                        # alive across the renderer WS disconnect (and
+                        # asr_audio self-heals it if upstream died), so transfer
+                        # the logical turn owner instead of opening a duplicate
+                        # ASR socket or returning a false idempotent success to
+                        # an unauthorized stale transport.
+                        active_turn["owner_transport"] = request_transport
+                    else:
+                        return _ok(rid, {
+                            "enabled": False,
+                            "reason": "stale_transport",
+                            "turn_id": turn_id,
+                            "mode": str(active_turn.get("mode") or mode),
+                        })
+                active_mode = str(active_turn.get("mode") or mode)
+                if explicit_manual and active_mode == "manual_turn":
+                    session["_mm_voice_dialog_on"] = False
+                elif explicit_continuous and active_mode == "continuous":
+                    # The explicit rearm RPC is authoritative.  Commit the
+                    # dialog flag in the same capture-lock section as the
+                    # idempotent active-turn response so the first VAD final
+                    # cannot observe the old/off mode.
+                    session["_mm_voice_dialog_on"] = True
+                return _ok(rid, {
+                    "enabled": True,
+                    "turn_id": turn_id,
+                    "mode": active_mode,
+                    "idempotent": True,
+                    **({"resumed": True}
+                       if active_owner is not request_transport else {}),
+                })
+            return _ok(rid, {
+                "enabled": False,
+                "reason": "active_turn",
+                "turn_id": str(active_turn.get("turn_id") or ""),
+                "mode": str(active_turn.get("mode") or "continuous"),
+            })
+        # Publish a provisional owner before any slow build/promotion. Exact-id
+        # stop/cancel and transport teardown can now retire it immediately
+        # instead of waiting behind a minutes-long capture lock.
+        session["_mm_asr_turn"] = turn
     # ★ 记下前端当前订阅的【live runtime sid】(前端 isMine 就是拿它比对)。VoiceAgent v2
     #   委派主 Agent 时 (_submit_main → _run_prompt_submit → _emit) 必须用这个 sid, 否则
     #   emit 用了 session_key (持久 id) → 前端 isMine 过滤掉 → 用户气泡 + Assistant 答案
     #   全部不显示。见 _get_voice_agent._submit_main。
     def _on_partial(text: str) -> None:
         # Live transcript preview — forward to frontend as-is.
-        _emit("multimodal.asr_partial", _sid, {"text": text})
+        with turn["lock"]:
+            if turn.get("state") not in {
+                    "starting", "connecting", "recording", "stopping"}:
+                return
+            if (turn.get("state") == "stopping"
+                    and turn.get("disposition") == "cancel"):
+                return
+            if mode == "manual_turn" and turn.get("audio_delivery_failed"):
+                return
+            if mode == "manual_turn":
+                turn["partial"] = str(text or "")
+        _emit("multimodal.asr_partial", _sid, {
+            "text": text,
+            "turn_id": turn_id,
+        })
 
     def _on_eou_buffer_updated(buffer: list) -> None:
         """EOU 监听中状态: buffer 有更新 (追加或清空) → 通知前端显示已拼接段。"""
-        _emit("multimodal.asr_buffer", _sid, {"segments": list(buffer)})
+        with turn["lock"]:
+            if (turn.get("state") == "stopped"
+                    or turn.get("disposition") == "cancel"):
+                return
+        _emit("multimodal.asr_buffer", _sid, {
+            "segments": list(buffer),
+            "turn_id": turn_id,
+        })
+
+    def _dispatch_user_turn(
+        text: str,
+        *,
+        anchor_ts: Optional[float] = None,
+        anchor_frozen: bool = False,
+    ) -> dict:
+        """Commit exactly one voice-tagged foreground turn (or FIFO item)."""
+        text = (text or "").strip()
+        if not text:
+            return {"submitted": False, "reason": "empty"}
+        client_request_id = _ensure_client_request_id()
+        lock = session.get("history_lock")
+        queued_position = 0
+        cancelled = False
+        if lock is not None:
+            with lock:
+                with turn["lock"]:
+                    cancelled = bool(
+                        turn.get("disposition") == "cancel"
+                        or turn.get("state") == "stopped"
+                        or (turn.get("mode") == "manual_turn"
+                            and turn.get("audio_delivery_failed"))
+                    )
+                    if not cancelled:
+                        if session.get("running"):
+                            queued_position = _enqueue_prompt(
+                                session,
+                                text,
+                                session.get("transport"),
+                                user_originated=True,
+                                origin="voice_asr",
+                                metadata={
+                                    "voice_input": True,
+                                    "client_request_id": client_request_id,
+                                    "anchor_ts": anchor_ts,
+                                    "anchor_frozen": anchor_frozen,
+                                },
+                            )
+                        else:
+                            session["running"] = True
+                        if (turn.get("mode") == "manual_turn"
+                                and turn.get("state") == "stopping"):
+                            # Exact scheduler-admission linearization point:
+                            # queue append/running claim and finish ownership
+                            # become visible atomically to a racing cancel.
+                            turn["stop_committed"] = True
+        else:
+            with turn["lock"]:
+                cancelled = bool(
+                    turn.get("disposition") == "cancel"
+                    or turn.get("state") == "stopped"
+                    or (turn.get("mode") == "manual_turn"
+                        and turn.get("audio_delivery_failed"))
+                )
+                if (not cancelled and turn.get("mode") == "manual_turn"
+                        and turn.get("state") == "stopping"):
+                    turn["stop_committed"] = True
+        if cancelled:
+            return {
+                "submitted": False,
+                "cancelled": True,
+                "reason": str(
+                    turn.get("abort_reason")
+                    or ("audio_delivery_failed"
+                        if turn.get("audio_delivery_failed") else "cancelled")
+                ),
+            }
+        _emit("multimodal.asr_final", _sid, {
+            "text": text,
+            "request_id": client_request_id,
+            "turn_id": turn_id,
+        })
+        if queued_position:
+            _emit("multimodal.trajectory", _sid, {
+                "worker": "MainScheduler",
+                "phase": "voice_prompt_queued",
+                "origin": "voice_asr",
+                "queue_position": queued_position,
+                "text": text,
+                "client_request_id": client_request_id,
+                "anchor_ts": anchor_ts,
+            })
+            return {
+                "submitted": True,
+                "queued": True,
+                "queue_position": queued_position,
+                "client_request_id": client_request_id,
+            }
+
+        try:
+            rid2 = f"__voice__{int(time.time() * 1000)}"
+            session["_mm_voice_turn"] = True
+
+            def _voice_turn() -> None:
+                try:
+                    kwargs = {
+                        "user_originated": True,
+                        "client_request_id": client_request_id,
+                    }
+                    if anchor_frozen:
+                        kwargs.update({
+                            "anchor_ts": anchor_ts,
+                            "anchor_frozen": True,
+                        })
+                    _run_prompt_submit(
+                        rid2, _sid, session, text, **kwargs)
+                except Exception as exc:
+                    logger.debug("asr turn submit failed: %s", exc)
+                    if lock is not None:
+                        with lock:
+                            session["running"] = False
+
+            threading.Thread(
+                target=_voice_turn, daemon=True, name="mm-voice-turn").start()
+            return {
+                "submitted": True,
+                "queued": False,
+                "client_request_id": client_request_id,
+            }
+        except Exception as exc:
+            logger.debug("asr turn dispatch failed: %s", exc)
+            if lock is not None:
+                with lock:
+                    session["running"] = False
+            return {"submitted": False, "reason": "dispatch_failed"}
+
+    turn["submit_cb"] = _dispatch_user_turn
 
     def _on_voice_turn(text: str) -> None:
         """单独开麦模式 flush → 走普通语音 turn 路径 (直接提交主 Agent)。
         与 _on_final 的老路 (非对话模式) 等价, 但由 VoiceAgent EOU 触发时机控制。"""
-        client_request_id = _ensure_client_request_id()
-        lock = session.get("history_lock")
-        if lock is not None:
-            with lock:
-                if session.get("running"):
-                    return
-                session["running"] = True
-        try:
-            _emit("multimodal.asr_final", _sid, {
-                "text": text,
-                "request_id": client_request_id,
-            })
-            rid2 = f"__voice__{int(time.time() * 1000)}"
-            session["_mm_voice_turn"] = True
-            def _voice_turn() -> None:
-                try:
-                    _run_prompt_submit(
-                        rid2,
-                        _sid,
-                        session,
-                        text,
-                        user_originated=True,
-                        client_request_id=client_request_id,
-                    )
-                except Exception as exc:
-                    logger.debug("_on_voice_turn err: %s", exc)
-                finally:
-                    with (session.get("history_lock") or __import__("contextlib").nullcontext()):
-                        session["running"] = False
-            threading.Thread(target=_voice_turn, daemon=True, name="voice-eou-turn").start()
-        except Exception as exc:
-            logger.debug("_on_voice_turn setup err: %s", exc)
-            with (session.get("history_lock") or __import__("contextlib").nullcontext()):
-                session["running"] = False
+        _dispatch_user_turn(text)
 
     # 注入 EOU callback 到 session，供 VoiceAgent 状态机回调。
     session["_mm_eou_buffer_cb"] = _on_eou_buffer_updated
@@ -14259,6 +14764,38 @@ def _(rid, params: dict) -> dict:
     def _on_final(text: str) -> None:
         text = (text or "").strip()
         if not text:
+            return
+        with turn["lock"]:
+            if (turn.get("state") == "stopping"
+                    and turn.get("disposition") == "cancel"):
+                return
+            if mode == "manual_turn" and turn.get("audio_delivery_failed"):
+                return
+        if mode == "manual_turn":
+            # A VAD completion is a preview boundary, not a chat boundary.  A
+            # manual recording may contain pauses and therefore many completed
+            # segments; accumulate all of them until the explicit finish RPC.
+            with turn["lock"]:
+                if turn.get("state") not in {
+                        "starting", "connecting", "recording", "stopping"}:
+                    return
+                segments = turn["segments"]
+                # Qwen's adapter reconciles the one session.finished full
+                # transcript before invoking us.  Every callback here is thus
+                # a distinct VAD item and must be preserved even when adjacent
+                # segments have identical text ("好" ... "好").  Text-based
+                # dedupe at this layer silently deletes legitimate speech.
+                segments.append(text)
+                snapshot = list(segments)
+                turn["partial"] = ""
+            _emit("multimodal.asr_partial", _sid, {
+                "text": "",
+                "turn_id": turn_id,
+            })
+            _emit("multimodal.asr_buffer", _sid, {
+                "segments": snapshot,
+                "turn_id": turn_id,
+            })
             return
         # ★ VoiceAgent v2 交互模式: 【对话】按钮开启 (_mm_voice_dialog_on=True) →
         #   ASR final 不再直接走 _run_prompt_submit, 而是进 VoiceAgent v2 主线程做分诊
@@ -14278,6 +14815,7 @@ def _(rid, params: dict) -> dict:
                     _emit("multimodal.asr_final", _sid, {
                         "text": "",
                         "request_id": _ensure_client_request_id(),
+                        "turn_id": turn_id,
                     })
                 else:
                     # 单独开麦: 只清理 partial; 完整 EOU 文字由
@@ -14286,99 +14824,25 @@ def _(rid, params: dict) -> dict:
                     _emit("multimodal.asr_final", _sid, {
                         "text": "",
                         "request_id": _ensure_client_request_id(),
+                        "turn_id": turn_id,
                     })
                 voice.submit_user(text)
                 return
             except Exception as exc:
                 logger.debug("voice submit_user failed, fallback to legacy: %s", exc)
-        # 老路 (v1 或非交互模式): 直接走 _run_prompt_submit
-        # Submit as a normal user turn — but never collide with a live turn.
-        client_request_id = _ensure_client_request_id()
-        lock = session.get("history_lock")
-        _queued_position = 0
-        if lock is not None:
-            with lock:
-                if session.get("running"):
-                    _queued_position = _enqueue_prompt(
-                        session,
-                        text,
-                        session.get("transport"),
-                        user_originated=True,
-                        origin="voice_asr",
-                        metadata={
-                            "voice_input": True,
-                            "client_request_id": client_request_id,
-                        },
-                    )
-                else:
-                    session["running"] = True
-        if _queued_position:
-            # The transcript bubble is rendered now; the corresponding model
-            # turn drains independently through the same per-session FIFO as
-            # typed input. The previous implementation returned here silently
-            # and discarded every utterance spoken while a turn was active.
-            _emit("multimodal.asr_final", _sid, {
-                "text": text,
-                "request_id": client_request_id,
-            })
-            _emit("multimodal.trajectory", _sid, {
-                "worker": "MainScheduler",
-                "phase": "voice_prompt_queued",
-                "origin": "voice_asr",
-                "queue_position": _queued_position,
-                "text": text,
-                "client_request_id": client_request_id,
-            })
-            return
-        try:
-            _emit("multimodal.asr_final", _sid, {
-                "text": text,
-                "request_id": client_request_id,
-            })
-            rid2 = f"__voice__{int(time.time() * 1000)}"
-            # Mark this turn as voice-input so the message.complete hook
-            # (server.py near line 8999) auto-speaks the reply. Text turns
-            # leave this flag off and must be spoken via the ▶ play button.
-            session["_mm_voice_turn"] = True
-            # ★ Run the turn on a DEDICATED THREAD, not inline. This callback
-            # fires on the WatcherAgent's asyncio loop; running the whole
-            # synchronous _run_prompt_submit here would block that loop for the
-            # entire turn (starving the serial TTS queue + ASR feeding) AND
-            # delay everything behind it. Mirrors the prompt.submit handler,
-            # which also spawns a thread — that's why TYPING never stalled but
-            # VOICE did. The asr_final emit above already rendered the user
-            # bubble; the thread now owns clearing `running`.
-            # NOTE: do NOT emit message.start here — _run_prompt_submit emits it.
-            def _voice_turn() -> None:
-                try:
-                    # ★ user_originated=True: 语音 turn 的 user 气泡已由上面的
-                    #   multimodal.asr_final 在前端渲染 (带 🎤 语音 标签), 这里必须跳过
-                    #   message.user_echo, 否则会重复出现第二条纯文本 user 气泡。
-                    _run_prompt_submit(
-                        rid2,
-                        _sid,
-                        session,
-                        text,
-                        user_originated=True,
-                        client_request_id=client_request_id,
-                    )
-                except Exception as exc:
-                    logger.debug("asr final submit failed: %s", exc)
-                    if lock is not None:
-                        with lock:
-                            session["running"] = False
-            threading.Thread(target=_voice_turn, daemon=True,
-                             name="mm-voice-turn").start()
-        except Exception as exc:
-            logger.debug("asr final dispatch failed: %s", exc)
-            if lock is not None:
-                with lock:
-                    session["running"] = False
+        # Legacy continuous microphone semantics remain VAD-driven.  Modern
+        # manual_turn returned above after buffering and reaches this helper
+        # only from its explicit finish RPC.
+        _dispatch_user_turn(text)
 
     def _on_speech_started() -> None:
         # ★ Barge-in: DashScope VAD 一检测到用户开口 → 立即打断当前 TTS +
         #   清 v2 回播队列, 不等 ASR final + 意图分类 (那要 2-3s, 用户会觉得"没打断")。
         #   只对话模式生效: 非对话模式没有 v2 的 TTS 流可停; is_interactive() 内 try 兜住。
+        with turn["lock"]:
+            if (turn.get("state") != "recording"
+                    or turn.get("disposition") == "cancel"):
+                return
         voice_ = session.get("_mm_voice_agent")
         if voice_ is None:
             return
@@ -14389,42 +14853,200 @@ def _(rid, params: dict) -> dict:
         except Exception as exc:
             logger.debug("voice barge-in failed: %s", exc)
 
+    # Runtime build/promotion is deliberately outside capture_lock.  The
+    # provisional turn above is the ownership token a concurrent exact-id stop
+    # can cancel while this potentially slow work is still running.
+    activation_response = None
+    runtime_tokens: list = []
+    runtime_home_token = None
+    try:
+        runtime_tokens = _set_session_context(
+            str(session.get("session_key") or _sid),
+            str(session.get("cwd") or ""),
+        )
+        if profile_home := session.get("profile_home"):
+            runtime_home_token = set_hermes_home_override(profile_home)
+        _start_agent_build(_sid, session)
+        wait_error = _wait_agent(
+            session, rid, timeout=_MM_CAPTURE_ACTIVATION_TIMEOUT_SEC)
+        if wait_error:
+            activation_response = wait_error
+        elif (session.get("_mm_live_watcher_agent") is None
+              and not _promote_session_to_multimodal(_sid, session)):
+            activation_response = _err(
+                rid, 5027,
+                "could not initialize the multimodal runtime for voice",
+            )
+    finally:
+        if runtime_home_token is not None:
+            reset_hermes_home_override(runtime_home_token)
+        _clear_session_context(runtime_tokens)
+
     with capture_lock:
-        # Promotion/build can take minutes. Revalidate immediately before the
-        # irreversible ASR open so a disconnected transport or replaced/final
-        # session cannot start recording after another conversation took over.
+        retired_now = turn_id in (
+            session.get("_mm_asr_retired_turns") or {})
+        with turn["lock"]:
+            turn_state = str(turn.get("state") or "")
+        if (session.get("_mm_asr_turn") is not turn
+                or retired_now or turn_state != "starting"):
+            return _ok(rid, {
+                "enabled": False,
+                "reason": "retired_turn",
+                "turn_id": turn_id,
+                "mode": mode,
+            })
+        if activation_response is not None:
+            session.pop("_mm_asr_turn", None)
+            return activation_response
+        # Revalidate immediately before the irreversible upstream ASR open so
+        # a disconnected/replaced session cannot publish a late connection.
         owner = session.get("transport")
         if (_sessions.get(_sid) is not session or session.get("_finalized")
                 or (request_transport is not None and owner is not None
                     and owner is not request_transport)):
+            if session.get("_mm_asr_turn") is turn:
+                session.pop("_mm_asr_turn", None)
             return _ok(rid, {"enabled": False, "reason": "stale_transport"})
         engine = session.get("_mm_live_watcher_agent")
         if engine is None:
+            if session.get("_mm_asr_turn") is turn:
+                session.pop("_mm_asr_turn", None)
             return _ok(rid, {"enabled": False, "reason": "no_router_engine"})
         session["_mm_live_sid"] = _sid
+        with turn["lock"]:
+            turn["state"] = "connecting"
+
+    try:
+        ok = engine.asr_start(
+            key, _on_partial, _on_final, _on_speech_started)
+        start_error = None
+    except Exception as exc:
+        ok = False
+        start_error = exc
+
+    cleanup_late_start = False
+    with capture_lock:
+        retired_now = turn_id in (
+            session.get("_mm_asr_retired_turns") or {})
+        with turn["lock"]:
+            turn_state = str(turn.get("state") or "")
+        owner = session.get("transport")
+        stale_owner = bool(
+            _sessions.get(_sid) is not session or session.get("_finalized")
+            or (request_transport is not None and owner is not None
+                and owner is not request_transport)
+        )
+        cancelled = bool(
+            session.get("_mm_asr_turn") is not turn
+            or retired_now or turn_state != "connecting" or stale_owner
+        )
+        if cancelled:
+            cleanup_late_start = bool(ok)
+        elif start_error is not None:
+            session.pop("_mm_asr_turn", None)
+        elif not ok:
+            session.pop("_mm_asr_turn", None)
+        else:
+            with turn["lock"]:
+                turn["state"] = "recording"
+            if explicit_manual:
+                # Commit an explicit mode only after the upstream session has
+                # opened successfully.  Keeping this under capture_lock makes
+                # the recording state and VoiceAgent routing mode one atomic
+                # observation for audio/final callbacks.
+                session["_mm_voice_dialog_on"] = False
+            elif explicit_continuous:
+                session["_mm_voice_dialog_on"] = True
+            # ★ 麦克风状态字段 (VoiceAgent v2 交互模式判定用: 麦+喇叭同开 → is_interactive=True).
+            session["_mm_asr_on"] = True
+
+    if cleanup_late_start:
         try:
-            ok = engine.asr_start(
-                key, _on_partial, _on_final, _on_speech_started)
-        except Exception as exc:
-            return _err(rid, 5027, f"asr_start failed: {exc}")
-        if not ok:
-            return _ok(rid, {"enabled": False,
-                             "reason": "no_dashscope_key_or_disabled"})
-        # ★ 麦克风状态字段 (VoiceAgent v2 交互模式判定用: 麦+喇叭同开 → is_interactive=True).
-        #   与 _mm_tts_on 对称。见 .plans/voice_agent_proactive_upgrade.md §1.
-        session["_mm_asr_on"] = True
-        return _ok(rid, {"enabled": True})
+            try:
+                engine.asr_stop(key, graceful=False)
+            except TypeError:
+                engine.asr_stop(key)
+        except Exception:
+            logger.debug("late cancelled asr_start cleanup failed", exc_info=True)
+    if cancelled:
+        return _ok(rid, {
+            "enabled": False,
+            "reason": "retired_turn" if retired_now else "stale_transport",
+            "turn_id": turn_id,
+            "mode": mode,
+        })
+    if start_error is not None:
+        return _err(rid, 5027, f"asr_start failed: {start_error}")
+    if not ok:
+        return _ok(rid, {
+            "enabled": False,
+            "reason": "no_dashscope_key_or_disabled",
+        })
+    if ok:
+        if not modern:
+            return _ok(rid, {"enabled": True})
+        return _ok(rid, {
+            "enabled": True,
+            "turn_id": turn_id,
+            "mode": mode,
+        })
+    return _ok(rid, {"enabled": False})
 
 
 @method("multimodal.asr_audio")
 def _(rid, params: dict) -> dict:
-    """Feed a PCM16 (16 kHz mono) chunk. params: {session_id, pcm_b64}"""
+    """Feed PCM16 owned by one exact ASR turn.
+
+    Modern callers must include the ``turn_id`` returned by asr_start.  This
+    prevents delayed audio from a stopped renderer turn entering a newer ASR
+    connection that happens to share the same live session id.
+    """
     session, err = _sess_nowait(params, rid)
     if err:
         return err
     engine = session.get("_mm_live_watcher_agent")
     if engine is None:
         return _ok(rid, {"ok": False, "reason": "no_router_engine"})
+    turn = session.get("_mm_asr_turn")
+    if not isinstance(turn, dict):
+        return _ok(rid, {"ok": False, "reason": "no_active_turn"})
+    supplied_turn_id = str(params.get("turn_id") or "").strip()
+    active_turn_id = str(turn.get("turn_id") or "")
+    if turn.get("modern") and not supplied_turn_id:
+        return _ok(rid, {
+            "ok": False,
+            "reason": "turn_id_required",
+            "turn_id": active_turn_id,
+        })
+    if supplied_turn_id and supplied_turn_id != active_turn_id:
+        return _ok(rid, {
+            "ok": False,
+            "reason": "stale_turn",
+            "turn_id": supplied_turn_id,
+            "active_turn_id": active_turn_id,
+        })
+    owner_transport = turn.get("owner_transport")
+    request_transport = current_transport()
+    if (request_transport is not None and owner_transport is not None
+            and request_transport is not owner_transport):
+        if session.get("transport") is request_transport:
+            turn["owner_transport"] = request_transport
+        else:
+            return _ok(rid, {"ok": False, "reason": "stale_transport"})
+    with turn["lock"]:
+        if turn.get("state") != "recording":
+            return _ok(rid, {
+                "ok": False,
+                "reason": "turn_not_recording",
+                "turn_id": active_turn_id,
+            })
+        if turn.get("mode") == "manual_turn" and turn.get(
+                "audio_delivery_failed", False):
+            return _ok(rid, {
+                "ok": False,
+                "reason": "audio_delivery_failed",
+                "turn_id": active_turn_id,
+            })
     import base64 as _b64
     b64 = str(params.get("pcm_b64") or "")
     if not b64:
@@ -14433,30 +15055,369 @@ def _(rid, params: dict) -> dict:
         pcm = _b64.b64decode(b64)
     except Exception:
         return _err(rid, 4017, "pcm_b64 not valid base64")
-    _sid = str(params.get("session_id") or "")
     try:
-        engine.asr_audio(f"asr:{_sid}", pcm)
+        delivered = bool(engine.asr_audio(str(turn.get("key") or ""), pcm))
     except Exception as exc:
         logger.debug("asr_audio failed: %s", exc)
-    return _ok(rid, {"ok": True})
+        delivered = False
+    if not delivered:
+        if turn.get("mode") == "manual_turn":
+            with turn["lock"]:
+                turn["audio_delivery_failed"] = True
+                turn["partial"] = ""
+                turn["segments"] = []
+        return _ok(rid, {
+            "ok": False,
+            "reason": "audio_delivery_failed",
+            "turn_id": active_turn_id,
+        })
+    return _ok(rid, {"ok": True, "turn_id": active_turn_id})
 
 
 @method("multimodal.asr_stop")
 def _(rid, params: dict) -> dict:
-    """Finish + close the streaming ASR session. params: {session_id}"""
+    """Finish/cancel one exact ASR turn with idempotent ownership.
+
+    ``disposition=finish`` commits one manual_turn only after the upstream
+    ``session.finish`` handshake has flushed all final segments.
+    ``disposition=cancel`` closes the stream but never submits.  Continuous
+    Voice Dialog keeps its existing callback-driven semantics in both cases.
+    """
     session, err = _sess_nowait(params, rid)
     if err:
         return err
-    engine = session.get("_mm_live_watcher_agent")
     _sid = str(params.get("session_id") or "")
+    supplied_turn_id = str(params.get("turn_id") or "").strip()
+    disposition = str(params.get("disposition") or "finish").strip().lower()
+    if disposition not in {"finish", "cancel"}:
+        return _err(rid, 4004, "disposition must be finish or cancel")
+    modern_request = bool(supplied_turn_id or "disposition" in params)
+    request_transport = current_transport()
+    session_transport = session.get("transport")
+    if (request_transport is not None and session_transport is not None
+            and request_transport is not session_transport):
+        return _ok(rid, {
+            "ok": False,
+            "reason": "stale_transport",
+            "turn_id": supplied_turn_id,
+        })
+    capture_lock = session.setdefault("_mm_capture_lock", threading.RLock())
+
+    leader = False
+    wait_event = None
+    turn = None
+    with capture_lock:
+        retired = session.get("_mm_asr_retired_turns") or {}
+        if supplied_turn_id and supplied_turn_id in retired:
+            return _ok(rid, dict(retired[supplied_turn_id]))
+
+        active = session.get("_mm_asr_turn")
+        if not isinstance(active, dict):
+            if not supplied_turn_id:
+                # Preserve the pre-turn-id no-op stop contract for legacy
+                # continuous clients.
+                return _ok(rid, {"ok": True})
+            result = {
+                "ok": True,
+                "turn_id": supplied_turn_id,
+                "transcript": "",
+                "submitted": False,
+                "disposition": disposition,
+                "reason": "no_active_turn",
+                "anchor_ts": None,
+            }
+            # Stop-before-start tombstone: a delayed cold-start RPC with this
+            # token must not resurrect recording after the user stopped it.
+            _retire_asr_turn(session, supplied_turn_id, result)
+            return _ok(rid, result)
+
+        active_turn_id = str(active.get("turn_id") or "")
+        if active.get("modern") and not supplied_turn_id:
+            return _ok(rid, {
+                "ok": False,
+                "reason": "turn_id_required",
+                "turn_id": active_turn_id,
+            })
+        if supplied_turn_id and supplied_turn_id != active_turn_id:
+            # Tombstone the unknown caller token without touching the actual
+            # active turn.  This also closes the late-start race for that token.
+            result = {
+                "ok": True,
+                "turn_id": supplied_turn_id,
+                "transcript": "",
+                "submitted": False,
+                "disposition": disposition,
+                "reason": "stale_turn",
+                "active_turn_id": active_turn_id,
+                "anchor_ts": None,
+            }
+            _retire_asr_turn(session, supplied_turn_id, result)
+            return _ok(rid, result)
+        owner_transport = active.get("owner_transport")
+        if (request_transport is not None and owner_transport is not None
+                and request_transport is not owner_transport):
+            if session.get("transport") is request_transport:
+                active["owner_transport"] = request_transport
+            else:
+                return _ok(rid, {
+                    "ok": False,
+                    "reason": "stale_transport",
+                    "turn_id": active_turn_id,
+                })
+
+        turn = active
+        with turn["lock"]:
+            state = str(turn.get("state") or "")
+            if state == "stopped" and isinstance(turn.get("result"), dict):
+                return _ok(rid, dict(turn["result"]))
+            wait_event = turn["stop_event"]
+            if state == "stopping":
+                # Cancellation is the dominant boundary operation until the
+                # leader reaches its explicit commit point.  This covers a
+                # profile/session switch racing a user-click finish: the
+                # graceful Qwen flush may continue, but its callbacks and
+                # buffered transcript can no longer become a main-agent turn.
+                if (disposition == "cancel"
+                        and not bool(turn.get("stop_committed", False))):
+                    turn["disposition"] = "cancel"
+                    turn["abort_reason"] = "cancelled"
+                leader = False
+            else:
+                turn["state"] = "stopping"
+                turn["disposition"] = disposition
+                # Freeze ask-time before the potentially multi-second ASR flush.
+                # ``None`` is meaningful (there was no frame yet), so the
+                # downstream anchor_frozen flag must suppress latest-frame
+                # fallback even in that case.
+                requested_capture_id = str(
+                    params.get("capture_attempt_id")
+                    or params.get("capture_id") or "").strip()
+                current_capture_id = str(
+                    session.get("_mm_capture_attempt_id") or "").strip()
+                capture_active = bool(
+                    session.get("_mm_capture_active", False))
+                capture_owner_matches = bool(
+                    capture_active
+                    and (
+                        (requested_capture_id and current_capture_id
+                         and requested_capture_id == current_capture_id)
+                        # Legacy Web capture epoch: same authenticated session
+                        # transport, but no attempt id in the stop payload.
+                        or not requested_capture_id
+                    )
+                )
+                if capture_owner_matches:
+                    turn["anchor_ts"] = _resolve_mm_capture_anchor(
+                        session,
+                        capture_attempt_id=(
+                            requested_capture_id or current_capture_id),
+                        client_anchor_ts=params.get("anchor_ts"),
+                    )
+                    turn["anchor_capture_id"] = (
+                        requested_capture_id or current_capture_id)
+                else:
+                    turn["anchor_ts"] = _snapshot_mm_frame_anchor(session)
+                    turn["anchor_capture_id"] = current_capture_id
+                leader = True
+
+    if not leader:
+        if wait_event is not None and wait_event.wait(timeout=7.0):
+            with turn["lock"]:
+                if isinstance(turn.get("result"), dict):
+                    return _ok(rid, dict(turn["result"]))
+        return _ok(rid, {
+            "ok": False,
+            "turn_id": str(turn.get("turn_id") or supplied_turn_id),
+            "submitted": False,
+            "reason": "stop_in_progress",
+        })
+
+    engine = session.get("_mm_live_watcher_agent")
+    session["_mm_asr_on"] = False
+    with turn["lock"]:
+        audio_delivery_failed = bool(
+            turn.get("mode") == "manual_turn"
+            and turn.get("audio_delivery_failed", False)
+        )
+    close_result: dict = (
+        {} if engine is not None else {
+            "ok": False,
+            "reason": "no_engine",
+            "session_finished": False,
+        }
+    )
     if engine is not None:
         try:
-            engine.asr_stop(f"asr:{_sid}")
+            try:
+                raw_close_result = engine.asr_stop(
+                    str(turn.get("key") or ""),
+                    graceful=(
+                        disposition == "finish"
+                        and not audio_delivery_failed
+                    ),
+                )
+            except TypeError:
+                raw_close_result = engine.asr_stop(
+                    str(turn.get("key") or ""))
+            if isinstance(raw_close_result, dict):
+                close_result = dict(raw_close_result)
         except Exception as exc:
             logger.debug("asr_stop failed: %s", exc)
-    # ★ 麦关 → 清 _mm_asr_on (VoiceAgent v2 会通过 is_interactive() 回落到非交互模式).
-    session["_mm_asr_on"] = False
-    return _ok(rid, {"ok": True})
+            close_result = {"ok": False, "reason": "finish_failed"}
+
+    with turn["lock"]:
+        disposition = str(
+            turn.get("disposition") or disposition).strip().lower()
+        forced_abort_reason = str(turn.get("abort_reason") or "").strip()
+        audio_delivery_failed = bool(
+            turn.get("mode") == "manual_turn"
+            and turn.get("audio_delivery_failed", False)
+        )
+        segments = list(turn.get("segments") or [])
+        pending_partial = str(turn.get("partial") or "").strip()
+        incomplete_audio = bool(
+            disposition == "finish"
+            and turn.get("mode") == "manual_turn"
+            and not audio_delivery_failed
+            and pending_partial
+        )
+        canonical = str(close_result.get("transcript") or "").strip()
+        if canonical:
+            # Qwen session.finished is the only source that can authoritatively
+            # refine spacing inside a completed item (cat -> cats). Prefer its
+            # exact text over reconstructing character suffix callbacks.
+            transcript = canonical
+        else:
+            transcript = _join_asr_segments(segments)
+        anchor_ts = _optional_finite_float(turn.get("anchor_ts"))
+        mode = str(turn.get("mode") or "continuous")
+
+    # Clear preview state before materializing the one final user bubble.
+    _emit("multimodal.asr_partial", _sid, {
+        "text": "",
+        "turn_id": str(turn.get("turn_id") or ""),
+    })
+    _emit("multimodal.asr_buffer", _sid, {
+        "segments": [],
+        "turn_id": str(turn.get("turn_id") or ""),
+    })
+
+    dispatch_result: dict = {"submitted": False}
+    reason = ""
+    if disposition == "cancel":
+        transcript = ""
+        reason = forced_abort_reason or "cancelled"
+    elif mode == "manual_turn" and audio_delivery_failed:
+        transcript = ""
+        reason = "audio_delivery_failed"
+    elif mode == "manual_turn" and incomplete_audio:
+        # A visible live partial has not crossed a completed/session.finished
+        # boundary.  Submitting the confirmed prefix would make an agent act on
+        # a truncated command; submitting the partial would pretend an
+        # unacknowledged provider guess is final.  Fail the whole manual turn.
+        transcript = ""
+        with turn["lock"]:
+            disposition = str(
+                turn.get("disposition") or disposition).strip().lower()
+            forced_abort_reason = str(
+                turn.get("abort_reason") or "").strip()
+            if disposition != "cancel":
+                turn["stop_committed"] = True
+        reason = (
+            forced_abort_reason or "cancelled"
+            if disposition == "cancel"
+            else ("finish_timeout" if close_result.get("timed_out")
+                  else "incomplete_audio")
+        )
+    elif mode == "manual_turn":
+        if transcript:
+            dispatch_result = turn["submit_cb"](
+                transcript,
+                anchor_ts=anchor_ts,
+                anchor_frozen=True,
+            )
+            if dispatch_result.get("cancelled"):
+                with turn["lock"]:
+                    disposition = str(
+                        turn.get("disposition") or "cancel").strip().lower()
+                    forced_abort_reason = str(
+                        turn.get("abort_reason") or "cancelled").strip()
+                transcript = ""
+                reason = forced_abort_reason
+            else:
+                reason = str(dispatch_result.get("reason") or "")
+        else:
+            # There is no scheduler claim for silence.  Still finalize the stop
+            # outcome under the turn lock so a pre-result cancel wins and a
+            # later follower observes one immutable terminal result.
+            with turn["lock"]:
+                disposition = str(
+                    turn.get("disposition") or disposition).strip().lower()
+                forced_abort_reason = str(
+                    turn.get("abort_reason") or "").strip()
+                turn["stop_committed"] = True
+            reason = (
+                forced_abort_reason or "cancelled"
+                if disposition == "cancel" else "empty"
+            )
+    else:
+        # Continuous/VAD mode has already routed each completed segment through
+        # VoiceAgent or the legacy foreground path.  Stop must not replay them.
+        transcript = ""
+        reason = "continuous_stopped"
+
+    close_reason = str(close_result.get("reason") or "").strip()
+    if (disposition == "finish" and not audio_delivery_failed
+            and not incomplete_audio
+            and close_result.get("timed_out")):
+        reason = "finish_timeout"
+    elif (disposition == "finish" and not audio_delivery_failed
+          and not incomplete_audio
+          and close_reason):
+        # A transport/provider failure is more actionable than the derived
+        # empty-transcript label.  If best-effort partial text was recovered it
+        # is still submitted once, while this reason remains as a warning.
+        reason = close_reason
+
+    result_ok = True
+    if disposition == "finish" and mode == "manual_turn":
+        close_failed = bool(
+            close_result and not bool(close_result.get("ok", True)))
+        dispatch_failed = bool(transcript and not dispatch_result.get("submitted"))
+        if (audio_delivery_failed or incomplete_audio or dispatch_failed
+                or (close_failed and not transcript)):
+            result_ok = False
+
+    result = {
+        "ok": result_ok,
+        "turn_id": str(turn.get("turn_id") or ""),
+        "mode": mode,
+        "disposition": disposition,
+        "transcript": transcript,
+        "submitted": bool(dispatch_result.get("submitted", False)),
+        "anchor_ts": anchor_ts,
+        "capture_id": str(turn.get("anchor_capture_id") or ""),
+    }
+    for key in ("queued", "queue_position", "client_request_id"):
+        if key in dispatch_result:
+            result[key] = dispatch_result[key]
+    if reason:
+        result["reason"] = reason
+    if close_result.get("error"):
+        result["error"] = str(close_result.get("error"))[:300]
+    if close_result:
+        result["graceful"] = bool(close_result.get("session_finished", False))
+
+    with turn["lock"]:
+        turn["state"] = "stopped"
+        turn["result"] = dict(result)
+    with capture_lock:
+        _retire_asr_turn(session, str(turn.get("turn_id") or ""), result)
+    turn["stop_event"].set()
+    if not modern_request and not turn.get("modern"):
+        # Preserve the old compact response only for genuinely legacy callers.
+        return _ok(rid, {"ok": True})
+    return _ok(rid, result)
 
 
 @method("multimodal.tts_speak")
@@ -14529,12 +15490,22 @@ def _get_voice_agent(session: dict):
             if lock is None:
                 return
             client_request_id = _ensure_client_request_id()
+            active_asr_turn = session.get("_mm_asr_turn")
+            active_turn_id = (
+                str(active_asr_turn.get("turn_id") or "")
+                if isinstance(active_asr_turn, dict) else ""
+            )
+            if (isinstance(active_asr_turn, dict)
+                    and active_asr_turn.get("state") == "stopped"
+                    and active_asr_turn.get("disposition") == "cancel"):
+                return
             # VoiceAgent only calls this callback after routing the utterance to
             # the main agent.  Materialize the voice-tagged user bubble exactly
             # once here, then carry its id through queued or immediate submit.
             _emit("multimodal.asr_final", _live_sid, {
                 "text": text,
                 "request_id": client_request_id,
+                **({"turn_id": active_turn_id} if active_turn_id else {}),
             })
             with lock:
                 if session.get("running"):
@@ -14616,6 +15587,15 @@ def _(rid, params: dict) -> dict:
     session, err = _sess_nowait(params, rid)
     if err:
         return err
+    request_transport = current_transport()
+    session_transport = session.get("transport")
+    if (request_transport is not None and session_transport is not None
+            and request_transport is not session_transport):
+        return _ok(rid, {
+            "ok": False,
+            "enabled": bool(session.get("_mm_tts_on", False)),
+            "reason": "stale_transport",
+        })
     on = bool(params.get("enabled"))
     session["_mm_tts_on"] = on
     # v2 无 set_enabled: 通过 is_speaker_on() 读 _mm_tts_on 自动判断是否播报。
@@ -14637,6 +15617,15 @@ def _(rid, params: dict) -> dict:
     session, err = _sess_nowait(params, rid)
     if err:
         return err
+    request_transport = current_transport()
+    session_transport = session.get("transport")
+    if (request_transport is not None and session_transport is not None
+            and request_transport is not session_transport):
+        return _ok(rid, {
+            "ok": False,
+            "enabled": bool(session.get("_mm_voice_dialog_on", False)),
+            "reason": "stale_transport",
+        })
     on = bool(params.get("enabled"))
     session["_mm_voice_dialog_on"] = on
     # 若开启对话模式且实例未建, 触发懒建。
@@ -14788,6 +15777,11 @@ def _(rid, params: dict) -> dict:
                 )
                 replacing_active_capture = bool(
                     capture_active and source_activation_changed)
+                if source_activation_changed:
+                    # Client-relative frame clocks restart with a new capture
+                    # owner/source epoch.  Old pairs must never participate in
+                    # a later manual-turn anchor conversion.
+                    session.pop("_mm_capture_anchor_pairs", None)
                 if generation is not None:
                     session["_mm_capture_generation"] = generation
                 if capture_client_id:
@@ -15052,7 +16046,7 @@ def _attachment_ref_path(session: dict, target: Path) -> str:
 
 
 def _desktop_attachment_dir(session: dict) -> Path:
-    root = Path(_session_cwd(session)).resolve() / ".hermes" / "desktop-attachments"
+    root = Path(_session_cwd(session)).resolve() / ".argus" / "desktop-attachments"
     root.mkdir(parents=True, exist_ok=True)
     return root
 
@@ -15721,13 +16715,13 @@ def _(rid, params: dict) -> dict:
                         _session_info(agent, session),
                     )
             else:
-                current = is_truthy_value(os.environ.get("HERMES_YOLO_MODE"))
+                current = is_truthy_value(os.environ.get("ARGUS_YOLO_MODE"))
                 enable = _resolve_toggle(current)
                 if enable:
-                    os.environ["HERMES_YOLO_MODE"] = "1"
+                    os.environ["ARGUS_YOLO_MODE"] = "1"
                     nv = "1"
                 else:
-                    os.environ.pop("HERMES_YOLO_MODE", None)
+                    os.environ.pop("ARGUS_YOLO_MODE", None)
                     nv = "0"
             return _ok(rid, {"key": key, "value": nv, "scope": "session"})
         except Exception as e:
@@ -15817,6 +16811,38 @@ def _(rid, params: dict) -> dict:
             parsed = parse_reasoning_effort(arg)
             if parsed is None:
                 return _err(rid, 4002, f"unknown reasoning value: {value}")
+            # ── scope ────────────────────────────────────────────────────
+            # "session": thinking effort is THIS session's own runtime
+            #   preference — set it on the live agent (read fresh on every API
+            #   call, so it lands on the next turn) and persist it into the
+            #   session row's model_config, which _stored_session_runtime_
+            #   overrides restores on resume. config.yaml is NOT touched: it is
+            #   the git-tracked project baseline that sync_project_config()
+            #   copies over HERMES_HOME on every start, so a live value stored
+            #   there is erased at the next restart. New sessions still start
+            #   from that baseline via _load_reasoning_config().
+            # "global" (default): legacy /reasoning behaviour — write the
+            #   config key so the choice becomes the baseline for new sessions.
+            scope = str(params.get("scope") or "global").strip().lower()
+            if scope == "session":
+                if not session:
+                    return _err(rid, 4001, "session not found")
+                agent = session.get("agent")
+                if agent is not None:
+                    agent.reasoning_config = parsed
+                    _persist_live_session_runtime(session)
+                    _emit(
+                        "session.info",
+                        params.get("session_id", ""),
+                        _session_info(agent, session),
+                    )
+                else:
+                    # Agent not built yet (lazy build defers to the first
+                    # prompt). Stash it where the deferred build already looks
+                    # for a per-session reasoning override, so the first turn
+                    # is built with this effort instead of the config default.
+                    session["create_reasoning_override"] = parsed
+                return _ok(rid, {"key": key, "value": arg, "scope": "session"})
             _write_config_key("agent.reasoning_effort", arg)
             if session and session.get("agent") is not None:
                 session["agent"].reasoning_config = parsed
@@ -15826,7 +16852,7 @@ def _(rid, params: dict) -> dict:
                     params.get("session_id", ""),
                     _session_info(session["agent"], session),
                 )
-            return _ok(rid, {"key": key, "value": arg})
+            return _ok(rid, {"key": key, "value": arg, "scope": "global"})
         except Exception as e:
             return _err(rid, 5001, str(e))
 
@@ -16171,7 +17197,7 @@ def _(rid, params, pdb, conn) -> dict:
 
 def _is_repo_junk(root: str) -> bool:
     """A git root we never auto-surface as a project: the bare home dir or
-    anything under HERMES_HOME (~/.hermes by default) — config/sessions/skills,
+    anything under HERMES_HOME (~/.argus by default) — config/sessions/skills,
     not a workspace. User-created projects pointing there are still honored."""
     if not root:
         return True
@@ -16816,7 +17842,7 @@ def _(rid, params: dict) -> dict:
 
 @method("reload.env")
 def _(rid, params: dict) -> dict:
-    """Re-read ``~/.hermes/.env`` into the gateway process via
+    """Re-read ``~/.argus/.env`` into the gateway process via
     ``hermes_cli.config.reload_env``, matching classic CLI's ``/reload``
     handler.  Newly added API keys take effect on the next agent call
     without restarting the TUI.
@@ -17016,13 +18042,13 @@ def _cli_exec_blocked(argv: list[str]) -> str | None:
         return "bare `hermes` is interactive — use `/hermes chat -q …` or run `hermes` in another terminal"
     a0 = argv[0].lower()
     if a0 == "setup":
-        return "`hermes setup` needs a full terminal — run it outside the TUI"
+        return "`argus setup` needs a full terminal — run it outside the TUI"
     if a0 == "gateway":
-        return "`hermes gateway` is long-running — run it in another terminal"
+        return "`argus gateway` is long-running — run it in another terminal"
     if a0 == "sessions" and len(argv) > 1 and argv[1].lower() == "browse":
-        return "`hermes sessions browse` is interactive — use /resume here, or run browse in another terminal"
+        return "`argus sessions browse` is interactive — use /resume here, or run browse in another terminal"
     if a0 == "config" and len(argv) > 1 and argv[1].lower() == "edit":
-        return "`hermes config edit` needs $EDITOR in a real terminal"
+        return "`argus config edit` needs $EDITOR in a real terminal"
     return None
 
 
@@ -18059,12 +19085,12 @@ def _(rid, params: dict) -> dict:
                 rid,
                 4003,
                 f"{pconfig.name} uses {pconfig.auth_type} auth — "
-                f"run `hermes model` to configure",
+                f"run `argus model` to configure",
             )
         if not pconfig.api_key_env_vars:
             return _err(rid, 4004, f"no env var defined for {pconfig.name}")
 
-        # Save the key to ~/.hermes/.env
+        # Save the key to ~/.argus/.env
         env_var = pconfig.api_key_env_vars[0]
         save_env_value(env_var, api_key)
         # Also set in current process so the refreshed inventory sees it.
@@ -18379,12 +19405,12 @@ def _voice_mode_enabled() -> bool:
     avoids the TUI auto-starting in REC the next time the user opens it
     just because they happened to enable voice in a prior session.
     """
-    return os.environ.get("HERMES_VOICE", "").strip() == "1"
+    return os.environ.get("ARGUS_VOICE", "").strip() == "1"
 
 
 def _voice_tts_enabled() -> bool:
     """Whether agent replies should be spoken back via TTS (runtime only)."""
-    return os.environ.get("HERMES_VOICE_TTS", "").strip() == "1"
+    return os.environ.get("ARGUS_VOICE_TTS", "").strip() == "1"
 
 
 def _voice_cfg_dict() -> dict:
@@ -18460,7 +19486,7 @@ def _(rid, params: dict) -> dict:
         # Runtime-only flag (CLI parity) — no _write_config_key, so the
         # next TUI launch starts with voice OFF instead of auto-REC from a
         # persisted stale toggle.
-        os.environ["HERMES_VOICE"] = "1" if enabled else "0"
+        os.environ["ARGUS_VOICE"] = "1" if enabled else "0"
 
         if not enabled:
             # Disabling the mode must tear the continuous loop down; the
@@ -18475,7 +19501,7 @@ def _(rid, params: dict) -> dict:
                 logger.warning("voice: stop_continuous failed during toggle off: %s", e)
 
             # Clear TTS so it can be toggled independently after voice is off.
-            os.environ["HERMES_VOICE_TTS"] = "0"
+            os.environ["ARGUS_VOICE_TTS"] = "0"
 
         return _ok(
             rid,
@@ -18491,7 +19517,7 @@ def _(rid, params: dict) -> dict:
             return _err(rid, 4014, "enable voice mode first: /voice on")
         new_value = not _voice_tts_enabled()
         # Runtime-only flag (CLI parity) — see voice.toggle on/off above.
-        os.environ["HERMES_VOICE_TTS"] = "1" if new_value else "0"
+        os.environ["ARGUS_VOICE_TTS"] = "1" if new_value else "0"
         # Include ``record_key`` on every branch so a /voice tts toggle
         # doesn't reset the TUI's cached shortcut to the default when a
         # user has a custom binding configured (Copilot review, round 2
@@ -19001,9 +20027,9 @@ def _(rid, params: dict) -> dict:
     try:
         cfg = _load_cfg()
         model = _resolve_model()
-        api_key = os.environ.get("HERMES_API_KEY", "") or cfg.get("api_key", "")
+        api_key = os.environ.get("ARGUS_API_KEY", "") or cfg.get("api_key", "")
         masked = f"****{api_key[-4:]}" if len(api_key) > 4 else "(not set)"
-        base_url = os.environ.get("HERMES_BASE_URL", "") or cfg.get("base_url", "")
+        base_url = os.environ.get("ARGUS_BASE_URL", "") or cfg.get("base_url", "")
 
         sections = [
             {

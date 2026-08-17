@@ -4,8 +4,8 @@ Reasoning models (Nemotron 3 Ultra, OpenAI o1/o3, Anthropic Opus 4.x
 thinking, DeepSeek R1, Qwen QwQ, xAI Grok reasoning) routinely exceed
 the 180s / 90s chat-model stale-timeout defaults during their
 thinking phase.  Hermes's default cloud-stream stale detector
-(``HERMES_STREAM_STALE_TIMEOUT`` = 180s) and non-stream detector
-(``HERMES_API_CALL_STALE_TIMEOUT`` = 90s) both fire before the
+(``ARGUS_STREAM_STALE_TIMEOUT`` = 180s) and non-stream detector
+(``ARGUS_API_CALL_STALE_TIMEOUT`` = 90s) both fire before the
 upstream proxy's idle timeout on a healthy reasoning stream.  Result:
 the user sees ``API call failed after 3 retries: [Errno 32] Broken
 pipe`` for every Nemotron 3 Ultra turn.
@@ -156,9 +156,9 @@ def _make_agent(tmp_path: Path, **overrides):
 
 def test_reasoning_floor_applies_to_nemotron_3_ultra(monkeypatch, tmp_path):
     """Nemotron 3 Ultra without explicit config gets the 600s floor."""
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ARGUS_HOME", str(tmp_path))
     (tmp_path / ".env").write_text("", encoding="utf-8")
-    monkeypatch.delenv("HERMES_API_CALL_STALE_TIMEOUT", raising=False)
+    monkeypatch.delenv("ARGUS_API_CALL_STALE_TIMEOUT", raising=False)
     _write_config(tmp_path, "")
 
     # Clear any cached config from prior tests in this session.
@@ -185,9 +185,9 @@ def test_reasoning_floor_applies_to_nemotron_3_ultra(monkeypatch, tmp_path):
 
 def test_reasoning_floor_applies_to_opus_4_thinking(monkeypatch, tmp_path):
     """Anthropic Opus 4.x thinking gets the 240s floor without explicit config."""
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ARGUS_HOME", str(tmp_path))
     (tmp_path / ".env").write_text("", encoding="utf-8")
-    monkeypatch.delenv("HERMES_API_CALL_STALE_TIMEOUT", raising=False)
+    monkeypatch.delenv("ARGUS_API_CALL_STALE_TIMEOUT", raising=False)
     _write_config(tmp_path, "")
 
     import importlib
@@ -214,7 +214,7 @@ def test_reasoning_floor_never_overrides_explicit_user_config(monkeypatch, tmp_p
     on Nemotron 3 Ultra, that's what fires — even though the floor
     would otherwise be 600s.
     """
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ARGUS_HOME", str(tmp_path))
     (tmp_path / ".env").write_text("", encoding="utf-8")
     _write_config(tmp_path, """\
 providers:
@@ -223,7 +223,7 @@ providers:
       nvidia/nemotron-3-ultra-550b-a55b:
         stale_timeout_seconds: 60
 """)
-    monkeypatch.delenv("HERMES_API_CALL_STALE_TIMEOUT", raising=False)
+    monkeypatch.delenv("ARGUS_API_CALL_STALE_TIMEOUT", raising=False)
 
     import importlib
     from hermes_cli import config as cfg_mod, timeouts as to_mod
@@ -246,9 +246,9 @@ providers:
 
 def test_reasoning_floor_loses_to_env_var_when_no_floor_match(monkeypatch, tmp_path):
     """For a non-reasoning model, env var still wins over the 90s default."""
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ARGUS_HOME", str(tmp_path))
     (tmp_path / ".env").write_text("", encoding="utf-8")
-    monkeypatch.setenv("HERMES_API_CALL_STALE_TIMEOUT", "300")
+    monkeypatch.setenv("ARGUS_API_CALL_STALE_TIMEOUT", "300")
     _write_config(tmp_path, "")
 
     import importlib
@@ -269,9 +269,9 @@ def test_reasoning_floor_loses_to_env_var_when_no_floor_match(monkeypatch, tmp_p
 
 def test_non_reasoning_model_keeps_default(monkeypatch, tmp_path):
     """GPT-5 (non-reasoning) without env var / config -> 90s default, implicit."""
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ARGUS_HOME", str(tmp_path))
     (tmp_path / ".env").write_text("", encoding="utf-8")
-    monkeypatch.delenv("HERMES_API_CALL_STALE_TIMEOUT", raising=False)
+    monkeypatch.delenv("ARGUS_API_CALL_STALE_TIMEOUT", raising=False)
     _write_config(tmp_path, "")
 
     import importlib

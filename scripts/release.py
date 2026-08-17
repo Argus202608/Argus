@@ -39,6 +39,22 @@ PYPROJECT_FILE = REPO_ROOT / "pyproject.toml"
 # bump touches both files atomically.
 ACP_REGISTRY_MANIFEST = REPO_ROOT / "acp_registry" / "agent.json"
 
+
+def _read_pyproject_name() -> str:
+    """Distribution name as published to PyPI (``project.name``).
+
+    Read at call time instead of hardcoded so the ACP manifest can never drift
+    from the real package name again — the previous hardcoded "hermes-agent"
+    survived the Hermes -> Argus rename and would have rewritten the manifest
+    back to a package ``uvx`` cannot resolve.
+    """
+    match = re.search(
+        r'^name\s*=\s*"([^"]+)"', PYPROJECT_FILE.read_text(), flags=re.MULTILINE
+    )
+    if not match:
+        raise SystemExit("Could not read project.name from pyproject.toml")
+    return match.group(1)
+
 # ──────────────────────────────────────────────────────────────────────
 # Git email → GitHub username mapping
 # ──────────────────────────────────────────────────────────────────────
@@ -1460,7 +1476,7 @@ AUTHOR_MAP = {
     "ayman.a.kamal@hotmail.com": "A-kamal",  # PR #18678 (xAI image resolution fix)
     # Kanban bug-fix batch salvage (May 2026)
     "frowte3k@gmail.com": "Frowtek",  # salvage of #23206 (gateway --board auto-subscribe)
-    "sylw3st3rr@gmail.com": "Sylw3ster",  # salvage of #23252 (HERMES_KANBAN_BOARD restore)
+    "sylw3st3rr@gmail.com": "Sylw3ster",  # salvage of #23252 (ARGUS_KANBAN_BOARD restore)
     "hello@dominikh.com": "dmnkhorvath",  # salvage of #23358 (kanban worker send_message)
     "413011+smwbev@users.noreply.github.com": "smwbev",  # salvage of #23659 (aria-label colLabel)
     "58116817+TurgutKural@users.noreply.github.com": "TurgutKural",  # salvage of #23356 (HERMES_HOME inject)
@@ -1839,11 +1855,66 @@ def _update_acp_registry_versions(semver: str) -> None:
         manifest["version"] = semver
         uvx = manifest.get("distribution", {}).get("uvx", {})
         if "package" in uvx:
-            uvx["package"] = f"mm-argus[acp]=={semver}"
+            # Read the distribution name from pyproject rather than hardcoding
+            # it: this file previously pinned "hermes-agent", which silently
+            # rewrote the manifest back to the upstream package name after the
+            # Hermes -> Argus rename, producing an entry `uvx` cannot install.
+            uvx["package"] = f"{_read_pyproject_name()}[acp]=={semver}"
         # Preserve trailing newline + 2-space indent the file already uses.
         ACP_REGISTRY_MANIFEST.write_text(
             json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
         )
+
+
+def build_frontend_bundles() -> bool:
+    """Rebuild the web dashboard + TUI bundles before packaging.
+
+    ``pyproject.toml`` ships ``hermes_cli/web_dist/**`` and
+    ``hermes_cli/tui_dist/**`` as package-data, but nothing in the release
+    path used to regenerate them — ``uv build`` just packs whatever happens
+    to be on disk.  A release cut without a prior ``npm run build`` therefore
+    shipped a wheel whose dashboard was stale (or, for ``tui_dist`` which is
+    git-ignored, entirely absent), and the failure is silent: the server
+    starts fine and serves 404s (the same class of bug as #23817).
+
+    Returns False if a bundle fails to build, so the caller can abort rather
+    than publish a wheel with a broken dashboard.
+    """
+    npm = shutil.which("npm")
+    if not npm:
+        print("  ⚠ npm not found — cannot rebuild web/TUI bundles.")
+        print("    Install Node.js, or pre-build with: npm run build -w web")
+        return False
+
+    for label, workspace in (("web dashboard", "web"), ("TUI", "ui-tui")):
+        print(f"  → Building {label} bundle...")
+        result = subprocess.run(
+            [npm, "run", "build"],
+            cwd=str(REPO_ROOT / workspace),
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            print(f"  ⚠ {label} build failed — aborting release.")
+            tail = (result.stderr.strip() or result.stdout.strip()).splitlines()
+            for line in tail[-5:]:
+                print(f"    {line}")
+            return False
+
+    # web's vite.config.ts already points outDir at ../hermes_cli/web_dist, but
+    # ui-tui/scripts/build.mjs writes to ui-tui/dist/entry.js while the wheel
+    # ships (and _find_bundled_tui reads) hermes_cli/tui_dist/entry.js.  Nothing
+    # else in the repo bridges those two paths, so `argus --tui` on a wheel
+    # install had no bundled TUI to fall back on.  Stage it here.
+    tui_src = REPO_ROOT / "ui-tui" / "dist" / "entry.js"
+    if not tui_src.is_file():
+        print(f"  ⚠ TUI build reported success but {tui_src} is missing.")
+        return False
+    tui_dest = REPO_ROOT / "hermes_cli" / "tui_dist" / "entry.js"
+    tui_dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(tui_src, tui_dest)
+    print(f"  → Staged TUI bundle at {tui_dest.relative_to(REPO_ROOT)}")
+    return True
 
 
 def build_release_artifacts(semver: str) -> list[Path]:
@@ -1851,9 +1922,24 @@ def build_release_artifacts(semver: str) -> list[Path]:
 
     Tries ``uv build`` first (matching the CI workflow), falls back to
     ``python -m build`` if uv is unavailable.
+
+    The frontend bundles are rebuilt first: they are shipped as package-data
+    but live outside the Python build, so ``uv build`` alone would pack
+    whatever stale output happened to be on disk.
     """
     dist_dir = REPO_ROOT / "dist"
     shutil.rmtree(dist_dir, ignore_errors=True)
+
+    # setuptools' build/lib/ staging dir is additive: it keeps files from
+    # previous builds that the current tree no longer produces.  With the
+    # code-split dashboard every rebuild emits new content-hashed chunk names,
+    # so a stale build/ silently padded the wheel with dozens of dead chunks
+    # (observed: 129 web_dist entries shipped when only 76 existed on disk).
+    # Wiping it makes the wheel an exact mirror of the tree we just built.
+    shutil.rmtree(REPO_ROOT / "build", ignore_errors=True)
+
+    if not build_frontend_bundles():
+        return []
 
     # Prefer uv build (matches CI workflow), fall back to python -m build.
     uv_bin = shutil.which("uv")

@@ -4,7 +4,7 @@ Scans three surfaces a Hermes user actually controls and we can map to
 upstream advisories without auth or extra binaries:
 
 1. The Hermes venv (every PyPI dist via ``importlib.metadata``).
-2. Python deps declared by user-installed plugins under ``~/.hermes/plugins``
+2. Python deps declared by user-installed plugins under ``~/.argus/plugins``
    (``requirements.txt`` + ``pyproject.toml`` best-effort pin extraction).
 3. MCP servers wired in ``config.yaml`` whose ``command/args`` look like
    ``npx -y <pkg>@<ver>`` or ``uvx <pkg>==<ver>``.
@@ -165,7 +165,7 @@ def _parse_pyproject_pins(text: str) -> list[tuple[str, str]]:
 
 
 def _discover_plugins(hermes_home: Path) -> list[Component]:
-    """Python deps declared by plugins under ``~/.hermes/plugins``.
+    """Python deps declared by plugins under ``~/.argus/plugins``.
 
     Plugins typically don't install into the venv (they're directory-based
     with relative imports), so their stated requirements are useful audit

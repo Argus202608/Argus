@@ -1,5 +1,7 @@
 import { atom } from 'nanostores'
 
+import { translateNow } from '@/i18n'
+
 import { $gateway } from './gateway'
 import { $mmSessionId } from './multimodal'
 
@@ -43,7 +45,7 @@ export interface MmCaptureDebugState {
 // both the card and Electron's renderer console without leaking the image.
 export const $mmCaptureDebug = atom<MmCaptureDebugState>({
   code: 'idle',
-  detail: '采集未启动'
+  detail: translateNow('multimodal.capture.notStarted')
 })
 // The live MediaStream (or null when capture is off), so the VideoStage UI can
 // render a <video> preview mirror. The capture pipeline itself uses its own
@@ -181,7 +183,7 @@ async function announceSourceStarted(
   generation: number,
   captureAttemptId: string
 ): Promise<void> {
-  setCaptureDebug('waiting_for_session', '正在初始化多模态后端')
+  setCaptureDebug('waiting_for_session', translateNow('multimodal.capture.initBackend'))
   const response = await gw.request<{ stale?: boolean }>(
     'multimodal.source_stopped',
     {
@@ -195,7 +197,7 @@ async function announceSourceStarted(
     },
     SOURCE_ACTIVATION_TIMEOUT_MS
   )
-  if (response?.stale) throw new Error('多模态后端拒绝了过期的采集代次')
+  if (response?.stale) throw new Error(translateNow('multimodal.capture.staleRejected'))
 }
 
 function captureCleanupKey(owner: CaptureBindingOwner): string {
@@ -284,17 +286,17 @@ export async function ensureCaptureBoundToSession(expectedSessionId?: string): P
 
   const sid = expectedSessionId || $mmSessionId.get()
   if (!sid) {
-    setCaptureDebug('waiting_for_session', '画面已授权，正在等待后端会话就绪')
+    setCaptureDebug('waiting_for_session', translateNow('multimodal.capture.authorized'))
     return
   }
   if ($mmSessionId.get() !== sid) {
-    throw new Error('画面目标会话已发生变化')
+    throw new Error(translateNow('multimodal.capture.sessionChanged'))
   }
   const gw = $gateway.get()
-  if (!gw) throw new Error('Gateway 不可用')
+  if (!gw) throw new Error(translateNow('multimodal.capture.gatewayUnavailable'))
   if (gw.connectionState !== 'open') {
-    setCaptureDebug('gateway_not_open', `WebSocket 状态为 ${gw.connectionState}`)
-    throw new Error(`Gateway WebSocket 状态为 ${gw.connectionState}`)
+    setCaptureDebug('gateway_not_open', translateNow('multimodal.capture.gatewayState', gw.connectionState))
+    throw new Error(translateNow('multimodal.capture.gatewayState', gw.connectionState))
   }
 
   const generation = captureGeneration
@@ -330,7 +332,7 @@ export async function ensureCaptureBoundToSession(expectedSessionId?: string): P
   )
   const assertStillOwnsBinding = (): void => {
     if (!stillOwnsBinding()) {
-      throw new Error('画面绑定已被新的会话或采集操作替代')
+      throw new Error(translateNow('multimodal.capture.sessionChanged'))
     }
   }
   const pending = (async () => {
@@ -359,22 +361,22 @@ export async function ensureCaptureBoundToSession(expectedSessionId?: string): P
         )
         if (!sent) await new Promise(resolve => setTimeout(resolve, 50))
       }
-      if (!sent) throw new Error('视频已开启，但首帧在 2 秒内尚未就绪')
+      if (!sent) throw new Error(translateNow('multimodal.capture.firstFrameTimeout'))
       assertStillOwnsBinding()
       // The new attempt is now both active and buffered. Retire any previous
       // runtime/transport owner so old Monitor/Watcher jobs cannot linger, and
       // keep the owner set bounded across reconnects.
       retireSupersededCaptureOwners(captureAttemptId)
       const boundStream = cap.stream
-      if (!boundStream) throw new Error('画面流已停止')
+      if (!boundStream) throw new Error(translateNow('multimodal.capture.streamStopped'))
       if (source === 'screen' && boundStream.getAudioTracks().length > 0) {
         const voice = await import('./multimodal-voice')
         assertStillOwnsBinding()
-        if (cap.stream !== boundStream) throw new Error('画面流已被替换')
+        if (cap.stream !== boundStream) throw new Error(translateNow('multimodal.capture.streamReplaced'))
         voice.startEnvAudio(boundStream)
       }
       assertStillOwnsBinding()
-      if (cap.stream !== boundStream) throw new Error('画面流已被替换')
+      if (cap.stream !== boundStream) throw new Error(translateNow('multimodal.capture.streamReplaced'))
       startFrameLoop(source, sid, gw, generation, captureAttemptId)
     } catch (error) {
       if (activationDispatched) {
@@ -466,7 +468,7 @@ async function attachStream(
   cap.sent = 0
   cap.dropped = 0
   pushStats()
-  setCaptureDebug('video_not_ready', '等待视频尺寸就绪')
+  setCaptureDebug('video_not_ready', translateNow('multimodal.capture.videoNotReady'))
   // Publish the live stream so the VideoStage UI can mirror it in a <video>.
   $mmStream.set(stream)
   $mmSource.set(source)
@@ -485,10 +487,10 @@ async function attachStream(
       if (cap.stream === stream && $mmSource.get() === source) {
         stopCapture()
       }
-      throw new Error('画面已授权，但主会话创建器尚未就绪')
+      throw new Error(translateNow('multimodal.capture.creatorNotReady'))
     }
 
-    setCaptureDebug('waiting_for_session', '画面已授权，正在创建后端会话并启动记录')
+    setCaptureDebug('waiting_for_session', translateNow('multimodal.capture.creatingSession'))
 
     try {
       attachedSessionId = await ensureSession()
@@ -512,7 +514,7 @@ async function attachStream(
 
     if (!attachedSessionId || $mmSessionId.get() !== attachedSessionId) {
       stopCapture()
-      throw new Error('画面已授权，但后端会话创建已取消')
+      throw new Error(translateNow('multimodal.capture.cancelled'))
     }
 
     attachedGateway = $gateway.get()
@@ -550,23 +552,23 @@ async function sendCapturedFrame(
 ): Promise<boolean> {
   if (cap.inFlight) return false
   if (!sid || $mmSessionId.get() !== sid) {
-    setCaptureDebug('waiting_for_session', '当前聊天还没有可用的后端会话 ID')
+    setCaptureDebug('waiting_for_session', translateNow('multimodal.capture.noSessionId'))
     return false
   }
   if (gw.connectionState !== 'open' || $gateway.get() !== gw) {
-    setCaptureDebug('gateway_not_open', `WebSocket 状态为 ${gw.connectionState}`)
+    setCaptureDebug('gateway_not_open', translateNow('multimodal.capture.gatewayState', gw.connectionState))
     return false
   }
   cap.inFlight = true
   try {
     const video = cap.video
     if (!video?.videoWidth || !video.videoHeight) {
-      setCaptureDebug('video_not_ready', '预览已开启，但 videoWidth/videoHeight 仍为 0')
+      setCaptureDebug('video_not_ready', translateNow('multimodal.capture.videoNotReady'))
       return false
     }
     const data = await captureFrame(source)
     if (!data) {
-      setCaptureDebug('encode_failed', 'Canvas/JPEG 编码返回空结果')
+      setCaptureDebug('encode_failed', translateNow('multimodal.capture.encodeFailed'))
       return false
     }
     // Encoding is asynchronous. A stop/session switch while toBlob/FileReader
@@ -603,13 +605,13 @@ async function sendCapturedFrame(
         ackTimeoutMs
       )
       if (!response?.buffered) {
-        setCaptureDebug('notify_rejected', '首帧未写入后端 FrameBuffer')
+        setCaptureDebug('notify_rejected', translateNow('multimodal.capture.notifyRejected'))
         return false
       }
     } else {
       buffered = gw.notify('multimodal.frame', params)
       if (buffered < 0) {
-        setCaptureDebug('notify_rejected', 'multimodal.frame 未写入 WebSocket')
+        setCaptureDebug('notify_rejected', 'multimodal.frame not written to WebSocket')
         return false
       }
     }
@@ -655,7 +657,7 @@ function startFrameLoop(
   if (cap.timer) clearInterval(cap.timer)
   cap.timer = setInterval(() => {
     if ($gateway.get() !== gw) {
-      setCaptureDebug('gateway_unavailable', '当前没有 Gateway 实例')
+      setCaptureDebug('gateway_unavailable', translateNow('multimodal.capture.gatewayUnavailable'))
       return
     }
     void sendCapturedFrame(source, sid, gw, false, generation, captureAttemptId)
@@ -816,7 +818,7 @@ export async function startScreenCapture(): Promise<void> {
     return
   }
   if (shareAudio && stream.getAudioTracks().length === 0) {
-    const text = '屏幕共享已开始，但系统没有返回音频轨道。macOS 请在“系统设置 → 隐私与安全性”中允许 Argus 录制屏幕与系统音频，然后重启应用。'
+    const text = 'Screen share started but the system returned no audio track. On macOS, grant Argus “Screen & System Audio Recording” in System Settings → Privacy & Security, then restart the app.'
     console.warn(`[multimodal] ${text}`)
     void import('./multimodal-deep')
       .then(({ pushMmToast }) => {
@@ -875,7 +877,7 @@ export function stopCapture(invalidatePendingStart = true): void {
   pickedSource = null
   $mmStream.set(null)
   $mmSource.set('none')
-  setCaptureDebug('idle', '采集已停止')
+  setCaptureDebug('idle', translateNow('multimodal.capture.notStarted'))
 }
 
 /** Stop capture AND tell the server the source is gone (multimodal.source_stopped). */
@@ -907,6 +909,31 @@ export function isCapturing(): boolean {
   return $mmSource.get() !== 'none'
 }
 
+export interface MmCaptureAnchorSnapshot {
+  source: Exclude<MmSource, 'none'>
+  capture_attempt_id: string
+  anchor_ts: number
+}
+
+/** Snapshot the capture's client-relative clock at an explicit user commit
+ * gesture. The backend validates capture_attempt_id and maps this clock onto
+ * its server-authoritative FrameBuffer timeline; it must never use this raw
+ * value as a Frame.ts directly. Voice recognition can take seconds to finish,
+ * so freezing at the second click excludes frames arriving during ASR flush. */
+export function snapshotCaptureAnchor(): MmCaptureAnchorSnapshot | null {
+  const source = $mmSource.get()
+
+  if (!cap.stream || source === 'none' || cap.startTs <= 0) {
+    return null
+  }
+
+  return {
+    source,
+    capture_attempt_id: boundCaptureAttemptId || currentCaptureAttemptId,
+    anchor_ts: Math.max(0, (performance.now() - cap.startTs) / 1000)
+  }
+}
+
 /** Pause the frame-push loop WITHOUT releasing the media stream/grant. Used on
  * gateway disconnect so we don't encode frames into a dead socket, while
  * keeping the camera/screen grant so a reconnect can resume seamlessly. */
@@ -923,7 +950,7 @@ export function pauseFrameLoop(markDisconnected = true): void {
     cap.timer = null
   }
   if (markDisconnected && $mmSource.get() !== 'none' && cap.stream) {
-    setCaptureDebug('gateway_not_open', 'Gateway 连接中断，画面记录已暂停')
+    setCaptureDebug('gateway_not_open', translateNow('multimodal.video.connectionPaused'))
   }
 }
 

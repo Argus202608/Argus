@@ -43,7 +43,7 @@ const GPU_OVERRIDE_OFF = new Set(['0', 'false', 'no', 'off'])
  * software rendering when a remote display is detected.
  *
  * Returns a short reason string when GPU acceleration should be disabled, or
- * null to keep it enabled. `HERMES_DESKTOP_DISABLE_GPU` overrides detection
+ * null to keep it enabled. `ARGUS_DESKTOP_DISABLE_GPU` overrides detection
  * both ways (1/true/yes/on → always disable, 0/false/no/off → never disable).
  *
  * Pure + dependency-free so it can be unit-tested and called before app ready.
@@ -52,10 +52,10 @@ function detectRemoteDisplay(options = {}) {
   const env = options.env ?? process.env
   const platform = options.platform ?? process.platform
 
-  const override = String(env.HERMES_DESKTOP_DISABLE_GPU || '')
+  const override = String(env.ARGUS_DESKTOP_DISABLE_GPU || '')
     .trim()
     .toLowerCase()
-  if (GPU_OVERRIDE_ON.has(override)) return 'override (HERMES_DESKTOP_DISABLE_GPU)'
+  if (GPU_OVERRIDE_ON.has(override)) return 'override (ARGUS_DESKTOP_DISABLE_GPU)'
   if (GPU_OVERRIDE_OFF.has(override)) return null
 
   // Launched from an SSH session → the display is X11-forwarded or otherwise

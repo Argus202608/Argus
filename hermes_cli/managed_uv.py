@@ -55,7 +55,7 @@ class _UvResult(str):
     """``ensure_uv()`` return value that survives an update boundary.
 
     ``ensure_uv()``'s arity has flipped between a single path string and a
-    ``(path, fresh_bootstrap)`` tuple across releases. ``hermes update`` runs
+    ``(path, fresh_bootstrap)`` tuple across releases. ``argus update`` runs
     the call site from the *old*, already-imported ``hermes_cli.main`` against
     this *freshly pulled* module, so the two can disagree on how many values
     ``ensure_uv()`` returns. An install parked on a 2-tuple release runs
@@ -158,7 +158,7 @@ def ensure_uv():
 def update_managed_uv() -> Optional[str]:
     """Run ``uv self update`` on the managed uv binary.
 
-    Call this during ``hermes update`` so the managed copy stays current.
+    Call this during ``argus update`` so the managed copy stays current.
     Returns the managed path on success, ``None`` if uv isn't available or
     the self-update fails (non-fatal — the old version still works).
     """

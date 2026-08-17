@@ -191,11 +191,11 @@ export class GatewayClient {
       authParamValue = ticket;
     } else {
       authParamName = "token";
-      authParamValue = window.__HERMES_SESSION_TOKEN__ ?? "";
+      authParamValue = window.__ARGUS_SESSION_TOKEN__ ?? "";
       if (!authParamValue) {
         this.setState("error");
         throw new Error(
-          "Session token not available — page must be served by the Hermes dashboard",
+          "Session token not available — page must be served by the Argus dashboard",
         );
       }
     }
@@ -384,7 +384,7 @@ export class GatewayClient {
 
 declare global {
   interface Window {
-    __HERMES_SESSION_TOKEN__?: string;
+    __ARGUS_SESSION_TOKEN__?: string;
     __HERMES_AUTH_REQUIRED__?: boolean;
   }
 }

@@ -25,7 +25,7 @@ def hermes_home(monkeypatch, tmp_path):
     """
     home = tmp_path / "hermes"
     home.mkdir()
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("ARGUS_HOME", str(home))
     yield home
     # Cleanup: drop the cached file_ops and active environment so the
     # next test sees a fresh state.  Without this, _get_live_tracking_cwd

@@ -17,11 +17,11 @@ from trajectory_compressor import (
 
 
 def test_import_loads_env_from_hermes_home(tmp_path, monkeypatch):
-    home = tmp_path / ".hermes"
+    home = tmp_path / ".argus"
     home.mkdir()
     (home / ".env").write_text("OPENROUTER_API_KEY=from-hermes-home\n", encoding="utf-8")
 
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("ARGUS_HOME", str(home))
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
 
     sys.modules.pop("trajectory_compressor", None)

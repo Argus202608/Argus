@@ -1,7 +1,7 @@
 """Tests for the Phase 4 s6 dispatch helper in hermes_cli.gateway.
 
 `_dispatch_via_service_manager_if_s6` decides whether a
-`hermes gateway start/stop/restart` invocation should be routed to
+`argus gateway start/stop/restart` invocation should be routed to
 the in-container S6ServiceManager instead of falling through to the
 host systemd/launchd/windows code path.
 """
@@ -372,8 +372,8 @@ def test_redirect_noop_on_host(monkeypatch: pytest.MonkeyPatch) -> None:
         "hermes_cli.gateway.os.execvp",
         lambda *a, **kw: pytest.fail("execvp should not be called on host"),
     )
-    monkeypatch.delenv("HERMES_S6_SUPERVISED_CHILD", raising=False)
-    monkeypatch.delenv("HERMES_GATEWAY_NO_SUPERVISE", raising=False)
+    monkeypatch.delenv("ARGUS_S6_SUPERVISED_CHILD", raising=False)
+    monkeypatch.delenv("ARGUS_GATEWAY_NO_SUPERVISE", raising=False)
 
     assert gw._maybe_redirect_run_to_s6_supervision(_Args()) is False
 
@@ -410,8 +410,8 @@ def test_redirect_fires_inside_s6_container(
         "hermes_cli.gateway._block_until_terminated",
         lambda: pytest.fail("fallback should not run when sleep is available"),
     )
-    monkeypatch.delenv("HERMES_S6_SUPERVISED_CHILD", raising=False)
-    monkeypatch.delenv("HERMES_GATEWAY_NO_SUPERVISE", raising=False)
+    monkeypatch.delenv("ARGUS_S6_SUPERVISED_CHILD", raising=False)
+    monkeypatch.delenv("ARGUS_GATEWAY_NO_SUPERVISE", raising=False)
 
     with pytest.raises(_ExecvpCalled) as excinfo:
         gw._maybe_redirect_run_to_s6_supervision(_Args())
@@ -422,7 +422,7 @@ def test_redirect_fires_inside_s6_container(
     err = capsys.readouterr().err
     assert "s6 supervision" in err
     assert "--no-supervise" in err
-    assert "HERMES_GATEWAY_NO_SUPERVISE" in err
+    assert "ARGUS_GATEWAY_NO_SUPERVISE" in err
     # 3. exec'd `sleep infinity` (the preferred cheap heartbeat).
     assert execvp_calls == [["sleep", "sleep", "infinity"]]
     assert excinfo.value.argv == ["sleep", "sleep", "infinity"]
@@ -451,8 +451,8 @@ def test_redirect_falls_back_when_sleep_missing(
         "hermes_cli.gateway._block_until_terminated",
         lambda: block_calls.append(True),
     )
-    monkeypatch.delenv("HERMES_S6_SUPERVISED_CHILD", raising=False)
-    monkeypatch.delenv("HERMES_GATEWAY_NO_SUPERVISE", raising=False)
+    monkeypatch.delenv("ARGUS_S6_SUPERVISED_CHILD", raising=False)
+    monkeypatch.delenv("ARGUS_GATEWAY_NO_SUPERVISE", raising=False)
 
     # Must not raise FileNotFoundError — that was the #36208 crash.
     result = gw._maybe_redirect_run_to_s6_supervision(_Args())
@@ -511,8 +511,8 @@ def test_redirect_short_circuits_supervised_child(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The recursion guard: when the supervised gateway s6-supervise is
-    running execs `hermes gateway run --replace`, the
-    HERMES_S6_SUPERVISED_CHILD sentinel must short-circuit the redirect
+    running execs `argus gateway run --replace`, the
+    ARGUS_S6_SUPERVISED_CHILD sentinel must short-circuit the redirect
     so the gateway actually starts foreground. Without this guard the
     supervised process would re-dispatch `start` → re-exec `run` → ...
     in an infinite loop.
@@ -527,8 +527,8 @@ def test_redirect_short_circuits_supervised_child(
         "hermes_cli.gateway.os.execvp",
         lambda *a, **kw: pytest.fail("execvp should not run when sentinel is set"),
     )
-    monkeypatch.setenv("HERMES_S6_SUPERVISED_CHILD", "1")
-    monkeypatch.delenv("HERMES_GATEWAY_NO_SUPERVISE", raising=False)
+    monkeypatch.setenv("ARGUS_S6_SUPERVISED_CHILD", "1")
+    monkeypatch.delenv("ARGUS_GATEWAY_NO_SUPERVISE", raising=False)
 
     assert gw._maybe_redirect_run_to_s6_supervision(_Args()) is False
 
@@ -548,8 +548,8 @@ def test_redirect_respects_no_supervise_flag(
         "hermes_cli.gateway.os.execvp",
         lambda *a, **kw: pytest.fail("execvp should not run when --no-supervise is set"),
     )
-    monkeypatch.delenv("HERMES_S6_SUPERVISED_CHILD", raising=False)
-    monkeypatch.delenv("HERMES_GATEWAY_NO_SUPERVISE", raising=False)
+    monkeypatch.delenv("ARGUS_S6_SUPERVISED_CHILD", raising=False)
+    monkeypatch.delenv("ARGUS_GATEWAY_NO_SUPERVISE", raising=False)
 
     assert gw._maybe_redirect_run_to_s6_supervision(_Args(no_supervise=True)) is False
 
@@ -558,7 +558,7 @@ def test_redirect_respects_no_supervise_flag(
 def test_redirect_respects_no_supervise_env(
     monkeypatch: pytest.MonkeyPatch, value: str,
 ) -> None:
-    """`HERMES_GATEWAY_NO_SUPERVISE=1` (env var) must skip the redirect.
+    """`ARGUS_GATEWAY_NO_SUPERVISE=1` (env var) must skip the redirect.
 
     Truthiness mirrors the dashboard service's own env var parsing —
     1/true/yes are all accepted, case-insensitively.
@@ -573,8 +573,8 @@ def test_redirect_respects_no_supervise_env(
         "hermes_cli.gateway.os.execvp",
         lambda *a, **kw: pytest.fail("execvp should not run when env opt-out is set"),
     )
-    monkeypatch.delenv("HERMES_S6_SUPERVISED_CHILD", raising=False)
-    monkeypatch.setenv("HERMES_GATEWAY_NO_SUPERVISE", value)
+    monkeypatch.delenv("ARGUS_S6_SUPERVISED_CHILD", raising=False)
+    monkeypatch.setenv("ARGUS_GATEWAY_NO_SUPERVISE", value)
 
     assert gw._maybe_redirect_run_to_s6_supervision(_Args()) is False
 
@@ -582,9 +582,9 @@ def test_redirect_respects_no_supervise_env(
 def test_redirect_no_supervise_env_falsy_values_dont_opt_out(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Falsy / unrecognized values of HERMES_GATEWAY_NO_SUPERVISE must
+    """Falsy / unrecognized values of ARGUS_GATEWAY_NO_SUPERVISE must
     NOT opt out. We're strict about what counts as "yes" so a typo
-    like `HERMES_GATEWAY_NO_SUPERVISE=0` doesn't silently enable the
+    like `ARGUS_GATEWAY_NO_SUPERVISE=0` doesn't silently enable the
     historical foreground behavior."""
     from hermes_cli import gateway as gw
 
@@ -604,11 +604,11 @@ def test_redirect_no_supervise_env_falsy_values_dont_opt_out(
         raise _ExecvpCalled
 
     monkeypatch.setattr("hermes_cli.gateway.os.execvp", fake_execvp)
-    monkeypatch.delenv("HERMES_S6_SUPERVISED_CHILD", raising=False)
+    monkeypatch.delenv("ARGUS_S6_SUPERVISED_CHILD", raising=False)
 
     for falsy in ("", "0", "false", "no", "off", "garbage"):
         execvp_calls.clear()
-        monkeypatch.setenv("HERMES_GATEWAY_NO_SUPERVISE", falsy)
+        monkeypatch.setenv("ARGUS_GATEWAY_NO_SUPERVISE", falsy)
         with pytest.raises(_ExecvpCalled):
             gw._maybe_redirect_run_to_s6_supervision(_Args())
         assert execvp_calls == ["sleep"], f"redirect should fire for {falsy!r}"

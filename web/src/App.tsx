@@ -1,4 +1,6 @@
 import {
+  lazy,
+  Suspense,
   useCallback,
   useEffect,
   useMemo,
@@ -71,32 +73,15 @@ import { useBelowBreakpoint } from "@nous-research/ui/hooks/use-below-breakpoint
 import { useSidebarStatus } from "@/hooks/useSidebarStatus";
 import { AuthWidget } from "@/components/AuthWidget";
 import { PageHeaderProvider } from "@/contexts/PageHeaderProvider";
+import { PageHeaderContext } from "@/contexts/page-header-context";
 import { ProfileProvider } from "@/contexts/ProfileProvider";
 import { useProfileScope } from "@/contexts/useProfileScope";
 import { ProfileSwitcher } from "@/components/ProfileSwitcher";
 import { ProfileScopeBanner } from "@/components/ProfileScopeBanner";
 import { useSystemActions } from "@/contexts/useSystemActions";
 import type { SystemAction } from "@/contexts/system-actions-context";
-import ConfigPage from "@/pages/ConfigPage";
-import DocsPage from "@/pages/DocsPage";
-import EnvPage from "@/pages/EnvPage";
-import FilesPage from "@/pages/FilesPage";
-import SessionsPage from "@/pages/SessionsPage";
-import LogsPage from "@/pages/LogsPage";
-import AnalyticsPage from "@/pages/AnalyticsPage";
-import ModelsPage from "@/pages/ModelsPage";
-import CronPage from "@/pages/CronPage";
-import ProfilesPage from "@/pages/ProfilesPage";
-import ProfileBuilderPage from "@/pages/ProfileBuilderPage";
-import SkillsPage from "@/pages/SkillsPage";
-import PluginsPage from "@/pages/PluginsPage";
-import McpPage from "@/pages/McpPage";
-import PairingPage from "@/pages/PairingPage";
-import ChannelsPage from "@/pages/ChannelsPage";
-import WebhooksPage from "@/pages/WebhooksPage";
-import SystemPage from "@/pages/SystemPage";
+import { CliDrawerContext } from "@/contexts/cli-drawer-context";
 import ChatPage from "@/pages/ChatPage";
-import MultimodalChatPage from "@/pages/MultimodalChatPage";
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { ThemeSwitcher } from "@/components/ThemeSwitcher";
 import { useI18n } from "@/i18n";
@@ -107,6 +92,53 @@ import { useTheme } from "@/themes";
 import { isDashboardEmbeddedChatEnabled } from "@/lib/dashboard-flags";
 import { api } from "@/lib/api";
 import type { StatusResponse } from "@/lib/api";
+
+/*
+ * Routed pages are code-split.  Every entry below is reachable only through
+ * <Routes>, which renders inside the <Suspense> boundary in the main content
+ * column, so deferring these modules trims the initial bundle down to the
+ * shell: layout, sidebar, providers, and the persistent CLI terminal.
+ *
+ * `ChatPage` is deliberately a static import — see the persistent CLI drawer
+ * host near the bottom of this file.  It mounts outside the router and stays
+ * mounted (hidden via transform, not unmounted) so the PTY child, its
+ * WebSocket, and the xterm instance survive tab switches.  Making it lazy
+ * would suspend it on first drawer open with no boundary of its own around
+ * the host, and would risk tearing the terminal down on any re-suspend —
+ * exactly what the persistent host exists to prevent.
+ */
+const AnalyticsPage = lazy(() => import("@/pages/AnalyticsPage"));
+const ChannelsPage = lazy(() => import("@/pages/ChannelsPage"));
+const ConfigPage = lazy(() => import("@/pages/ConfigPage"));
+const CronPage = lazy(() => import("@/pages/CronPage"));
+const DocsPage = lazy(() => import("@/pages/DocsPage"));
+const EnvPage = lazy(() => import("@/pages/EnvPage"));
+const FilesPage = lazy(() => import("@/pages/FilesPage"));
+const LogsPage = lazy(() => import("@/pages/LogsPage"));
+const McpPage = lazy(() => import("@/pages/McpPage"));
+const ModelsPage = lazy(() => import("@/pages/ModelsPage"));
+const MultimodalChatPage = lazy(() => import("@/pages/MultimodalChatPage"));
+const PairingPage = lazy(() => import("@/pages/PairingPage"));
+const PluginsPage = lazy(() => import("@/pages/PluginsPage"));
+const ProfileBuilderPage = lazy(() => import("@/pages/ProfileBuilderPage"));
+const ProfilesPage = lazy(() => import("@/pages/ProfilesPage"));
+const SessionsPage = lazy(() => import("@/pages/SessionsPage"));
+const SkillsPage = lazy(() => import("@/pages/SkillsPage"));
+const SystemPage = lazy(() => import("@/pages/SystemPage"));
+const WebhooksPage = lazy(() => import("@/pages/WebhooksPage"));
+
+/**
+ * Fallback shown while a route chunk is in flight.  Mirrors the in-page
+ * loading idiom used by CronPage / WebhooksPage / AnalyticsPage so a cold
+ * route load looks identical to that page's own data-loading state.
+ */
+function RouteFallback() {
+  return (
+    <div className="flex items-center justify-center py-24">
+      <Spinner className="text-2xl text-primary" />
+    </div>
+  );
+}
 
 function RootRedirect() {
   return <Navigate to="/multimodal" replace />;
@@ -121,7 +153,7 @@ function UnknownRouteFallback({ pluginsLoading }: { pluginsLoading: boolean }) {
 }
 
 const CHAT_NAV_ITEM: NavItem = {
-  path: "/chat",
+  path: "/multimodal",
   labelKey: "chat",
   label: "Chat",
   icon: Terminal,
@@ -138,6 +170,7 @@ const CHAT_NAV_ITEM: NavItem = {
  */
 const BUILTIN_ROUTES_CORE: Record<string, ComponentType> = {
   "/": RootRedirect,
+  "/chat": MultimodalChatPage,
   "/sessions": SessionsPage,
   "/multimodal": MultimodalChatPage,
   "/files": FilesPage,
@@ -159,13 +192,14 @@ const BUILTIN_ROUTES_CORE: Record<string, ComponentType> = {
   "/docs": DocsPage,
 };
 
-// Route placeholder for /chat.  The persistent ChatPage host (rendered
-// outside <Routes> when embedded chat is on) paints on top; this empty
-// element just claims the path so the `*` catch-all redirect doesn't
-// fire when the user navigates to /chat.
-function ChatRouteSink() {
-  return null;
-}
+// No-op page header context for ChatPage when rendered in the CLI drawer
+// (outside the main PageHeaderProvider). Prevents the usePageHeader hook
+// from throwing while discarding any header slot updates ChatPage makes.
+const NOOP_PAGE_HEADER_CTX = {
+  setAfterTitle: () => {},
+  setEnd: () => {},
+  setTitle: () => {},
+};
 
 const BUILTIN_NAV_REST: NavItem[] = [
   {
@@ -174,7 +208,6 @@ const BUILTIN_NAV_REST: NavItem[] = [
     label: "Sessions",
     icon: MessageSquare,
   },
-  { path: "/multimodal", label: "Multimodal", icon: Eye },
   { path: "/files", label: "Files", icon: FolderOpen },
   {
     path: "/analytics",
@@ -352,9 +385,9 @@ function buildRoutes(
   return routes;
 }
 
-const SIDEBAR_COLLAPSED_KEY = "hermes-sidebar-collapsed";
-const NAV_SECTION_COLLAPSED_KEY = "hermes-sidebar-nav-collapsed";
-const SESSION_LIST_COLLAPSED_KEY = "hermes-sidebar-sessions-collapsed";
+const SIDEBAR_COLLAPSED_KEY = "argus-sidebar-collapsed";
+const NAV_SECTION_COLLAPSED_KEY = "argus-sidebar-nav-collapsed";
+const SESSION_LIST_COLLAPSED_KEY = "argus-sidebar-sessions-collapsed";
 
 export default function App() {
   const { t } = useI18n();
@@ -416,6 +449,10 @@ export default function App() {
   // Multimodal is a full-height app-like surface (video + chat + panels), so it
   // needs the same flex-fill treatment as chat instead of a scrolling page.
   const isMultimodalRoute = normalizedPath === "/multimodal";
+
+  // CLI drawer: slides in from right, hosts the persistent ChatPage (xterm terminal).
+  const [cliDrawerOpen, setCliDrawerOpen] = useState(false);
+  const cliDrawerCtx = useMemo(() => ({ open: cliDrawerOpen, setOpen: setCliDrawerOpen }), [cliDrawerOpen]);
   const embeddedChat = isDashboardEmbeddedChatEnabled();
 
   // `dashboard.show_token_analytics` gates the Analytics nav item.  The
@@ -458,21 +495,16 @@ export default function App() {
   );
 
   const builtinRoutes = useMemo(
-    () => ({
-      ...BUILTIN_ROUTES_CORE,
-      ...(embeddedChat ? { "/chat": ChatRouteSink } : {}),
-    }),
-    [embeddedChat],
+    () => BUILTIN_ROUTES_CORE,
+    [],
   );
 
   const builtinNav = useMemo(() => {
-    const base = embeddedChat
-      ? [CHAT_NAV_ITEM, ...BUILTIN_NAV_REST]
-      : BUILTIN_NAV_REST;
+    const base = [CHAT_NAV_ITEM, ...BUILTIN_NAV_REST];
     return showTokenAnalytics
       ? base
       : base.filter((n) => n.path !== "/analytics");
-  }, [embeddedChat, showTokenAnalytics]);
+  }, [showTokenAnalytics]);
 
   const sidebarNav = useMemo(
     () => partitionSidebarNav(builtinNav, manifests),
@@ -509,6 +541,16 @@ export default function App() {
     };
   }, [mobileOpen]);
 
+  // Close CLI drawer on Escape
+  useEffect(() => {
+    if (!cliDrawerOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setCliDrawerOpen(false);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [cliDrawerOpen]);
+
   useEffect(() => {
     const mql = window.matchMedia("(min-width: 1024px)");
     const onChange = (e: MediaQueryListEvent) => {
@@ -520,6 +562,7 @@ export default function App() {
 
   return (
     <ProfileProvider>
+    <CliDrawerContext.Provider value={cliDrawerCtx}>
     <div
       data-layout-variant={layoutVariant}
       className="flex h-dvh max-h-dvh min-h-0 flex-col overflow-hidden bg-black text-text-primary antialiased"
@@ -616,9 +659,7 @@ export default function App() {
                   className="font-bold text-[1.125rem] leading-[0.95] tracking-[0.0525rem] text-midground uppercase"
                   style={{ mixBlendMode: "plus-lighter" }}
                 >
-                  Argus
-                  <br />
-                  Agent
+                  Argus Agent
                 </Typography>
               </div>
 
@@ -685,7 +726,7 @@ export default function App() {
 
               {sidebarNav.pluginItems.length > 0 && (
                 <div
-                  aria-labelledby="hermes-sidebar-plugin-nav-heading"
+                  aria-labelledby="argus-sidebar-plugin-nav-heading"
                   className="flex flex-col border-t border-current/10 pb-2"
                   role="group"
                 >
@@ -695,7 +736,7 @@ export default function App() {
                       "font-mondwest text-display text-xs tracking-[0.12em] text-text-tertiary",
                       isDesktopCollapsed && "lg:hidden",
                     )}
-                    id="hermes-sidebar-plugin-nav-heading"
+                    id="argus-sidebar-plugin-nav-heading"
                   >
                     {t.app.pluginNavSection}
                   </span>
@@ -756,7 +797,7 @@ export default function App() {
 
                 <SidebarIconWithTooltip
                   collapsed={isDesktopCollapsed}
-                  label={t.theme?.switchTheme ?? "Switch theme"}
+                  label={t.theme.switchTheme}
                   tooltipWarmRef={tooltipWarmRef}
                 >
                   <ThemeSwitcher collapsed={isDesktopCollapsed} dropUp />
@@ -805,46 +846,26 @@ export default function App() {
                 )}
               >
                 <ProfileKeyedRoutes>
-                  <Routes>
-                    {routes.map(({ key, path, element }) => (
-                      <Route key={key} path={path} element={element} />
-                    ))}
-                    <Route
-                      path="*"
-                      element={
-                        <UnknownRouteFallback pluginsLoading={pluginsLoading} />
-                      }
-                    />
-                  </Routes>
+                  {/* One boundary for the whole routed area: route pages are
+                      lazy (see the lazy() block at the top of this file), so
+                      the first visit to a tab suspends until its chunk lands.
+                      Sitting inside ProfileKeyedRoutes means a profile switch
+                      remounts the boundary along with the page tree. */}
+                  <Suspense fallback={<RouteFallback />}>
+                    <Routes>
+                      {routes.map(({ key, path, element }) => (
+                        <Route key={key} path={path} element={element} />
+                      ))}
+                      <Route
+                        path="*"
+                        element={
+                          <UnknownRouteFallback pluginsLoading={pluginsLoading} />
+                        }
+                      />
+                    </Routes>
+                  </Suspense>
                 </ProfileKeyedRoutes>
 
-                {embeddedChat &&
-                  !chatOverriddenByPlugin &&
-                  (pluginsLoading ? (
-                    isChatRoute ? (
-                      <div
-                        className="flex min-h-0 min-w-0 flex-1 items-center justify-center"
-                        aria-busy="true"
-                        aria-live="polite"
-                      >
-                        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                          <Spinner />
-                          <span>Loading chat…</span>
-                        </div>
-                      </div>
-                    ) : null
-                  ) : (
-                    <div
-                      data-chat-active={isChatRoute ? "true" : "false"}
-                      className={cn(
-                        "min-h-0 min-w-0",
-                        isChatRoute ? "flex flex-1 flex-col" : "hidden",
-                      )}
-                      aria-hidden={!isChatRoute}
-                    >
-                      <ChatPage isActive={isChatRoute} />
-                    </div>
-                  ))}
               </div>
               <PluginSlot name="post-main" />
             </div>
@@ -852,8 +873,46 @@ export default function App() {
         </div>
       </div>
 
+      {/* CLI Drawer: slides in from right, hosts persistent ChatPage (xterm terminal).
+          ChatPage stays mounted (DOM hidden via transform) so the PTY + xterm survive. */}
+      {embeddedChat && !chatOverriddenByPlugin && !pluginsLoading && (
+        <>
+          {/* Backdrop */}
+          {cliDrawerOpen && (
+            <div
+              className="fixed inset-0 z-40 bg-black/50 backdrop-blur-sm transition-opacity"
+              onClick={() => setCliDrawerOpen(false)}
+            />
+          )}
+          {/* Drawer panel */}
+          <div
+            className={cn(
+              "fixed right-0 top-0 z-50 flex h-screen w-1/2 min-w-[400px] flex-col border-l border-white/10 bg-background-base shadow-2xl transition-transform duration-300",
+              cliDrawerOpen ? "translate-x-0" : "translate-x-full",
+            )}
+          >
+            <div className="flex h-10 shrink-0 items-center justify-between border-b border-white/10 px-3">
+              <span className="text-xs font-medium text-muted-foreground">CLI Terminal</span>
+              <button
+                type="button"
+                className="rounded p-1 text-muted-foreground hover:bg-white/10 hover:text-foreground"
+                onClick={() => setCliDrawerOpen(false)}
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <PageHeaderContext.Provider value={NOOP_PAGE_HEADER_CTX}>
+              <div className="flex min-h-0 flex-1 flex-col">
+                <ChatPage isActive={cliDrawerOpen} hideSidePanel />
+              </div>
+            </PageHeaderContext.Provider>
+          </div>
+        </>
+      )}
+
       <PluginSlot name="overlay" />
     </div>
+    </CliDrawerContext.Provider>
     </ProfileProvider>
   );
 }
@@ -1083,17 +1142,7 @@ function SidebarSystemActions({
         "py-1",
       )}
     >
-      <span
-        className={cn(
-          "px-5 pt-0.5 pb-0.5",
-          "font-mondwest text-display text-xs tracking-[0.12em] text-text-tertiary",
-          collapsed && "lg:hidden",
-        )}
-      >
-        {t.app.system}
-      </span>
-
-      <div className={cn(collapsed && "lg:hidden")}>
+      <div className={cn("pt-1", collapsed && "lg:hidden")}>
         <SidebarStatusStrip status={status} />
       </div>
 

@@ -590,7 +590,7 @@ def show_memory_frame(entity_name: Optional[str] = None,
         "memory. The frontend automatically renders them for the user. You only "
         "need a brief natural confirmation.\n"
         "2. Do not write MEDIA paths, file:// URLs, /var/folders paths, "
-        "~/.hermes paths, or Markdown image paths in your reply. The frontend "
+        "~/.argus paths, or Markdown image paths in your reply. The frontend "
         "does not render those path strings and they are likely hallucinated. "
         "The images are already displayed through image_url.\n"
         "3. If the user asks about label text, nutrition, capacity, or numbers, "

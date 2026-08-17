@@ -15,7 +15,7 @@ import { cn } from "@/lib/utils";
  * Compact theme picker mounted next to the language switcher in the header.
  * Each dropdown row shows a 3-stop swatch (background / midground / warm
  * glow) so users can preview the palette before committing. User-defined
- * themes from `~/.hermes/dashboard-themes/*.yaml` use their API-provided
+ * themes from `~/.argus/dashboard-themes/*.yaml` use their API-provided
  * definitions so they show real palette swatches just like built-ins.
  *
  * When placed at the bottom of a container (e.g. the sidebar rail), pass
@@ -58,7 +58,7 @@ export function ThemeSwitcher({ collapsed = false, dropUp = false }: ThemeSwitch
 
   const current = availableThemes.find((th) => th.name === themeName);
   const label = current?.label ?? themeName;
-  const sheetTitle = t.theme?.title ?? "Theme";
+  const sheetTitle = t.theme.title;
 
   return (
     <div ref={wrapperRef} className="relative">
@@ -71,8 +71,8 @@ export function ThemeSwitcher({ collapsed = false, dropUp = false }: ThemeSwitch
             ? "text-text-secondary hover:text-foreground hover:bg-transparent"
             : "px-2 py-1 normal-case tracking-normal font-normal text-xs text-text-secondary hover:text-foreground",
         )}
-        title={`${t.theme?.switchTheme ?? "Switch theme"}: ${label}`}
-        aria-label={t.theme?.switchTheme ?? "Switch theme"}
+        title={`${t.theme.switchTheme}: ${label}`}
+        aria-label={t.theme.switchTheme}
         aria-expanded={open}
         aria-haspopup="listbox"
       >
@@ -238,7 +238,7 @@ function FontSection({ fontChoices, fontId, setFont }: FontSectionProps) {
             mondwest
             className="text-display text-xs tracking-[0.12em] text-text-tertiary"
           >
-            {t.theme?.fontTitle ?? "Font"}
+            {t.theme.fontTitle}
           </Typography>
         </span>
       </div>
@@ -254,10 +254,10 @@ function FontSection({ fontChoices, fontId, setFont }: FontSectionProps) {
         <span aria-hidden className="h-4 w-9 shrink-0" />
         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
           <Typography className="truncate text-xs tracking-normal">
-            {t.theme?.fontDefault ?? "Theme default"}
+            {t.theme.fontDefault}
           </Typography>
           <Typography className="truncate text-xs tracking-normal text-text-tertiary">
-            {t.theme?.fontDefaultHint ?? "Use the active theme's font"}
+            {t.theme.fontDefaultHint}
           </Typography>
         </div>
         <Check
@@ -271,7 +271,7 @@ function FontSection({ fontChoices, fontId, setFont }: FontSectionProps) {
       {order.map((cat) => {
         const fonts = fontChoices.filter((f) => f.category === cat);
         if (fonts.length === 0) return null;
-        const catLabel = t.theme?.[FONT_CATEGORY_LABEL_KEY[cat]] ?? cat;
+        const catLabel = t.theme[FONT_CATEGORY_LABEL_KEY[cat]];
         return (
           <div key={cat}>
             <div className="px-3 pb-0.5 pt-1.5">

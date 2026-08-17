@@ -1,5 +1,5 @@
 import { AssistantRuntimeProvider, type ThreadMessage, useExternalStoreRuntime } from '@assistant-ui/react'
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { useEffect, useState } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -153,6 +153,37 @@ function assistantMultiReasoningMessage(texts: string[]): ThreadMessage {
     role: 'assistant',
     content: texts.map(text => ({ type: 'reasoning', text })),
     status: { type: 'complete', reason: 'stop' },
+    createdAt,
+    metadata: {
+      unstable_state: null,
+      unstable_annotations: [],
+      unstable_data: [],
+      steps: [],
+      custom: {}
+    }
+  } as ThreadMessage
+}
+
+// A running turn that has thought and called a tool but produced no prose yet —
+// the phase that used to render as a single status line with no process surface
+// at all. `result: undefined` keeps the tool pending.
+function assistantThinkingAndCallingMessage(withProse: boolean): ThreadMessage {
+  return {
+    id: 'assistant-live-1',
+    role: 'assistant',
+    content: [
+      { type: 'reasoning', text: ' Check Beijing first.' },
+      {
+        type: 'tool-call',
+        toolCallId: 'live-call-1',
+        toolName: 'terminal',
+        args: { command: 'curl wttr.in' },
+        argsText: '{}',
+        result: { ok: true }
+      },
+      ...(withProse ? [{ type: 'text', text: 'Beijing is hot tomorrow.' }] : [])
+    ],
+    status: { type: 'running' },
     createdAt,
     metadata: {
       unstable_state: null,
@@ -475,25 +506,86 @@ describe('assistant-ui streaming renderer', () => {
     expect(container.textContent).not.toContain('```ts')
   })
 
-  // Reasoning rendering is deliberately split by message status — see the ★
-  // comment on ReasoningAccordionGroup in thread.tsx. While a turn streams,
-  // reasoning is represented by a single status LINE (ThinkingBubble) and its
-  // text is not rendered at all; once the turn completes, every reasoning part
-  // in the message collapses into exactly ONE disclosure rendered outside the
-  // content card. That replaced a per-part disclosure, which scattered several
-  // "Thinking" blocks between tool cards and body text on interleaved turns.
+  // Reasoning is always represented by EXACTLY ONE disclosure per turn, whether
+  // the turn is streaming or settled — see the ★ comment on
+  // ReasoningAccordionGroup in thread.tsx. The invariant being protected is the
+  // count: a per-reasoning-part disclosure scattered several "Thinking" blocks
+  // between tool cards and body text on interleaved turns, which is the display
+  // bug. A regression toward per-part disclosures is not a feature.
   //
-  // These tests pin both halves of that contract. A regression toward
-  // per-part disclosures is the display bug, not a feature.
-  it('shows a thinking status line with no disclosure while reasoning streams', () => {
+  // This used to additionally assert that mid-stream showed ZERO disclosures and
+  // only a one-line `aui_assistant-thinking-row`. That shape has been deliberately
+  // reversed: it made the whole think-and-call phase invisible (no reasoning text,
+  // no tool rows, nothing expandable) and then swapped the entire subtree in when
+  // prose landed. The block is now live for the whole turn; only the *count* of
+  // reasoning disclosures is still pinned.
+  it('shows exactly one reasoning disclosure while reasoning streams', () => {
     const { container } = render(<RunningReasoningHarness />)
 
-    // The "pure thinking" early-return path (no visible text yet): renders as a
-    // single `aui_assistant-thinking-row` status line, not a disclosure.
-    expect(container.querySelector('[data-slot="aui_assistant-thinking-row"]')).toBeTruthy()
-    expect(container.querySelectorAll('[data-slot="aui_thinking-disclosure"]').length).toBe(0)
-    // Nothing to expand mid-stream, so there is no toggle to find either.
-    expect(within(container).queryByRole('button', { name: /thinking/i })).toBeNull()
+    expect(container.querySelectorAll('[data-slot="aui_thinking-disclosure"]').length).toBe(1)
+    // Present and expandable *during* the stream — that is the point.
+    expect(within(container).getByRole('button', { name: /thinking/i })).toBeTruthy()
+    // The old one-line-only surface must not come back.
+    expect(container.querySelector('[data-slot="aui_assistant-thinking-row"]')).toBeNull()
+  })
+
+  // "界面又乱了": the turn's shell used to be two different layouts that swapped
+  // at the first text delta — a bare status line became avatar + header row +
+  // padded card + footer + process block, all in one frame, shoving everything
+  // below it. This pins the shell as invariant across that moment: same set of
+  // structural slots before and after prose, so nothing mounts, unmounts, or
+  // moves. It is a set comparison, not a snapshot — adding a slot to BOTH states
+  // is fine, adding one to only one state is the regression.
+  it('keeps the same structural slots when prose arrives mid-run', () => {
+    const shellSlots = (root: HTMLElement) =>
+      [...root.querySelectorAll('[data-slot]')]
+        .map(el => el.getAttribute('data-slot'))
+        .filter(slot => slot?.startsWith('aui_assistant') || slot === 'aui_tool-history-panel')
+        .sort()
+
+    const before = render(<RunningMessageHarness message={assistantThinkingAndCallingMessage(false)} />)
+    const slotsBefore = shellSlots(before.container)
+
+    cleanup()
+
+    const after = render(<RunningMessageHarness message={assistantThinkingAndCallingMessage(true)} />)
+    const slotsAfter = shellSlots(after.container)
+
+    // The process block and the message shell must exist in BOTH states.
+    expect(slotsBefore).toContain('aui_tool-history-panel')
+    expect(slotsBefore).toContain('aui_assistant-message-root')
+    expect(slotsAfter).toEqual(slotsBefore)
+  })
+
+  // The answer card is mounted from the first part, so before prose arrives it
+  // must contain NOTHING — it is hidden purely by the `empty:hidden` utility,
+  // and `:empty` fails if even one child element is present. jsdom does not
+  // apply the CSS, so this asserts the precondition the rule depends on.
+  //
+  // The trap: `MessagePrimitive.Parts` defaults `unstable_showEmptyOnNonTextEnd`
+  // to true, which injects an empty Text part whenever the last part is a
+  // tool-call — exactly the mid-execution state. That lone node would keep the
+  // card non-empty and paint a stray blank box under every running turn. Hence
+  // the explicit `={false}` in thread.tsx; this test is its tripwire.
+  it('leaves the answer card truly empty until prose arrives', () => {
+    const cardOf = (root: HTMLElement) =>
+      root.querySelector('[data-slot="aui_assistant-message-content"]')
+
+    const before = render(<RunningMessageHarness message={assistantThinkingAndCallingMessage(false)} />)
+    const emptyCard = cardOf(before.container)
+
+    expect(emptyCard).not.toBeNull()
+    expect(emptyCard?.childElementCount).toBe(0)
+    expect(emptyCard?.matches(':empty')).toBe(true)
+
+    cleanup()
+
+    // Contrast: once prose lands the same card is non-empty and shows it.
+    const after = render(<RunningMessageHarness message={assistantThinkingAndCallingMessage(true)} />)
+    const filledCard = cardOf(after.container)
+
+    expect(filledCard?.matches(':empty')).toBe(false)
+    expect(filledCard?.textContent).toContain('Beijing is hot tomorrow.')
   })
 
   it('renders an incomplete reasoning fenced code block as a code card', async () => {

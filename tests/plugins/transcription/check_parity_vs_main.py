@@ -2,7 +2,7 @@
 
 Spawns one subprocess per (version, scenario) cell — pinned to either
 ``origin/main`` (no plugin hook, no STT command-provider registry; only
-the legacy ``HERMES_LOCAL_STT_COMMAND`` escape hatch exists) or this PR's
+the legacy ``ARGUS_LOCAL_STT_COMMAND`` escape hatch exists) or this PR's
 worktree (both new surfaces present).
 
 Each subprocess clears all STT-related env vars + writes a
@@ -65,13 +65,13 @@ sys.path.insert(0, sys.argv[1])
 
 # Isolated HERMES_HOME so the config write is hermetic.
 home = tempfile.mkdtemp()
-os.environ["HERMES_HOME"] = home
+os.environ["ARGUS_HOME"] = home
 
 # Clear STT-related env so dispatch decisions are config-driven.
 for k in (
     "GROQ_API_KEY", "OPENAI_API_KEY", "VOICE_TOOLS_OPENAI_KEY",
     "MISTRAL_API_KEY", "XAI_API_KEY",
-    "HERMES_LOCAL_STT_COMMAND",
+    "ARGUS_LOCAL_STT_COMMAND",
 ):
     os.environ.pop(k, None)
 

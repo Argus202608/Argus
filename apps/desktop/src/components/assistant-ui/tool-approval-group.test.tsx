@@ -241,12 +241,43 @@ describe('flat tool list approval surfacing', () => {
     })
   })
 
+  it('keeps the approval reachable even after the model has narrated', async () => {
+    // Regression: the Run / Reject bar is mounted ONLY inside a rendered pending
+    // tool row, and the native-notification fallback is suppressed while the
+    // window is focused — so any shape that hides or collapses that row leaves
+    // the user no way to answer and the turn deadlocks. Models narrate *before*
+    // calling a tool ("Let me check."), and text/tool parts interleave in one
+    // message, so this is the common path, not an edge case.
+    //
+    // The row now lives in the process block (`aui_tool-history-panel`), which is
+    // mounted for the whole turn and auto-opens while running. What must hold is
+    // therefore: the bar exists, is not under a `hidden` ancestor, and appears
+    // exactly ONCE (it used to be able to render both in-card and in-panel).
+    setApprovalRequest({ command: 'rm -rf /tmp/x', description: 'dangerous command', sessionId: 'sess-1' })
+
+    // groupedPendingMessage() carries a text part *and* a pending terminal call.
+    const { container } = render(<GroupHarness message={groupedPendingMessage()} />)
+
+    await waitFor(() => {
+      expect(container.querySelector('[data-slot="tool-approval-inline"]')).not.toBeNull()
+    })
+
+    const bars = container.querySelectorAll('[data-slot="tool-approval-inline"]')
+
+    expect(bars.length).toBe(1)
+    expect(bars[0].closest('[hidden]')).toBeNull()
+    // Reachable *because* the process block is open, not in spite of it.
+    expect(bars[0].closest('[data-slot="aui_tool-history-panel"]')).not.toBeNull()
+  })
+
   it('lets completed tool rows be dismissed', async () => {
     const { container } = render(<GroupHarness message={completedOnlyMessage()} />)
 
     const dismiss = await screen.findByLabelText('Dismiss')
 
-    expect(container.querySelectorAll('[data-slot="tool-block"]').length).toBeGreaterThan(1)
+    // One row → one `tool-block`. (This used to be 2: the retired ToolGroupSlot
+    // wrapper carried the same data-slot as the rows it wrapped.)
+    expect(container.querySelectorAll('[data-slot="tool-block"][data-tool-row]').length).toBe(1)
 
     fireEvent.click(dismiss)
 
@@ -272,10 +303,13 @@ describe('flat tool list approval surfacing', () => {
 
     const { container } = render(<GroupHarness message={completedOnlyMessage()} />)
 
+    // The turn still renders its process block (proving we are looking at a live
+    // re-render, not an empty tree) but the dismissed row does not come back.
     await waitFor(() => {
-      expect(container.querySelectorAll('[data-slot="tool-block"]').length).toBeGreaterThan(0)
+      expect(container.querySelector('[data-slot="aui_tool-history-panel"]')).not.toBeNull()
     })
 
+    expect(container.querySelectorAll('[data-slot="tool-block"][data-tool-row]').length).toBe(0)
     expect(screen.queryByLabelText('Dismiss')).toBeNull()
   })
 

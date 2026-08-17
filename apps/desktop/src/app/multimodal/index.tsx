@@ -1,6 +1,7 @@
 import { useStore } from '@nanostores/react'
 import { useEffect, useRef } from 'react'
 
+import { useI18n } from '@/i18n'
 import { Square } from '@/lib/icons'
 import { $gateway } from '@/store/gateway'
 import {
@@ -28,6 +29,7 @@ import { Waterfall } from './waterfall'
  *   Phase 2: camera / screen capture + multimodal.frame push.
  */
 export function MultimodalView() {
+  const { t } = useI18n()
   const gateway = useStore($gateway)
   const messages = useStore($mmMessages)
   const ttsPlaying = useStore($mmTtsPlaying)
@@ -66,14 +68,14 @@ export function MultimodalView() {
       className={`flex h-full min-h-0 flex-col gap-3 py-6 ${PAGE_INSET_X}`}
     >
       <header className="flex items-center gap-2">
-        <h1 className="text-lg font-semibold text-(--ui-text-primary)">多模态</h1>
+        <h1 className="text-lg font-semibold text-(--ui-text-primary)">{t.multimodal.heading}</h1>
         {ttsPlaying && (
           <button
             className="ml-auto inline-flex items-center gap-1 rounded-full bg-sky-500/15 px-2 py-0.5 text-xs text-sky-400 hover:bg-sky-500/25"
             onClick={() => stopAllTts()}
-            title="停止朗读"
+            title={t.multimodal.chat.stopReading}
           >
-            <Square className="size-3" /> 停止朗读
+            <Square className="size-3" /> {t.multimodal.chat.stopReading}
           </button>
         )}
       </header>
@@ -84,8 +86,10 @@ export function MultimodalView() {
             {messages.length === 0 ? (
               <div className="grid h-full place-items-center px-6 text-center text-sm text-(--ui-text-tertiary)">
                 <div className="max-w-sm">
-                  <div className="mb-1 text-base font-medium text-(--ui-text-secondary)">开始一段多模态对话</div>
-                  直接提问，或开启摄像头 / 屏幕共享——画面会随问题一起发送给具备视觉能力的智能体。
+                  <div className="mb-1 text-base font-medium text-(--ui-text-secondary)">
+                    {t.multimodal.welcome.title}
+                  </div>
+                  {t.multimodal.welcome.body}
                 </div>
               </div>
             ) : (

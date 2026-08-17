@@ -45,11 +45,11 @@ def fake_advisory() -> adv.Advisory:
 @pytest.fixture
 def isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Redirect HERMES_HOME so banner cache and config writes are sandboxed."""
-    home = tmp_path / ".hermes"
+    home = tmp_path / ".argus"
     home.mkdir()
     (home / "cache").mkdir()
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("ARGUS_HOME", str(home))
     return home
 
 
@@ -249,7 +249,7 @@ class TestRendering:
         assert fake_advisory.id in joined
         assert fake_advisory.title in joined
         assert "fake-malicious-pkg==6.6.6" in joined
-        assert "hermes doctor" in joined
+        assert "argus doctor" in joined
 
     def test_full_remediation_text_contains_all_steps(self, fake_advisory):
         hit = adv.AdvisoryHit(

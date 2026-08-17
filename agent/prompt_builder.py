@@ -219,7 +219,7 @@ MM_LIVE_GUIDANCE = (
     "  • Triggers include 'show me what that X looked like', 'bring up the image of that X', 'what did the X from last time look like', "
     "'show me the X you saw', or any request to display/replay/retrieve the real historical image.\n"
     "  • Correct flow: call show_memory_frame(entity_name='X'). The stored entity representative frames and persisted FrameStore images are returned as real images for the user to see. The tool returns a _multimodal result; you do not need to describe the image in detail, just briefly confirm what was retrieved.\n"
-    "  • The frontend automatically renders image_url data returned by show_memory_frame. Do not write MEDIA paths, Markdown image paths, /var/folders paths, ~/.hermes paths, or file:// URLs in your reply; the frontend does not render those and they are likely hallucinated.\n"
+    "  • The frontend automatically renders image_url data returned by show_memory_frame. Do not write MEDIA paths, Markdown image paths, /var/folders paths, ~/.argus paths, or file:// URLs in your reply; the frontend does not render those and they are likely hallucinated.\n"
     "  • Do not claim that multimodal memory stores only descriptions or cannot retrieve images. It has entity_rep_frames plus persisted FrameStore images; use the right tool. Only if show_memory_frame returns shown=0 may you say no key frame is recorded for that item.\n"
     "  • If you are unsure of the exact entity name, first call query_multimodal to identify it, then show_memory_frame. If the user already names the item and asks to see it, call show_memory_frame directly. For factual questions about numbers, labels, nutrition, capacity, or counts, call query_multimodal.\n"
     "Use check_video_stream only when the user directly asks whether the camera/screen-share "
@@ -249,8 +249,8 @@ SKILLS_GUIDANCE = (
 KANBAN_GUIDANCE = (
     "# Kanban task execution protocol\n"
     "You have been assigned ONE task from "
-    "the shared board at `~/.hermes/kanban.db`. Your task id is in "
-    "`$HERMES_KANBAN_TASK`; your workspace is `$HERMES_KANBAN_WORKSPACE`. "
+    "the shared board at `~/.argus/kanban.db`. Your task id is in "
+    "`$ARGUS_KANBAN_TASK`; your workspace is `$ARGUS_KANBAN_WORKSPACE`. "
     "The `kanban_*` tools in your schema are your primary coordination surface — "
     "they write directly to the shared SQLite DB and work regardless of terminal "
     "backend (local/docker/modal/ssh).\n"
@@ -262,7 +262,7 @@ KANBAN_GUIDANCE = (
     "metadata), any prior attempts on this task if you're a retry, the full "
     "comment thread, and a pre-formatted `worker_context` you can treat as "
     "ground truth.\n"
-    "2. **Work inside the workspace.** `cd $HERMES_KANBAN_WORKSPACE` before "
+    "2. **Work inside the workspace.** `cd $ARGUS_KANBAN_WORKSPACE` before "
     "any file operations. The workspace is yours for this run. Don't modify "
     "files outside it unless the task explicitly asks.\n"
     "3. **Heartbeat on long operations.** Call `kanban_heartbeat(note=...)` "
@@ -307,11 +307,11 @@ KANBAN_GUIDANCE = (
     "\n"
     "## Reference details that change outcomes\n"
     "\n"
-    "- **Workspace.** `cd $HERMES_KANBAN_WORKSPACE` first. For a `worktree` kind "
+    "- **Workspace.** `cd $ARGUS_KANBAN_WORKSPACE` first. For a `worktree` kind "
     "with no `.git`, `git worktree add <path> "
-    "${HERMES_KANBAN_BRANCH:-wt/$HERMES_KANBAN_TASK}` from the main repo, then "
+    "${ARGUS_KANBAN_BRANCH:-wt/$ARGUS_KANBAN_TASK}` from the main repo, then "
     "cd there. For a project-linked task the workspace is a fresh "
-    "`<repo>/.worktrees/<task-id>` and `$HERMES_KANBAN_BRANCH` a deterministic "
+    "`<repo>/.worktrees/<task-id>` and `$ARGUS_KANBAN_BRANCH` a deterministic "
     "`<project-slug>/<task-id>` — the main repo is two levels up, so run "
     "`git worktree add` from there.\n"
     "- **Deliverables.** Files a human wants go in "
@@ -322,12 +322,12 @@ KANBAN_GUIDANCE = (
     "or paste ids; the kernel rejects the completion on any phantom id.\n"
     "- **Orchestrating: discover profiles first.** The dispatcher SILENTLY "
     "drops a card with an unknown assignee (it sits in `ready` forever). Ground "
-    "every assignee in a real profile (`hermes profile list`, or ask the user), "
+    "every assignee in a real profile (`argus profile list`, or ask the user), "
     "and express dependencies via `parents=[...]` on `kanban_create`, not prose.\n"
     "\n"
     "## Do NOT\n"
     "\n"
-    "- Do not shell out to `hermes kanban <verb>` for board operations. Use "
+    "- Do not shell out to `argus kanban <verb>` for board operations. Use "
     "the `kanban_*` tools — they work across all terminal backends.\n"
     "- Do not complete a task you didn't actually finish. Block it.\n"
     "- Do not call `clarify` to ask questions. You are running headless — "
@@ -605,9 +605,13 @@ def computer_use_guidance(platform_name: Optional[str] = None) -> str:
         "pass `capture_after=true` to get the follow-up screenshot in one "
         "round-trip.\n\n"
         "## Background mode rules\n"
-        "- Do NOT use `raise_window=true` on `focus_app` unless the user "
-        "explicitly asked you to bring a window to front. Input routing to "
-        "the app works without raising.\n"
+        "- `focus_app` DEFAULTS to `raise_window=true` — it brings the window "
+        "to the front so a subsequent capture/click can actually see it. "
+        "That is what you want after `launch_app` or when switching apps: "
+        "without a visible window, `capture(app=...)` returns a blank 0x0 "
+        "frame and clicks land nowhere. Only pass `raise_window=false` for "
+        "the rare background-input case where you already know the window "
+        "is visible and don't want to disturb the user's z-order.\n"
         f"- When capturing, prefer `app='{example_app}'` (or whichever app the "
         "task is about) instead of the whole screen — it's less noisy and "
         "won't leak other windows the user has open.\n"
@@ -632,7 +636,7 @@ def computer_use_guidance(platform_name: Optional[str] = None) -> str:
         "## When something is broken\n"
         "If `computer_use` consistently fails (empty captures, missing "
         "elements, clicks not landing, type going nowhere), ask the user to "
-        "run `hermes computer-use doctor` and share the output. That command "
+        "run `argus computer-use doctor` and share the output. That command "
         "runs cua-driver's structured health-report — per-platform checks "
         "for permissions, display server, accessibility tree reachability "
         "— and the failure message tells you exactly what to fix.\n"
@@ -1201,11 +1205,11 @@ def build_environment_hints() -> str:
             )
 
     # Hermes desktop GUI — any agent running under the desktop app should know
-    # it. HERMES_DESKTOP marks the backend powering the chat; HERMES_DESKTOP_TERMINAL
+    # it. ARGUS_DESKTOP marks the backend powering the chat; ARGUS_DESKTOP_TERMINAL
     # marks a hermes launched in the embedded terminal pane. Both set by main.cjs.
     _truthy = ("1", "true", "yes")
-    _in_desktop = (os.getenv("HERMES_DESKTOP") or "").strip().lower() in _truthy
-    _in_desktop_term = (os.getenv("HERMES_DESKTOP_TERMINAL") or "").strip().lower() in _truthy
+    _in_desktop = (os.getenv("ARGUS_DESKTOP") or "").strip().lower() in _truthy
+    _in_desktop_term = (os.getenv("ARGUS_DESKTOP_TERMINAL") or "").strip().lower() in _truthy
     if _in_desktop or _in_desktop_term:
         _desktop_hint = "Runtime surface: you're running inside the Hermes desktop GUI app."
         if _in_desktop_term:
@@ -1226,7 +1230,7 @@ def build_environment_hints() -> str:
     # it's part of the stable, cache-safe system prompt. The env var is the
     # build-time/embedder mechanism (set in a container ENV); config.yaml
     # ``agent.environment_hint`` is the user-facing surface. Env var wins.
-    extra = (os.getenv("HERMES_ENVIRONMENT_HINT") or "").strip()
+    extra = (os.getenv("ARGUS_ENVIRONMENT_HINT") or "").strip()
     if not extra:
         try:
             from hermes_cli.config import load_config
@@ -1502,7 +1506,7 @@ def build_skills_system_prompt(
     Falls back to a full filesystem scan when both layers miss.
 
     External skill directories (``skills.external_dirs`` in config.yaml) are
-    scanned alongside the local ``~/.hermes/skills/`` directory.  External dirs
+    scanned alongside the local ``~/.argus/skills/`` directory.  External dirs
     are read-only — they appear in the index but new skills are always created
     in the local dir.  Local skills take precedence when names collide.
 
@@ -1523,8 +1527,8 @@ def build_skills_system_prompt(
     # produce distinct cache entries (gateway serves multiple platforms).
     from gateway.session_context import get_session_env
     _platform_hint = (
-        os.environ.get("HERMES_PLATFORM")
-        or get_session_env("HERMES_SESSION_PLATFORM")
+        os.environ.get("ARGUS_PLATFORM")
+        or get_session_env("ARGUS_SESSION_PLATFORM")
         or ""
     )
     # WatcherAgent-owned skills (under the reserved _watcher/ subdir) are hidden
@@ -1735,8 +1739,8 @@ def build_skills_system_prompt(
             "Whenever the user asks you to configure, set up, install, enable, disable, modify, "
             "or troubleshoot Hermes Agent itself — its CLI, config, models, providers, tools, "
             "skills, voice, gateway, plugins, or any feature — load the `hermes-agent` skill "
-            "first. It has the actual commands (e.g. `hermes config set …`, `hermes tools`, "
-            "`hermes setup`) so you don't have to guess or invent workarounds.\n"
+            "first. It has the actual commands (e.g. `argus config set …`, `argus tools`, "
+            "`argus setup`) so you don't have to guess or invent workarounds.\n"
             "If a skill has issues, fix it with skill_manage(action='patch').\n"
             "After difficult/iterative tasks, offer to save as a skill. "
             "If a skill you loaded was missing steps, had wrong commands, or needed "
@@ -1820,7 +1824,7 @@ def build_nous_subscription_prompt(valid_tool_names: "set[str] | None" = None) -
             "When a Nous-managed feature is active, do not ask the user for Firecrawl, FAL, OpenAI TTS, OpenAI Whisper, or Browser-Use API keys.",
             "If the user is not subscribed and asks for a capability that Nous subscription would unlock or simplify, suggest Nous subscription as one option alongside direct setup or local alternatives.",
             "Do not mention subscription unless the user asks about it or it directly solves the current missing capability.",
-            "Useful commands: hermes setup, hermes setup tools, hermes setup terminal, hermes status.",
+            "Useful commands: argus setup, argus setup tools, argus setup terminal, argus status.",
         ]
     )
     return "\n".join(lines)

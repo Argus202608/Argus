@@ -68,7 +68,13 @@ import { MarkdownText, MarkdownTextContent } from '@/components/assistant-ui/mar
 import { ThreadMessageList } from '@/components/assistant-ui/thread-list'
 import { ThreadTimeline } from '@/components/assistant-ui/thread-timeline'
 import { ToolFallback, ToolGroupSlot } from '@/components/assistant-ui/tool-fallback'
-import { selectMessageHasVisibleText } from '@/components/assistant-ui/tool-fallback-model'
+import {
+  selectMessageHasPendingTool,
+  selectMessageHasVisibleText,
+  selectMessageRunning,
+  summarizeToolSteps,
+  toolPartDisclosureId
+} from '@/components/assistant-ui/tool-fallback-model'
 import { TooltipIconButton } from '@/components/assistant-ui/tooltip-icon-button'
 import { UserMessageText } from '@/components/assistant-ui/user-message-text'
 import { useElapsedSeconds } from '@/components/chat/activity-timer'
@@ -111,6 +117,8 @@ import { fmtClock } from '@/store/multimodal'
 import { $connection } from '@/store/session'
 import { notifyThreadEditClose } from '@/store/thread-scroll'
 import { $voicePlayback } from '@/store/voice-playback'
+import { $generatingToolName } from '@/store/tool-generating'
+import { $toolDisclosureStates, setToolDisclosureOpenBatch } from '@/store/tool-view'
 import { $isWindowResizing } from '@/store/window-resize'
 
 type ThreadLoadingState = 'response' | 'session'
@@ -413,11 +421,12 @@ const AssistantHeaderRow: FC<{
 // 默认折叠 → 三角 ▸ + 正文单行行末省略号 (truncate); 点三角展开 → ▾ + 多行全文。
 // 头部 (第N段/时段区间/时间/#id) 在卡片外, 这里只管正文的折叠。
 const WatcherReportBody: FC = () => {
+  const { t } = useI18n()
   const [open, setOpen] = useState(false)
   // ★ 与 web 对齐: 正文卡头显示「第N段 + 时段区间」。段号走 deepRound(独立字段),
   //   时段走 deepRange —— 之前 desktop 抠出 deepRange 却没渲染 (bug 级遗漏)。
   const subMeta = useAuiState(s => (s.message.metadata?.custom ?? {}) as SubRoleMeta)
-  const segLabel = subMeta.deepRound != null ? `第${subMeta.deepRound}段` : ''
+  const segLabel = subMeta.deepRound != null ? t.multimodal.deepAnalysis.segment(subMeta.deepRound) : ''
   const rangeLabel = subMeta.deepRange || ''
   return (
     <div className="rounded-lg border-l-2 border-(--ui-purple) bg-(--ui-purple)/8 px-3 py-2">
@@ -499,40 +508,24 @@ const AssistantMessage: FC<{
   const enterRef = useEnterAnimation(isRunning, `assistant-message:${messageId}`)
 
   // ★ 占位态 (running 但 content 还完全为空, 一个 part 都没到) → 本组件不渲染, 交给
-  //   Thread 的 ResponseLoadingIndicator ("Waiting response…") 独占这一行。★ 关键: 必须
-  //   排在下面"纯思考态"分支【之前】—— 否则 content 为空时 !hasVisibleText 也成立, 会
-  //   走纯思考态渲染出一行 CurrentActivityLine ("Thinking"), 与 ResponseLoadingIndicator
-  //   的 "Waiting…" 同屏并存 → 两行。首个 part (reasoning/tool) 落地后 content 非空,
-  //   本分支不再命中, 下面纯思考行接管, 零跳变、恒为单行。
+  //   Thread 的 ResponseLoadingIndicator 独占这一行, 也就是用户看到的
+  //   "Waiting response…" → (3s 无 delta) "Thinking…"。
+  //   首个 part (reasoning/tool) 落地后 content 非空, 本分支不再命中, 下面的完整结构
+  //   (答案框 + 过程框) 接管 —— 这是整轮里唯一一次结构变化。
   if (isPlaceholder) {
     return null
   }
 
-  // ★ 纯思考态: 运行中、已有 part 但还没有正文 → 不渲染 AssistantMessage 卡, 只渲染
-  //   【一行】独立思考状态 (💭 + 当前动作 + 计时)。★ 有工具调用时也走这条 (不再出一张空的
-  //   AssistantMessage 卡 / 空行): 工具执行期间 CurrentActivityLine 会显示
-  //   "Running: …" 等当前动作, 待正文落地 (hasVisibleText) 或本轮完成后, thinking
-  //   行消失, 再由下方完整 AssistantMessage 卡一次性渲染 (正文 + 工具卡)。
-  //   【不显示头像 A, 不缩进】—— 左缘对齐 composer 文本框左边, 计时器 ml-auto 对齐
-  //   右边, 字号 text-xs。只用 CurrentActivityLine 单指示器 (它 fallback 恒显
-  //   "Thinking" + 计时), 保证单行不多行。subRole (monitor/router/watcher) 不走这条,
-  //   保留自身彩色卡形态。NB: 该行布局须与 ResponseLoadingIndicator ("Waiting…") 一致。
-  if (isRunning && !subRole && !hasVisibleText) {
-    return (
-      <div
-        className="group flex w-full min-w-0 max-w-full flex-row items-center gap-2 self-start overflow-hidden"
-        data-role="assistant"
-        data-slot="aui_assistant-thinking-row"
-        ref={enterRef}
-      >
-        {/* 隐形头像占位: 与下方完整 AssistantMessage 卡的 MessageAvatar (size-7 + gap-2)
-            同宽, 让思考行 body 与 "You"/正文卡左缘对齐, 不再贴到 chat gutter。 */}
-        <div aria-hidden className="size-7 shrink-0" />
-        <CurrentActivityLine />
-      </div>
-    )
-  }
-
+  // ★ 首个 part 落地之后【不再】有第二种形态。此处原先还有一条"纯思考态"分支: 运行中但
+  //   正文未到时只渲染一行 💭 状态 (无头像/无头部/无卡片/无工具), 等正文落地才整块换成
+  //   完整卡片。那一行确实安静, 但代价是整轮过程【完全不可见】—— reasoning 原文和工具的
+  //   参数/结果在那个窗口里根本没有渲染者 (ToolGroupSlot 从未挂载, ToolHistoryPanel 被
+  //   hasPendingTool 挡住), 而且正文到达那一帧要把"一行"整体换成"头像+头部+卡片+页脚+
+  //   过程框", 下方内容全部位移 —— 就是用户报的"界面又乱了"。
+  //
+  //   现在: 从第一个 part 起就是最终结构。正文未到时卡片靠 empty:hidden 收成 0 高 (依赖
+  //   下方 Parts 的 unstable_showEmptyOnNonTextEnd={false}, 否则库会塞一个空 Text part
+  //   进去、卡片就不再 :empty 了), 思考与工具进展实时长在卡片下方的过程框里。整轮零结构跳变。
   return (
     <MessagePrimitive.Root
       className="group flex w-full min-w-0 max-w-full flex-row gap-2 self-start overflow-hidden"
@@ -581,19 +574,16 @@ const AssistantMessage: FC<{
           )}
         </div>
       )}
-      {/* ★ 思考气泡: 独立于 AssistantMessage 正文卡片, 放在气泡外的一行。原因:
-         interleaved thinking (reasoning ↔ tool_call ↔ text 交错) 时, 如果把
-         "✷ Thinking / Reading X" 塞进正文卡内, 卡片会因 label 时隐时现而"抖":
-         text 流出 → 隐藏 → 又来一段 reasoning → 顶部又冒出 shimmer 行, 阅读被
-         打断。挪到卡片外独立成一"思考气泡", 状态机自己一行, 不再占用 (也不再
-         reflow) 正文卡 —— 交错工具/文本随 MessagePrimitive.Parts 平铺照常。
-         深度/监控子角色气泡样式独立, 不套这一层。 */}
-      {isRunning && !subRole && <ThinkingBubble />}
-      {/* ★ 完成态 reasoning 回看: 也搬到正文卡外, 保持"整条 thinking 状态机全部
-         不占用 AssistantMessage 正文卡"的一致性。gated on !isRunning 避免和上面
-         流式 ThinkingBubble 打架; gated on !subRole 让 monitor/router/watcher
-         保留自身彩色卡形态。 */}
-      {!isRunning && !subRole && <CompletedReasoningPanel />}
+      {/* ★ 停顿兜底行 (卡片外)。此处原先还有 CurrentActivityLine ("💭 Running: …" +
+         计时) —— 现在它搬进了下方过程框的标题行: 过程框全程可见, 两处都报当前动作就是
+         一模一样的两行并排, 正是当初要消灭的"重复 Thinking 行"。停顿指示器留在卡外,
+         因为它报的是"流卡住了"这个跨部件的整体状态, 不属于任何一个 part。 */}
+      {isRunning && !subRole && <StreamStallIndicator />}
+      {/* ★ 完成态 reasoning 不再单独占一块: 它已经并入正文卡【下方】的过程框
+         (ToolHistoryPanel 里的 ☁️ 折叠项)。此前它是正文卡【上方】的独立面板, 且
+         每段 reasoning 各出一个 disclosure —— 一轮里因此出现两行 "Thinking"
+         (其中一行显示的 reasoning 原文恰好提到某条命令, 看着像多出来的工具行),
+         过程信息被答案框劈成上下两半。现在一轮 = 答案框 + 一个过程框。 */}
       {/* 深度分析回传: 卡片内 = 第几段 + 时段区间 + 正文(单行, 行末省略)。 */}
       {subRole === 'watcher_report' ? (
         // 深度回传: 正文左侧三角 (▸/▾), 默认折叠单行行末省略, 点三角展开全文。
@@ -609,18 +599,27 @@ const AssistantMessage: FC<{
           subRole === 'router' &&
             'rounded-lg border-l-2 border-(--ui-purple) bg-(--ui-purple)/8 py-2 pl-3 pr-3',
           // ★ 普通主 Assistant 回复 (无 subRole): 浅中性底色卡片 (--ui-bg-elevated),
-          //   比 user 气泡浅一档, 一眼区分, 且与紫色深度卡不混淆。运行中此路径只在
-          //   hasVisibleText (正文已落地) 时到达; 完成态则承载正文 + 工具卡。卡内
-          //   必有内容; empty:hidden 仅作兜底 (如仅 todo 工具被上抬后的空卡)。
+          //   比 user 气泡浅一档, 一眼区分, 且与紫色深度卡不混淆。
+          //   ★ empty:hidden 现在是【承重】的, 不再只是兜底: 本卡从第一个 part 起就挂上,
+          //   而正文可能还没到 (先 reasoning / 先工具), 这时它必须收成 0 高、看不出有个空框。
+          //   配套依赖下方 Parts 的 unstable_showEmptyOnNonTextEnd={false}。
           !subRole && 'rounded-lg bg-(--ui-bg-elevated) px-3 py-2 empty:hidden'
         )}
         data-slot="aui_assistant-message-content"
       >
         {/* 监控/router 头部行已移到卡片外 (见上); 此处只放正文。
-           思考状态机 (CurrentActivityLine / StreamStallIndicator) 亦已移到卡外
-           的 ThinkingBubble, 保持卡内只承载 message.parts 生成的正文/工具节点。 */}
+           当前动作/计时在下方过程框的标题行, 停顿兜底 (StreamStallIndicator) 在卡外 ——
+           卡内只承载 message.parts 生成的正文节点 (工具行也不在这里, 见 ToolGroupSlot)。 */}
         {/* Todos render in the composer status stack now, not inline. */}
-        <MessagePrimitive.Parts components={MESSAGE_PARTS_COMPONENTS} />
+        {/* ★ unstable_showEmptyOnNonTextEnd={false} 是承重的, 不是调优: 该 prop 默认 true,
+           当【最后一个 part 不是 text/reasoning】(正文未到、末项是 tool-call, 也就是本轮
+           执行中的常态) 时, 库会额外渲染一个空 Text part。那个空节点让卡片不再匹配 :empty,
+           于是 empty:hidden 失效 —— 屏幕上多出一个可见的空白卡。置 false 后卡片真正为空、
+           收成 0 高, 正文一到再自然长出来。 */}
+        <MessagePrimitive.Parts
+          components={MESSAGE_PARTS_COMPONENTS}
+          unstable_showEmptyOnNonTextEnd={false}
+        />
         {previewTargets.length > 0 && (
           <div className="mt-3 flex flex-wrap gap-2">
             {previewTargets.map(target => (
@@ -693,8 +692,8 @@ const ResponseLoadingIndicator: FC = () => {
   //   - 流开始 → "Waiting response…"
   //   - 3s 都还没任何 delta → 兜底切 "Thinking…" (覆盖闭源模型不透 reasoning 但
   //     内部真推理的场景, 如 GPT-5.6 Luna)。
-  //   一旦第一个 reasoning / tool / message part 到达, AssistantMessage 挂上,
-  //   CurrentActivityLine 接管 —— 本组件就消失。
+  //   一旦第一个 reasoning / tool / message part 到达, AssistantMessage 挂上
+  //   (答案框 + 过程框), 由过程框标题行接管当前动作与计时 —— 本组件就消失。
   const [fallbackThinking, setFallbackThinking] = useState(false)
   useEffect(() => {
     const timer = window.setTimeout(() => setFallbackThinking(true), 3000)
@@ -702,10 +701,10 @@ const ResponseLoadingIndicator: FC = () => {
   }, [])
   const thinkingLabel = fallbackThinking ? t.assistant.thread.thinking : 'Waiting response…'
 
-  // ★ 与 AssistantMessage 的"纯思考态"行完全同款:【不显示头像 A】, 但保留头像列
-  //   宽度的隐形占位 (size-7 + gap-2), 一行 💭 状态, 无头部行、无正文卡。首个 part
-  //   落地 → 本组件卸载, AssistantMessage 接管同款一行, 零跳变。布局须与 thread.tsx
-  //   里 aui_assistant-thinking-row 保持一致。
+  // ★ 【不显示头像 A】, 但保留头像列宽度的隐形占位 (size-7 + gap-2), 让这行文字与下方
+  //   "You"/正文卡的左缘对齐。一行 💭 状态, 无头部行、无正文卡 —— 这是首个 part 落地
+  //   【之前】的形态。首个 part 到达 → 本组件卸载, AssistantMessage 挂上完整结构
+  //   (头像 + 头部 + 答案框 + 过程框), 这是整轮唯一一次结构变化。
   return (
     <div
       aria-label={compacting ? COMPACTION_LABEL : t.assistant.thread.loadingResponse}
@@ -832,22 +831,19 @@ const StreamStallIndicator: FC = () => {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// CurrentActivityLine — Claude Code 风格的"当前动作"心跳行。
+// "当前动作"标签 (Claude Code 风格的心跳): 一行持续告诉用户 agent 现在在干什么。
+// 消费者是过程框的标题行 (ToolHistoryPanel 的 headerLabel) —— 跑动中显示动作,
+// 完成后换成批次摘要。encrypted reasoning 场景也不会只剩一个空框。
 //
-// 目标: 用户提问后, 与其展示一个默认展开、又大又空的"💭 思考过程" 折叠块,
-//   不如仿照 Claude Code CLI 那样在一行里持续告诉用户: agent 现在在干什么、
-//   干了多久。encrypted reasoning 场景下也不再露"空黑框", 而是一句
-//   "✷ Thinking… 3s" 的脉冲行。
+// 从【消息 parts 数组的末尾一项】派生成一句人话:
+//   * tool-call part -> "Reading /path/to/file"、"Running: git status"…
+//   * 其它 (无工具 / 纯文本刚开始) -> "Thinking"
+//   * 末项是正文 text -> '' (正文已开始, 不必再报动作)
 //
-// 从 useAuiState 里读【消息 parts 数组的末尾一项】, 派生成一句人话:
-//   * tool-call part  -> "✷ Reading /path/to/file"、"✷ Running: git status"…
-//   * reasoning part  -> "✷ <reasoning 首行>"
-//   * 其它 (纯文本刚开始 / 空 parts) -> "✷ Thinking"
-//
-// 只订阅【小体积派生字符串】(activityKey), 避免每次 token flush 都触发这个组件
-// re-render (parts 数组本身在流式过程中身份会变, 但 activityKey 只在"动作切换"
-// 时才变)。计时器复用 ActivityTimerText + useElapsedSeconds, timerKey 按消息id
-// 稳定, 不会因 activity 切换而重置总时长。
+// 返回【小体积派生字符串】而不是对象/数组: useAuiState 用 Object.is 比对, 只有这样
+// 才能让每次 token flush 不触发订阅方 re-render (parts 数组身份每次都变, 但这个
+// 字符串只在"动作切换"时才变)。计时器由调用方用 ActivityTimerText +
+// useElapsedSeconds 提供, timerKey 按消息 id 稳定, 不因动作切换而重置总时长。
 const _MAX_ACTIVITY_LEN = 80
 
 function _truncate(s: string, max = _MAX_ACTIVITY_LEN): string {
@@ -902,130 +898,62 @@ function _pickToolLabel(toolName: string, args: unknown): string {
 // 直接返回 string 而不是 object: useAuiState 的默认比较是 Object.is, 每次新对象
 // 都会触发 re-render, 用 primitive string 才能保证 token flush 不重渲。
 function _computeActivityLabel(parts: readonly unknown[]): string {
+  // ★ 最大信息量原则: 一旦本轮出现过 tool-call, 始终显示最近的工具状态,
+  //   即使后续出现 reasoning part 也不切回 thinking。工具信息量 >> thinking。
+
+  // 1) 从末尾找第一个有意义的 part: 如果是 text (正文已流出) → 隐藏活动行
   for (let i = parts.length - 1; i >= 0; i--) {
     const p = parts[i] as { type?: string; toolName?: string; args?: unknown; text?: string } | null
     if (!p) continue
-    if (p.type === 'tool-call' && typeof p.toolName === 'string') {
+    if (p.type === 'text' && typeof p.text === 'string' && p.text.trim().length > 0) return ''
+    // 遇到 tool-call 或 reasoning 就停止向前找 text (text 只在末尾才意味着"正文开始")
+    if (p.type === 'tool-call' || p.type === 'reasoning') break
+  }
+
+  // 2) 找最近的 tool-call (不管后面是否还有 reasoning, 一旦有 tool 就锁定显示工具)
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const p = parts[i] as { type?: string; toolName?: string; args?: unknown } | null
+    if (p?.type === 'tool-call' && typeof p.toolName === 'string') {
       return _truncate(_pickToolLabel(p.toolName, p.args))
     }
-    if (p.type === 'reasoning' && typeof p.text === 'string') {
-      // 思维链摘要: 取【最新一行】(reasoning 流式增长, 末行 = 当前进展/最新摘要),
-      // 让 thinking 区域"及时"反映最新思考, 而不是恒定停在第一行。截断到
-      // _MAX_ACTIVITY_LEN 控制单行长度与重渲频率 (行内每 token 变一次, 换行后
-      // 跳到新行; 仅这一个轻量 leaf 重渲, 可接受)。
-      const lines = p.text.trimEnd().split('\n')
-      let latest = ''
-      for (let j = lines.length - 1; j >= 0; j--) {
-        const line = lines[j].trim()
-        if (line) {
-          latest = line
-          break
-        }
-      }
-      return latest ? _truncate(latest) : 'Thinking'
-    }
-    if (p.type === 'text' && typeof p.text === 'string' && p.text.trim().length > 0) {
-      // 正文已开始流出 -> 不显示当前动作行。
-      return ''
-    }
   }
+
+  // 3) 没有任何 tool-call → 一律显示稳定的 "Thinking"。
+  //
+  // ★ 这里【不再】滚动 reasoning 原文的最后一行。这一行报告的是【状态】,不是内容:
+  //   原文尾行每来一个 delta 就换一次 (~80ms 一次 flush), 叠加 .shimmer 流光 +
+  //   脉冲 emoji + 计时器, 快模型下一秒抖十几次 —— 既读不清内容, 也失去了"还活着"
+  //   这个唯一诚实的信号。reasoning 全文没有丢: 完成态由过程框里的 ☁️ 折叠项
+  //   (ReasoningInlineItem) 静态呈现, 可以静下来读。与 web 端 ThinkingLine 一致。
   return 'Thinking'
 }
 
-const CurrentActivityLine: FC = () => {
-  const label = useAuiState(s => _computeActivityLabel(s.message.parts as readonly unknown[]))
-  const messageId = useAuiState(s => s.message.id)
-  const awaitingInput = useStore($activeSessionAwaitingInput)
+// (CurrentActivityLine / ThinkingBubble 已删除。它们是"正文卡上方一行 💭 当前动作 +
+//  计时"的旧表达, 与全程可见的过程框标题行报告的是同一件事 —— 两者同屏就是重复的
+//  Thinking 行。_computeActivityLabel 仍在用: 现由 ToolHistoryPanel 的标题行消费,
+//  见那里的 headerLabel。StreamStallIndicator 仍单独挂在卡外, 因为它报的是"流卡住了"
+//  这个跨部件状态, 不属于任何一个 part。)
 
-  const active = Boolean(label) && !awaitingInput
-  // 计时器 key 绑消息 id: 换消息才重置; 消息内 activity 切换不重置总时长。
-  const elapsed = useElapsedSeconds(active, `activity:${messageId}`)
-
-  if (!active) {
-    return null
-  }
-
-  return (
-    <StatusRow
-      className="mb-1"
-      data-slot="aui_current-activity"
-      label={`Current activity: ${label}`}
-    >
-      <span className="animate-pulse">💭</span>
-      <span className="shimmer min-w-0 truncate text-muted-foreground/70">{label}</span>
-      <ActivityTimerText className="ml-auto" seconds={elapsed} />
-    </StatusRow>
-  )
-}
-
-// ThinkingBubble — 正文卡【上方】的一行思考状态指示 (isRunning 时挂上)。
-// 内容: CurrentActivityLine (parts 尾项派生的当前动作) + StreamStallIndicator
-//        (无 delta 停顿 STREAM_STALL_S 后的"仍在思考"兜底)。
-// ★ 关键: 这里【不是】一个带背景色的气泡框 —— "思考气泡"指的是 💭 脉冲动效,
-//   不是 CSS 卡片。之前误加了 rounded + bg-(--ui-bg-elevated)/60 + w-fit, 结果
-//   (1) 底色与正文卡相同又贴在一起, 看着像"融进正文气泡里"; (2) w-fit 让框宽度
-//   随 label 长短 (Waiting→✷ Reading /very/long/path) 抖动。现改回纯文本行:
-//   无背景、无 padding, 只有 💭 + shimmer label + 计时器, 一眼就是正文卡"上方"
-//   一行, 且宽度变化不可见 (无框, 只是文字变长)。与 web 端 ThinkingLine 对齐。
-const ThinkingBubble: FC = () => (
-  <div className="flex flex-col gap-0 self-start empty:hidden" data-slot="aui_thinking-bubble">
-    <CurrentActivityLine />
-    <StreamStallIndicator />
-  </div>
-)
-
-// CompletedReasoningPanel — 完成态下, 从 message.parts 里聚合所有 reasoning
-// 部件 (跨 interleaved 出现的多个 reasoning group), 用【一整个】可折叠
-// ThinkingDisclosure 渲染在正文卡外。这样 [reasoning, tool, text, reasoning,
-// tool, text] 交错也只显示一块 "Thinking", 不再跟工具卡/正文交织 —— 这正是
-// 用户原始 concern "interleaved thinking 展示异常"的完成态复现路径。
-//
-// 使用 selector 派生【拼接后的 reasoning 文本】(string, 稳定比对) 作为唯一
-// 订阅, 避免每次 parts 数组身份变更就 re-render (与 CurrentActivityLine 的
-// 一致做法)。多段 reasoning 用两次换行分段, 阅读时保留跨段停顿感。
+// Reasoning segments are joined with a visible rule so multi-round thinking
+// keeps its inter-segment pause when read in one block (see ReasoningInlineItem).
 const _REASONING_SEP = '\n\n───\n\n'
 
-const CompletedReasoningPanel: FC = () => {
-  const messageId = useAuiState(s => s.message.id)
-  const reasoningText = useAuiState(s => {
-    const segments: string[] = []
-    for (const part of s.message.parts) {
-      const p = part as { type?: string; text?: unknown } | null
-      if (p?.type === 'reasoning' && typeof p.text === 'string') {
-        const trimmed = p.text.trim()
-        if (trimmed) segments.push(trimmed)
-      }
-    }
-    return segments.join(_REASONING_SEP)
-  })
-
-  if (!reasoningText) {
-    return null
-  }
-
-  return (
-    <ThinkingDisclosure timerKey={`reasoning:${messageId}`}>
-      <MarkdownTextContent
-        containerClassName="text-xs leading-snug text-muted-foreground/85"
-        containerProps={{ 'data-slot': 'aui_reasoning-text' } as ComponentProps<'div'>}
-        isRunning={false}
-        text={reasoningText}
-      />
-    </ThinkingDisclosure>
-  )
-}
-
-// ToolHistoryPanel — 完成态 + 有正文时, 从 message.parts 里聚合所有
-// tool-call 部件, 折叠在正文卡 **下方** 的一个独立无头区块里 (默认折叠)。
-// 这样正文是主角, 工具历史不占视觉空间却随时可展开回看。
-// 结构上平行于 CompletedReasoningPanel (只是一个管 reasoning, 一个管 tools)。
+// ToolHistoryPanel — 正文卡【下方】的【过程框】: 本轮的 reasoning (☁️ 折叠项, 见
+// ReasoningInlineItem) + 所有 tool-call 聚在同一个区块里。一轮 = 答案框 + 一个过程框。
 //
-// ⚠ 渲染稳定性: useAuiState selector 只返回 primitive (number) 以避免 Object.is
-// 对新数组引用判定不等 → 无限 re-render。完整 content 仅在展开 (open) 时通过
-// runtime.getState() 同步读取, 不走订阅。
+// ★ 全程可见 (不再是"完成态才出现")。它从第一个 part 起就挂上, 执行中实时长出思考与
+//   工具行, 完成后原地定稿 —— 同一个组件、同一个 DOM 位置, 没有"先藏着最后一次性出现"
+//   造成的位移。此前它被 hasPendingTool + hasVisibleText 双重挡住, 于是整个执行过程
+//   在界面上【完全不存在】: reasoning 原文和工具参数/结果在那个窗口里没有任何渲染者。
+//
+// ⚠ 渲染稳定性: 本组件现在在流式期间也挂着, 每个 delta 都会跑一遍它的 selector。所以
+//   每个 useAuiState selector 都【必须】返回 primitive —— 返回新数组/新对象会被
+//   Object.is 判定不等 → 每 delta 重渲染 (极端情况无限循环)。完整 content 仅在展开
+//   (open) 时通过 runtime.getState() 同步读取, 不走订阅。
 export const ToolHistoryPanel: FC = () => {
   const { t } = useI18n()
   const hasVisibleText = useAuiState(selectMessageHasVisibleText)
+  const messageRunning = useAuiState(selectMessageRunning)
   // Stable primitive: only changes when tool-call count actually changes.
   const toolCount = useAuiState(s => {
     let count = 0
@@ -1038,21 +966,92 @@ export const ToolHistoryPanel: FC = () => {
 
     return count
   })
+  // ★ Also a primitive (the joined label), NOT the parts array — this selector's
+  //   output is compared with Object.is, so returning a fresh array/object here
+  //   would re-render on every streaming delta (see the note above).
+  //   "Read 2 files · Ran 1 command" beats a bare "3 tool calls", and it is the
+  //   only summary a finished turn has when thinking mode is off.
+  const stepSummary = useAuiState(s =>
+    summarizeToolSteps(
+      s.message.parts as readonly { isError?: boolean; toolName?: string; type?: string }[],
+      t.assistant.thread
+    )
+  )
+
+  // A tool still awaiting its result. No longer a reason to hide this panel (it
+  // IS where pending rows live now — see the approval note on `open` below); it
+  // only decides whether the header can report final counts.
+  const hasPendingTool = useAuiState(selectMessageHasPendingTool)
+
+  // 当前动作 ("Running: curl …" / "Thinking")。同样是 primitive string —— 见组件顶部
+  // 关于 selector 必须返回 primitive 的说明。空串表示"正文已开始, 不必再报动作"。
+  const activityLabel = useAuiState(s => _computeActivityLabel(s.message.parts as readonly unknown[]))
 
   const runtime = useMessageRuntime()
+  const messageId = useAuiState(s => s.message.id)
+  const disclosureStates = useStore($toolDisclosureStates)
+
+  // This block also carries the turn's reasoning now, so a thinking-only turn
+  // (no tools at all) must still render it — otherwise the rationale would be
+  // silently dropped, which is what happened before reasoning moved in here.
+  const hasReasoning = useAuiState(s =>
+    s.message.parts.some(part => {
+      const p = part as { text?: unknown; type?: string } | null
+
+      return p?.type === 'reasoning' && typeof p.text === 'string' && p.text.trim().length > 0
+    })
+  )
+
+  // 待用户输入 (clarify / approval / sudo / secret) 时本轮是【停在人身上】, 不是在干活,
+  // 所以计时暂停 —— 否则把用户自己犹豫的时间也算成 agent 耗时。这一点在过程框里尤其
+  // 重要: 待批准的 Run/Reject 条就挂在本框的工具行上, 那正是最典型的 awaitingInput。
+  // (行为承自已删除的 CurrentActivityLine, 与宠物 awaitingInput 姿态优先于 busy 一致。)
+  const awaitingInput = useStore($activeSessionAwaitingInput)
+  // 模型正在写某个工具调用的参数 (gateway 的 tool.generating)。刻意【不是】一个 part:
+  // 它没有 tool_id, 变成 part 就会留下 tool.start 无法归并的孤儿行 (当年的"重复工具行"
+  // bug)。所以只在标题行报一句"正在准备", 不出行。见 store/tool-generating.ts。
+  const generatingToolRaw = useStore($generatingToolName)
+  // 只在本轮真的还在跑时采信: 这个 store 是 session 级的, 历史消息重渲染时不该跟着
+  // 显示别人的"正在准备"。
+  const generatingTool = messageRunning ? generatingToolRaw : ''
+  // ⚠ 必须在任何 early return 之【前】调用 (Hook 规则)。计时 key 绑 messageId, 所以
+  //   本轮内思考↔工具切换不会把总时长清零, 换一轮才重新计。
+  const elapsed = useElapsedSeconds(messageRunning && !awaitingInput, `activity:${messageId}`)
 
   const [userOpen, setUserOpen] = useState<boolean | null>(null)
-  const open = userOpen ?? false // default collapsed
+  // Auto-open while the turn is running, auto-collapse once it finishes and there
+  // is prose to read. The first explicit user toggle wins from then on (`userOpen`).
+  //
+  // ⚠ 承重, 不只是观感: 待批准的工具行 (PendingToolApproval / Run·Reject 条) 只存在于
+  //   这个框【展开时】渲染出来的那一行里。运行中默认展开, 用户才有东西可点; 否则本轮会
+  //   一直卡在等待批准而界面上看不到任何入口。用户手动折叠也是允许的 —— 那一行随之卸载,
+  //   registerApprovalInlineAnchor 的计数归零, 于是 PendingApprovalFallback (composer
+  //   上方的浮动批准条) 自动接管, 不会真的锁死。
+  //
+  //   完成态而【没有】正文时也保持展开: 那种轮次 (被中断 / 纯思考回复) 框里就是全部内容,
+  //   折叠等于把整轮藏进一个小三角后面。
+  const open = userOpen ?? (messageRunning || !hasVisibleText)
 
-  if (!hasVisibleText || toolCount === 0) {
+  // 只要本轮有过程 (思考或工具) 就渲染, 与是否已有正文、是否还在跑都无关 —— 这正是
+  // "执行中也要看得见过程"的要求。两者都没有 (纯正文回答) 才什么都不出。
+  //
+  // ★ generatingTool 也算"有过程": 模型正在写工具参数, 但此时【一个 part 都还没有】
+  //   (tool.start 要等参数写完 + 预检跑完才发, 且一批多个调用是攒齐一起发)。只看 part
+  //   的话这段窗口整个是空的 —— 界面看着发呆好几秒, 然后框一出来已经列着 2-3 个工具。
+  //   这是本轮唯一能提前知道"要调工具了"的信号。
+  if (!hasReasoning && toolCount === 0 && !generatingTool) {
     return null
   }
+
+  // 工具行【只】在这里渲染 (ToolGroupSlot 已恒 return null), 所以不再有"卡内/框内
+  // 二选一"的搬家问题, 也就不需要 hasVisibleText 这层条件。
+  const showTools = toolCount > 0
 
   // Extract full tool parts only when expanded — avoids array allocation cost
   // when collapsed, and sidesteps the useAuiState identity problem entirely.
   const toolParts: Array<ToolCallMessagePartProps & { argsFields?: unknown }> = []
 
-  if (open) {
+  if (open && showTools) {
     const state = runtime.getState()
 
     for (const part of state.content) {
@@ -1079,24 +1078,170 @@ export const ToolHistoryPanel: FC = () => {
     }
   }
 
+  // Compute disclosure IDs for all tool entries so we can batch toggle them.
+  const toolDisclosureIds = open
+    ? toolParts.map(part => {
+        const toolPart = { args: part.args, isError: part.isError, result: part.result, toolCallId: part.toolCallId, toolName: part.toolName, type: 'tool-call' as const }
+
+        return `tool-entry:${messageId}:${toolPartDisclosureId(toolPart)}`
+      })
+    : []
+
+  const allToolsExpanded = toolDisclosureIds.length > 0 && toolDisclosureIds.every(id => disclosureStates[id])
+
+  const handleToggleAllTools = () => {
+    setToolDisclosureOpenBatch(toolDisclosureIds, !allToolsExpanded)
+  }
+
+  // 标题行 = 本轮过程的一句话状态。
+  //   未完成 → 当前动作 ("Running: curl …" / "Thinking"), 即原 CurrentActivityLine 的
+  //            职责搬到这里 —— 过程框全程可见, 框外再放一行同样的状态就是重复。
+  //   完成后 → 定稿的批次摘要 ("执行了 1 条命令")。
+  // 未完成时【不】显示计数摘要: 计数还会变, 每来一个工具就抖一次; 更要紧的是, 停在
+  // 审批上时说"执行了 1 条命令"是错的 —— 那条命令还没跑。所以"显示什么"只看进度,
+  // 不看 awaitingInput。
+  const headerInProgress = messageRunning && (hasPendingTool || !hasVisibleText || Boolean(generatingTool))
+  // "正在准备 <tool>" 优先于 activityLabel: 后者派生自已有 parts, 在这个窗口里最多只能
+  // 说出上一个工具或泛泛的 "Thinking", 而 generatingTool 才是当下真正在发生的事。
+  const headerLabel = headerInProgress
+    ? generatingTool
+      ? t.assistant.thread.preparingTool(generatingTool)
+      : activityLabel || t.assistant.thread.thinking
+    : stepSummary || t.assistant.thread.toolHistory(toolCount)
+  // 而"要不要摆动效 / 走秒"另算: 停在用户身上 (审批/追问) 时 agent 并没有在干活,
+  // 继续流光 + 计时就是在说谎, 也会把用户自己犹豫的时间算进耗时。
+  const headerRunning = headerInProgress && !awaitingInput
+  // 计时 key 绑 messageId: 本轮内 label 在思考↔工具间切换不重置总时长。
+  const headerTimer = headerRunning ? <ActivityTimerText seconds={elapsed} /> : undefined
+
   return (
     <div
       className="w-full min-w-0 max-w-full rounded-lg bg-(--ui-bg-elevated) px-3 py-2 text-[length:var(--conversation-tool-font-size)] text-(--ui-text-tertiary)"
       data-slot="aui_tool-history-panel"
     >
-      <DisclosureRow onToggle={() => setUserOpen(!open)} open={open}>
-        <span className="text-[length:var(--conversation-tool-font-size)] font-medium leading-(--conversation-line-height) text-(--ui-text-secondary)">
-          {t.assistant.thread.toolHistory(toolCount)}
-        </span>
-      </DisclosureRow>
+      {/* 还没有任何工具行, 但正在准备工具 → 只出一行状态标题 (不可展开, 因为没有内容),
+          下面接 reasoning 折叠项 (若本轮已有思考)。这就是填补 tool.generating →
+          tool.start 那段空窗的最小表达: 有反馈, 但不制造一个之后无法归并的孤儿工具行。 */}
+      {toolCount === 0 && generatingTool ? (
+        <>
+          <div className="flex items-center justify-between">
+            <span
+              className={cn(
+                'min-w-0 truncate text-[length:var(--conversation-tool-font-size)] font-medium leading-(--conversation-line-height) text-(--ui-text-secondary)',
+                headerRunning && 'shimmer'
+              )}
+              data-slot="aui_tool-preparing"
+            >
+              {headerLabel}
+            </span>
+            {headerTimer}
+          </div>
+          <ReasoningInlineItem />
+        </>
+      ) : /* No tools to summarise → the block IS the reasoning disclosure. Wrapping
+          it in an outer "Thinking" row would make the user open "Thinking" only
+          to find another "Thinking" inside. */
+      !showTools || toolCount === 0 ? (
+        <ReasoningInlineItem />
+      ) : (
+        <>
+      <div className="flex items-center justify-between">
+        <DisclosureRow onToggle={() => setUserOpen(!open)} open={open} trailing={headerTimer}>
+          <span
+            className={cn(
+              'text-[length:var(--conversation-tool-font-size)] font-medium leading-(--conversation-line-height) text-(--ui-text-secondary)',
+              // 跑动中走 shimmer 流光 (与工具行未完成态同一套动效语言), 完成后静态实色。
+              headerRunning && 'shimmer'
+            )}
+          >
+            {headerLabel}
+          </span>
+        </DisclosureRow>
+        {open && toolDisclosureIds.length > 0 && (
+          <button
+            className="shrink-0 cursor-pointer select-none text-[length:var(--conversation-tool-font-size)] font-medium text-(--ui-text-tertiary) transition-colors hover:text-(--ui-text-primary)"
+            onClick={handleToggleAllTools}
+            type="button"
+          >
+            {allToolsExpanded ? t.assistant.thread.collapseAllTools : t.assistant.thread.expandAllTools}
+          </button>
+        )}
+      </div>
       {open && (
         <div className="mt-1 grid min-w-0 max-w-full gap-(--tool-row-gap) overflow-hidden">
+          {/* ☁️ This turn's reasoning, as ONE nested item above the calls it
+              produced. Previously reasoning lived in a separate panel ABOVE the
+              answer card, and `CompletedReasoningPanel` emitted one disclosure
+              per reasoning segment — so a single turn showed two "thinking"
+              rows (one of which displayed reasoning prose that merely mentioned
+              a command, reading like a stray tool row) on one side of the answer
+              and the tool list on the other. One process block, one ☁️ item. */}
+          <ReasoningInlineItem />
           {toolParts.map(part => (
             <ChainToolFallback
               key={part.toolCallId || part.toolName}
               {...part}
             />
           ))}
+        </div>
+      )}
+        </>
+      )}
+    </div>
+  )
+}
+
+// The ☁️ reasoning row inside the process block. Merges EVERY reasoning segment
+// of the turn into a single collapsible item — segments are joined rather than
+// each getting their own disclosure, which is what produced the duplicate
+// "Thinking" rows. Collapsed by default: raw chain-of-thought is long, often
+// English even in a zh UI, and is never the answer.
+const ReasoningInlineItem: FC = () => {
+  const { t } = useI18n()
+  const [open, setOpen] = useState(false)
+  const reasoningText = useAuiState(s => {
+    const segments: string[] = []
+
+    for (const part of s.message.parts) {
+      const p = part as { text?: unknown; type?: string } | null
+
+      if (p?.type === 'reasoning' && typeof p.text === 'string') {
+        const trimmed = p.text.trim()
+
+        if (trimmed) {
+          segments.push(trimmed)
+        }
+      }
+    }
+
+    return segments.join(_REASONING_SEP)
+  })
+
+  if (!reasoningText) {
+    return null
+  }
+
+  return (
+    // Keeps the established `aui_thinking-disclosure` slot: streaming.test.tsx
+    // pins "exactly ONE reasoning disclosure per turn, collapsed by default"
+    // against this marker, and that contract still holds here.
+    <div className="min-w-0 max-w-full" data-slot="aui_thinking-disclosure">
+      <DisclosureRow onToggle={() => setOpen(!open)} open={open}>
+        <span className="flex min-w-0 items-baseline gap-1.5">
+          <span aria-hidden>☁️</span>
+          <span className="text-[length:var(--conversation-tool-font-size)] font-medium leading-(--conversation-line-height) text-(--ui-text-secondary)">
+            {t.assistant.thread.thinking}
+          </span>
+        </span>
+      </DisclosureRow>
+      {open && (
+        <div className="mt-0.5 max-h-40 w-full min-w-0 max-w-full overflow-auto wrap-anywhere pb-1">
+          <MarkdownTextContent
+            containerClassName="text-xs leading-snug text-muted-foreground/85"
+            containerProps={{ 'data-slot': 'aui_reasoning-text' } as ComponentProps<'div'>}
+            isRunning={false}
+            text={reasoningText}
+          />
         </div>
       )}
     </div>
@@ -1160,6 +1305,7 @@ export function selectQueryWorkerToolEntries(
 }
 
 export const QueryMultimodalTool: FC<ToolCallMessagePartProps> = props => {
+  const { t } = useI18n()
   const result = queryWorkerResult(props.result)
   const taskId = typeof result.task_id === 'string' ? result.task_id.trim() : ''
   const trajectoryStore = useMemo(() => queryTrajectoryTaskStore(taskId), [taskId])
@@ -1180,7 +1326,7 @@ export const QueryMultimodalTool: FC<ToolCallMessagePartProps> = props => {
           data-testid="query-worker-trajectory-waiting"
         >
           <span className="mr-1.5 inline-block animate-spin">◌</span>
-          等待 QueryWorker 第一条结构化轨迹…
+          {t.multimodal.trajectory.waitingFirstEntry}
         </div>
       )}
     </div>
@@ -1208,102 +1354,11 @@ const ChainToolFallback: FC<ToolCallMessagePartProps> = props => {
   return <ToolFallback {...props} />
 }
 
-const ThinkingDisclosure: FC<{
-  children: ReactNode
-  messageRunning?: boolean
-  pending?: boolean
-  timerKey?: string
-}> = ({ children, messageRunning = false, pending = false, timerKey }) => {
-  const { t } = useI18n()
-  // `null` = no explicit user toggle yet, defer to the streaming default.
-  // The default is "auto-open while streaming, auto-collapse when done" so
-  // reasoning surfaces a live preview without manual interaction. The first
-  // explicit toggle wins from then on.
-  const [userOpen, setUserOpen] = useState<boolean | null>(null)
-  const elapsed = useElapsedSeconds(pending, timerKey)
-  const scrollRef = useRef<HTMLDivElement | null>(null)
-  const contentRef = useRef<HTMLDivElement | null>(null)
-  const enterRef = useEnterAnimation(messageRunning, timerKey)
-
-  const open = userOpen ?? pending
-  const isPreview = pending && userOpen === null
-
-  // While the preview is live, pin the scroll container to the bottom on
-  // every content growth so the latest tokens are always visible. Combined
-  // with the top mask in styles.css, this reads as text settling in from
-  // below while older lines fade out at the top.
-  useEffect(() => {
-    if (!isPreview) {
-      return
-    }
-
-    const el = scrollRef.current
-    const content = contentRef.current
-
-    if (!el || !content) {
-      return
-    }
-
-    const pin = () => {
-      el.scrollTop = el.scrollHeight
-    }
-
-    pin()
-    const observer = new ResizeObserver(pin)
-    observer.observe(content)
-
-    return () => observer.disconnect()
-    // Re-run when the disclosure toggles so the observer attaches to the new
-    // DOM after expand/collapse (refs are conditionally rendered on `open`).
-  }, [isPreview, open])
-
-  return (
-    <div
-      className="text-[length:var(--conversation-tool-font-size)] text-(--ui-text-tertiary)"
-      data-slot="aui_thinking-disclosure"
-      ref={enterRef}
-    >
-      <DisclosureRow onToggle={() => setUserOpen(!open)} open={open}>
-        <span className="flex min-w-0 items-baseline gap-1.5">
-          <span
-            className={cn(
-              'text-[length:var(--conversation-tool-font-size)] font-medium leading-(--conversation-line-height) text-(--ui-text-secondary)',
-              pending && 'shimmer text-foreground/55'
-            )}
-          >
-            {t.assistant.thread.thinking}
-          </span>
-          {pending && (
-            <ActivityTimerText
-              className="text-[length:var(--conversation-caption-font-size)] tabular-nums text-(--ui-text-tertiary)"
-              seconds={elapsed}
-            />
-          )}
-        </span>
-      </DisclosureRow>
-      {open && (
-        <div
-          className={cn(
-            // Body sits flush with the "Thinking" header — no left indent —
-            // and inherits the disclosure-level opacity fade defined in
-            // styles.css (~0.67 at rest, 1 on hover/focus).
-            'mt-0.5 w-full min-w-0 max-w-full overflow-hidden wrap-anywhere pb-1',
-            isPreview && 'thinking-preview max-h-40'
-          )}
-          ref={scrollRef}
-        >
-          <div ref={contentRef}>{children}</div>
-        </div>
-      )}
-    </div>
-  )
-}
-
-// ★ ReasoningGroup slot 全程 return null: reasoning 的 UI 表达完全交给
-//   AssistantMessage 层的 ThinkingBubble (流式期) / CompletedReasoningPanel
-//   (完成后) —— 都是"卡外一整块", 不再随 message.parts 顺序内嵌到正文卡里,
-//   彻底避开 interleaved thinking (reasoning ↔ tool_call ↔ text 交错) 在完成态
-//   把多个 "Thinking" 折叠块散布进 tool card / 正文之间的显示异常。
+// ★ ReasoningGroup slot 全程 return null: reasoning 的 UI 表达完全交给过程框里的
+//   ReasoningInlineItem (ToolHistoryPanel 内的 ☁️ 折叠项) —— 全程只有那一处、一整块,
+//   不再随 message.parts 顺序内嵌到正文卡里。这样彻底避开 interleaved thinking
+//   (reasoning ↔ tool_call ↔ text 交错) 把多个 "Thinking" 折叠块散布进 tool card /
+//   正文之间的显示异常。
 const ReasoningAccordionGroup: FC<{ children?: ReactNode; endIndex: number; startIndex: number }> = () => null
 
 const ReasoningTextPart: FC<{ text: string; status?: { type: string } }> = ({ text, status }) => {

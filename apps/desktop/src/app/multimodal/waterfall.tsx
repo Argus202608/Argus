@@ -4,6 +4,7 @@ import { memo, type ReactNode, useState } from 'react'
 import { CompactMarkdown } from '@/components/chat/compact-markdown'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
+import { useI18n } from '@/i18n'
 import { Volume2 } from '@/lib/icons'
 import { cn } from '@/lib/utils'
 import { $mmMessages, answerMultimodalClarify, fmtClock, type MmMessage } from '@/store/multimodal'
@@ -52,6 +53,8 @@ export function Waterfall() {
  *   深研时掉帧。加 memo 后流式期只重渲染活跃那一条, 历史全部跳过。
  */
 const Row = memo(function Row({ m }: { m: MmMessage }) {
+  const { t } = useI18n()
+  const c = t.multimodal.composer
   // ★ 逐条 ▶ 朗读按钮只在"无自动播报"时显示 (喇叭关 且 对话关)。任一自动播报开着 →
   //   隐藏, 防"自动念 + 手动点"双重播放。hook 必须在早 return 前无条件调用。
   const autoSpeakOn = useStore($mmTtsEnabled) || useStore($mmVoiceDialogEnabled)
@@ -76,7 +79,7 @@ const Row = memo(function Row({ m }: { m: MmMessage }) {
     return (
       <MmDisclosure defaultOpen={false} syncOpen={false} title={title}>
         <div data-selectable-text="true" className="whitespace-pre-wrap pl-[1.375rem] text-(--ui-text-secondary)">
-          {m.toolDetail || m.toolSummary || '(无更多信息)'}
+          {m.toolDetail || m.toolSummary || c.noMoreInfo}
         </div>
       </MmDisclosure>
     )
@@ -102,7 +105,7 @@ const Row = memo(function Row({ m }: { m: MmMessage }) {
           <div className="mb-1 flex items-center gap-1.5 text-xs text-(--ui-text-tertiary)">
             <span>You</span>
             <Clock m={m} />
-            {m.voice && <span title="语音输入">🎤</span>}
+            {m.voice && <span title={c.voiceInput}>🎤</span>}
           </div>
           <div data-selectable-text="true" className="whitespace-pre-wrap break-words rounded-md border border-(--dt-user-bubble-border) bg-(--dt-user-bubble) px-3 py-2 text-sm text-(--ui-text-primary)">
             {m.text}
@@ -116,7 +119,7 @@ const Row = memo(function Row({ m }: { m: MmMessage }) {
   //    (often multi-line) body is FOLDED by default so it doesn't flood the chat.
   //    This is an ephemeral $mmMessages bubble — never written to history.
   if (m.subRole === 'watcher_report') {
-    const tag = m.brief || '深度分析'
+    const tag = m.brief || t.multimodal.deepAnalysis.title
     return (
       <div className="rounded-lg border-l-2 border-(--ui-purple) bg-(--ui-chat-surface-background) py-2 pl-3 pr-3">
         <MmDisclosure
@@ -142,7 +145,7 @@ const Row = memo(function Row({ m }: { m: MmMessage }) {
     const isMonitor = m.subRole === 'monitor'
     // Router bubbles are labelled with the analysis EVENT NAME (the brief the
     // user asked), replacing the old "已回传主对话" — falls back to "深度分析".
-    const tag = isMonitor ? m.monitorLabel || '监控提醒' : m.brief || '深度分析'
+    const tag = isMonitor ? m.monitorLabel || c.monitorTag : m.brief || t.multimodal.deepAnalysis.title
     return (
       <div
         className={cn(
@@ -200,7 +203,7 @@ const Row = memo(function Row({ m }: { m: MmMessage }) {
             <button
               className="text-(--ui-text-quaternary) transition-colors hover:text-(--ui-text-secondary)"
               onClick={() => speakText(m.text)}
-              title="朗读"
+              title={c.readAloud}
             >
               <Volume2 className="size-3.5" />
             </button>
@@ -216,7 +219,7 @@ const Row = memo(function Row({ m }: { m: MmMessage }) {
               syncOpen={m.streaming}
               title={
                 <DisclosureTitle live={m.streaming}>
-                  思考过程
+                  {c.thinkingProcess}
                   {m.streaming && !m.text.trim() && (
                     <span className="ml-1 inline-flex gap-0.5 align-middle">
                       <span className="size-1 animate-bounce rounded-full bg-(--ui-text-tertiary) [animation-delay:-0.3s]" />
@@ -284,6 +287,8 @@ function Avatar({ children }: { children: ReactNode }) {
  * clarify.respond; this is presentation only.
  */
 function ClarifyRow({ m }: { m: MmMessage }) {
+  const { t } = useI18n()
+  const c = t.multimodal.composer
   const reqId = m.clarifyReqId || ''
   const answered = m.clarifyAnswer !== undefined
   const choices = m.clarifyChoices || []
@@ -295,23 +300,23 @@ function ClarifyRow({ m }: { m: MmMessage }) {
       <div className="flex items-center gap-2 text-xs text-(--ui-text-tertiary)">
         <span className="flex size-4 items-center justify-center rounded-full bg-(--ui-bg-tertiary) text-[10px]">✓</span>
         <span>
-          已选择：<span className="text-(--ui-text-primary)">{m.clarifyAnswer || '（空）'}</span>
+          {c.selectedLabel('')}<span className="text-(--ui-text-primary)">{m.clarifyAnswer || c.emptyChoice}</span>
         </span>
       </div>
     )
   }
 
   const submitText = () => {
-    const t = draft.trim()
-    if (!t) return
-    void answerMultimodalClarify(reqId, t)
+    const value = draft.trim()
+    if (!value) return
+    void answerMultimodalClarify(reqId, value)
     setDraft('')
   }
 
   return (
     <div className="rounded-lg border-l-2 border-(--ui-yellow) bg-(--ui-chat-surface-background) py-2 pl-3 pr-3">
       <div className="mb-1.5 flex items-center gap-1.5">
-        <span className="rounded bg-(--ui-yellow)/15 px-1.5 py-0.5 text-[10px] font-medium text-(--ui-yellow)">需要你确认</span>
+        <span className="rounded bg-(--ui-yellow)/15 px-1.5 py-0.5 text-[10px] font-medium text-(--ui-yellow)">{c.needConfirm}</span>
       </div>
       <div className="mb-2 whitespace-pre-wrap text-sm text-(--ui-text-primary)">{m.clarifyQuestion}</div>
       {!openEnded ? (
@@ -333,12 +338,12 @@ function ClarifyRow({ m }: { m: MmMessage }) {
                 submitText()
               }
             }}
-            placeholder="输入你的回答，回车提交…"
+            placeholder={c.answerPlaceholderEnter}
             rows={1}
             value={draft}
           />
           <Button onClick={submitText} size="xs">
-            提交
+            {c.submit}
           </Button>
         </div>
       )}

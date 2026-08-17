@@ -4,7 +4,7 @@ Loads the real on-disk multimodal Config, runs the pure
 ``agent.multimodal.readiness.probe_mm_readiness`` probe, and prints each
 capability's state (ok / missing / broken / unknown) with the reason and a
 copy-pasteable fix — reusing doctor's check_ok/check_warn/check_fail style so
-it looks like the rest of ``hermes doctor``.
+it looks like the rest of ``argus doctor``.
 
 Exit code: 0 if all REQUIRED capabilities are ready, else 1 — so it can gate CI
 and scripts.
@@ -93,6 +93,6 @@ def run_mm_doctor(args) -> int:
         f"  ✗ 多模态未就绪 — 缺必需能力: {', '.join(missing_required)}",
         Colors.RED, Colors.BOLD))
     print(color(
-        "    运行 `hermes setup multimodal` 按引导补齐,或按上面的修复命令手动处理。",
+        "    运行 `argus setup multimodal` 按引导补齐,或按上面的修复命令手动处理。",
         Colors.YELLOW))
     return 1

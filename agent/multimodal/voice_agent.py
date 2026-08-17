@@ -1,7 +1,7 @@
 """VoiceAgent v2 — 常驻语音交互 Agent (设计 .plans/voice_agent_proactive_upgrade.md).
 
 线程模型 = 1 后台 daemon 线程 + 私有 asyncio loop (run_forever)
-  ├─ 主线程 (submit_user 入口): ASR final → decide_route 秒判 → 直答/委派
+  ├─ 主线程 (submit_user 入口): ASR final → 直接派发主 Agent
   ├─ 理解 worker (长驻, 可重入=异步并发): 取用户作业 → create_task 起子协程 →
   │   提交主 Agent → 阻塞等结果 → 结果最高优先入回播队列
   └─ 交互 worker (长驻): 回播队列新条目触发 → 拉四源快照 → 生成口播措辞 → TTS
@@ -23,7 +23,6 @@ from typing import Any, Callable, Optional, List
 
 from agent.multimodal.voice_agent_context import (
     build_world_snapshot,
-    decide_route,
     decide_speak,
     judge_intent_eou_local,
     judge_intent_eou_remote,
@@ -103,9 +102,7 @@ class VoiceAgent:
         va.stop()    # 优雅停机
     """
 
-    # 委派主 Agent 时的兜底承接语 (仅当分诊 LLM 失败/没给 answer 时用; 正常情况承接语
-    #   由 _DECIDE_ROUTE_SYSTEM prompt 产出)。★不再用生硬的"好的"。
-    _DEFAULT_HANDOFF = "好嘞，这个我让 Wall-E 去办，稍等哈"
+    # (已废弃) 快速回复/分诊逻辑已移除，所有用户话直接派发主 Agent。
 
     def __init__(
         self,
@@ -358,7 +355,7 @@ class VoiceAgent:
           2) ★ 层3 LLM 意图分类 (async): 判"是否在跟我说话", 不是 → 丢
              ★ 只有层2+层3都放行, 才认为是真的用户输入 → 打断 TTS + 走 route
           3) 打断当前 TTS + 清空回播队列 (让出发声通道)
-          4) 起 decide_route 分诊: self 直答 / main_agent 委派 (承接语 answer + 丢主 Agent)
+          4) 直接派发主 Agent (不做分诊快速回复)
         """
         text = (text or "").strip()
         if not text:
@@ -606,93 +603,21 @@ class VoiceAgent:
             self._qa_dialogue = self._qa_dialogue[-12:]
 
     async def _route_user(self, text: str) -> None:
-        """主线程分诊: 拉快照 → decide_route → 分流 (self 直答 / main_agent 委派).
+        """对话模式入口: 用户话直接派发主 Agent（不做分诊快速回复）.
 
-        全程 async, 不阻塞主线程 (submit_user 秒返回).
+        快速回复（decide_route → route=self）已移除：LLM 超时/不稳定时会产出
+        低质量兜底（如"让Wall-E去办"），体验不可控。现在统一由主 Agent 处理
+        所有用户话（含问候），回复质量由主 Agent + decide_speak + phrase_utterance
+        三层保证。
         """
-        # ── 分诊: 本地 Qwen 已停用, 全走远端 deepseek-v4-flash (auxiliary.voice_intent)。
-        #   默认 False: 即使 config 漏了 local_enabled 也不走本地。
-        use_local = bool(self._aux_voice_intent.get("use_local", False))
-        local_decision = None
-        if use_local:
-            try:
-                from agent.multimodal.voice_intent_local import decide_route_local
-                hint = (self._self_recent[-1][:60]
-                        if self._self_recent and (time.time() - self._last_spoke_ts) < 15.0
-                        else "")
-                r = await asyncio.to_thread(decide_route_local, text, hint)
-                if r is not None:
-                    local_decision = r
-                    log.info("[voice._route_user] LOCAL route=%s answer=%r",
-                             r[0], r[1][:40])
-            except Exception as exc:
-                log.debug("[voice._route_user] local decide err: %s", exc)
-
-        # 本地已明确判决 → 直接分流, 跳过远端 (秒回).
-        # ★ self / main_agent 统一: 都播 answer + 记 QA。区别只在 main_agent 额外把作业
-        #   丢理解队列 (承接语先安抚, 真结果稍后由主 Agent 跑完再播)。answer 由分诊 LLM
-        #   给 (main_agent=承接语+"交给Wall-E", self=直答), 不再硬编码"好的"。
-        if local_decision is not None:
-            route, answer = local_decision
-            answer = (answer or "").strip() or self._DEFAULT_HANDOFF
-            self._emit_progress(
-                "route_decision", route=route, local=True,
-                user_text=text, answer=answer)
-            self._record_qa(text, answer)
-            self._enqueue_speak("self_answer", answer, PRI_HIGH, "", skip_phrase=True)
-            if route == "main_agent":
-                self._enqueue_user_task(text)
-            return
-
-        # ── 本地不确定 → fallback 远端 voice_intent / DeepSeek 精判 ──
-        # 拉快照 (触发事件 = 用户话)
-        snap = build_world_snapshot(
-            session=self._session,
-            trigger={"kind": "user_utter", "text": text},
-            self_recent=self._recent_all(),
-            last_spoke_ts=self._last_spoke_ts,
-            convo_turns=self._settings.get("voice_interact_ctx_convo_turns", 6),
-            convo_max_chars=self._settings.get("voice_interact_ctx_convo_max_chars", 1200),
-            self_recent_n=self._settings.get("voice_interact_ctx_self_recent", 2),
-            qa_dialogue=self._qa_dialogue,
-            qa_turns=self._settings.get("voice_qa_dialogue_turns", 6),
-        )
-        # LLM 分诊
-        decision = await decide_route(
-            client=self._aux_client, model=self._aux_model, snapshot=snap,
-            timeout_sec=float(self._settings.get("voice_interact_llm_timeout_sec", 6.0)),
-        )
-        # Post-await liveness re-check
         if not self.is_interactive():
             log.debug("[voice._route_user] session no longer interactive, skip")
             return
-        # ★ self / main_agent 统一分流: 都播分诊 LLM 给的 answer + 记 QA。
-        #   - main_agent (含 decision=None fallback): answer=承接语("交给Wall-E"), 空则兜底
-        #     _DEFAULT_HANDOFF; 额外把作业丢理解队列 (承接语先安抚, 真结果稍后主 Agent 播)。
-        #   - self: answer=口语直答, 空则兜底"嗯"。
-        #   ★ 不再硬编码"好的" —— 委派语气由 _DECIDE_ROUTE_SYSTEM prompt 产出。
-        #   skip_phrase=True: answer 已是成品口语 (prompt 约束), 不必再过拟词 LLM。
-        if decision is None or decision.route == "main_agent":
-            answer = (decision.answer.strip() if decision and decision.answer else "") \
-                or self._DEFAULT_HANDOFF
-            log.info("[voice._route_user] → main_agent (decision=%s) answer=%r text=%r",
-                     "fallback" if decision is None else "llm", answer[:40], text[:60])
-            self._emit_progress(
-                "route_decision", route="main_agent", local=False,
-                fallback=decision is None, user_text=text, answer=answer)
-            self._record_qa(text, answer)
-            self._enqueue_speak("self_answer", answer, PRI_HIGH, "", skip_phrase=True)
-            self._enqueue_user_task(text)
-            return
-        # route=self → 直接把答案入回播队列 (高优先, 用户直问)
-        answer = (decision.answer or "").strip() or "嗯"   # LLM 说 self 但没给 answer → 兜底
-        log.info("[voice._route_user] → self answer=%r", answer[:60])
+        log.info("[voice._route_user] → main_agent (direct) text=%r", text[:80])
         self._emit_progress(
-            "route_decision", route="self", local=False,
-            user_text=text, answer=answer)
-        # 记入独立 QA 队列 (route=self, 不进主 Agent).
-        self._record_qa(text, answer)
-        self._enqueue_speak("self_answer", answer, PRI_HIGH, "", skip_phrase=True)
+            "route_decision", route="main_agent", local=False,
+            fallback=False, user_text=text, answer="")
+        self._enqueue_user_task(text)
 
     def _enqueue_user_task(self, text: str) -> None:
         """在 loop 线程里入理解队列 (Phase-5 会由子协程消费并提交主 Agent)."""

@@ -563,9 +563,9 @@ class TestProfileScopedChatPty:
         )
         argv, cwd, env = web_server._resolve_chat_argv(profile="worker_beta")
         assert env is not None
-        assert env["HERMES_HOME"] == str(isolated_profiles["worker_beta"])
+        assert env["ARGUS_HOME"] == str(isolated_profiles["worker_beta"])
         # Scoped chat must NOT attach to the dashboard's in-memory gateway.
-        assert "HERMES_TUI_GATEWAY_URL" not in env
+        assert "ARGUS_TUI_GATEWAY_URL" not in env
 
     def test_chat_argv_unscoped_keeps_legacy_env(self, isolated_profiles, monkeypatch):
         import hermes_cli.web_server as web_server
@@ -577,7 +577,7 @@ class TestProfileScopedChatPty:
         )
         argv, cwd, env = web_server._resolve_chat_argv()
         assert env is not None
-        assert env.get("HERMES_HOME") != str(isolated_profiles["worker_beta"])
+        assert env.get("ARGUS_HOME") != str(isolated_profiles["worker_beta"])
 
     def test_chat_argv_unknown_profile_raises(self, isolated_profiles, monkeypatch):
         import hermes_cli.web_server as web_server
@@ -592,3 +592,73 @@ class TestProfileScopedChatPty:
         with pytest.raises(web_server.HTTPException) as exc:
             web_server._resolve_chat_argv(profile="ghost")
         assert exc.value.status_code == 404
+
+
+class TestProfileScopeAttributeContract:
+    """``_profile_scope`` swaps module globals BY NAME — pin those names.
+
+    The scope retargets ``ARGUS_HOME``/``SKILLS_DIR`` on ``tools.skills_tool``
+    and ``tools.skill_manager_tool`` (their import-time bindings can't see the
+    contextvar override). Because the swap is attribute access on a module, a
+    rename on either side fails only at runtime, inside a ``@contextmanager``
+    ``__enter__`` — and every endpoint wrapped in the scope catches broad
+    ``Exception`` and reports its own generic 500. That is exactly what happened
+    when the Argus rename moved ``skills_tool.HERMES_HOME`` to ``ARGUS_HOME``
+    and left this reader behind: ~43 endpoints began failing, and
+    ``GET /api/model/moa`` reported "Failed to read MoA config" while the config
+    was perfectly valid. Nothing caught it because nothing asserted the names.
+    """
+
+    def test_skill_modules_expose_the_attributes_the_scope_swaps(self):
+        from tools import skill_manager_tool, skills_tool
+
+        for module in (skills_tool, skill_manager_tool):
+            assert hasattr(module, "ARGUS_HOME"), (
+                f"{module.__name__} must expose ARGUS_HOME — _profile_scope swaps it by name"
+            )
+            assert hasattr(module, "SKILLS_DIR")
+
+    def test_scope_retargets_and_restores_both_modules(self, isolated_profiles):
+        import hermes_cli.web_server as web_server
+        from tools import skill_manager_tool, skills_tool
+
+        before = (
+            skills_tool.ARGUS_HOME,
+            skills_tool.SKILLS_DIR,
+            skill_manager_tool.ARGUS_HOME,
+            skill_manager_tool.SKILLS_DIR,
+        )
+        target = isolated_profiles["worker_beta"]
+
+        with web_server._profile_scope("worker_beta"):
+            assert skills_tool.ARGUS_HOME == target
+            assert skills_tool.SKILLS_DIR == target / "skills"
+            assert skill_manager_tool.ARGUS_HOME == target
+            assert skill_manager_tool.SKILLS_DIR == target / "skills"
+
+        # Restored on exit — these are process-global, so a leak would bleed
+        # one request's profile into every later one.
+        assert before == (
+            skills_tool.ARGUS_HOME,
+            skills_tool.SKILLS_DIR,
+            skill_manager_tool.ARGUS_HOME,
+            skill_manager_tool.SKILLS_DIR,
+        )
+
+    def test_moa_endpoint_reads_config_through_the_scope(self, client, isolated_profiles):
+        """The reported symptom: a valid MoA config returning 500."""
+        (isolated_profiles["worker_beta"] / "config.yaml").write_text(
+            "moa:\n"
+            "  presets:\n"
+            "    default:\n"
+            "      enabled: true\n"
+            "      reference_models:\n"
+            "        - provider: openrouter\n"
+            "          model: scoped/ref-model\n",
+            encoding="utf-8",
+        )
+
+        resp = client.get("/api/model/moa", params={"profile": "worker_beta"})
+
+        assert resp.status_code == 200, resp.text
+        assert "scoped/ref-model" in resp.text

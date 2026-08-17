@@ -1,6 +1,8 @@
 import { cleanup, render, screen } from '@testing-library/react'
+import type { ReactElement } from 'react'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
+import { I18nProvider } from '@/i18n'
 import {
   $mmBgItems,
   $mmMonitorAlerts,
@@ -10,6 +12,10 @@ import {
 } from '@/store/multimodal-deep'
 
 import { DeepPanel } from './deep-panel'
+
+function renderZh(ui: ReactElement) {
+  return render(<I18nProvider configClient={null} initialLocale="zh">{ui}</I18nProvider>)
+}
 
 describe('desktop watcher registry presentation', () => {
   beforeEach(() => {
@@ -32,7 +38,7 @@ describe('desktop watcher registry presentation', () => {
       { watcher_id: 'deleted', label: '已删任务', status: 'deleted' }
     ])
 
-    render(<DeepPanel />)
+    renderZh(<DeepPanel />)
 
     expect(screen.queryByText('已删任务')).toBeNull()
     expect(screen.getByText('· 已完成')).toBeTruthy()
@@ -46,7 +52,7 @@ describe('desktop watcher registry presentation', () => {
   it('renders nothing when deleted watchers are the only deep-panel state', () => {
     $mmWatchers.set([{ watcher_id: 'deleted', label: '已删任务', status: 'deleted' }])
 
-    const { container } = render(<DeepPanel />)
+    const { container } = renderZh(<DeepPanel />)
 
     expect(container.innerHTML).toBe('')
   })

@@ -102,8 +102,11 @@ describe('ToolsetConfigPanel', () => {
     fireEvent.click(elevenlabs)
 
     // Open the env var actions menu and click "Set" to enter editing mode.
+    // Radix opens its dropdown on pointerdown, which `fireEvent.click` does not
+    // dispatch — keyboard activation is the reliable way to open it in jsdom
+    // (same approach as tool-approval.test.tsx).
     const actionsBtn = await screen.findByRole('button', { name: /Actions for ELEVENLABS_API_KEY/ })
-    fireEvent.click(actionsBtn)
+    fireEvent.keyDown(actionsBtn, { key: 'Enter' })
     const setItem = await screen.findByRole('menuitem', { name: /Set/ })
     fireEvent.click(setItem)
 

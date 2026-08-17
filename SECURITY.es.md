@@ -6,7 +6,7 @@ alcance para los informes de vulnerabilidades.
 
 ## 1. Reportar una Vulnerabilidad
 
-Reporta de forma privada a través de [GitHub Security Advisories](https://github.com/NousResearch/argus/security/advisories/new)
+Reporta de forma privada a través de [GitHub Security Advisories](https://github.com/MMArgus-Team/Argus/security/advisories/new)
 o **security@nousresearch.com**. No abras issues públicos para
 vulnerabilidades de seguridad. **Argus Agent no opera un programa de
 recompensas por errores.**

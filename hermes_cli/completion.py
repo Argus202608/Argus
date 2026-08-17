@@ -99,10 +99,10 @@ def generate_bash(parser: argparse.ArgumentParser) -> str:
 
     return f"""# Hermes Agent bash completion
 # Add to ~/.bashrc:
-#   eval "$(hermes completion bash)"
+#   eval "$(argus completion bash)"
 
 _hermes_profiles() {{
-    local profiles_dir="$HOME/.hermes/profiles"
+    local profiles_dir="$HOME/.argus/profiles"
     local profiles="default"
     if [ -d "$profiles_dir" ]; then
         for f in "$profiles_dir"/*/; do
@@ -202,13 +202,13 @@ def generate_zsh(parser: argparse.ArgumentParser) -> str:
     return f"""#compdef hermes
 # Hermes Agent zsh completion
 # Add to ~/.zshrc:
-#   eval "$(hermes completion zsh)"
+#   eval "$(argus completion zsh)"
 
 _hermes_profiles() {{
     local -a profiles
     profiles=(default)
-    if [[ -d "$HOME/.hermes/profiles" ]]; then
-        profiles+=($HOME/.hermes/profiles/*(N/:t))
+    if [[ -d "$HOME/.argus/profiles" ]]; then
+        profiles+=($HOME/.argus/profiles/*(N/:t))
     fi
     _describe 'profile' profiles
 }}
@@ -256,13 +256,13 @@ def generate_fish(parser: argparse.ArgumentParser) -> str:
     lines: list[str] = [
         "# Hermes Agent fish completion",
         "# Add to your config:",
-        "#   hermes completion fish | source",
+        "#   argus completion fish | source",
         "",
         "# Helper: list available profiles",
         "function __hermes_profiles",
         "    echo default",
-        "    if test -d $HOME/.hermes/profiles",
-        "        for d in $HOME/.hermes/profiles/*/",
+        "    if test -d $HOME/.argus/profiles",
+        "        for d in $HOME/.argus/profiles/*/",
         "            basename $d",
         "        end",
         "    end",

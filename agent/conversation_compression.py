@@ -132,7 +132,7 @@ def check_compression_model_feasibility(agent: Any) -> None:
                 msg = (
                     "⚠ No auxiliary LLM provider configured — context "
                     "compression will drop middle turns without a summary. "
-                    "Run `hermes setup` or set OPENROUTER_API_KEY."
+                    "Run `argus setup` or set OPENROUTER_API_KEY."
                 )
             agent._compression_warning = msg
             agent._emit_status(msg)
@@ -437,7 +437,7 @@ def compress_context(
                     "compression lock subsystem unavailable for session=%s "
                     "(%s: %s) — proceeding without lock. This usually means a "
                     "stale in-memory module after an update; restart the "
-                    "process (or `hermes update`) to resync.",
+                    "process (or `argus update`) to resync.",
                     _lock_sid, type(_lock_err).__name__, _lock_err,
                 )
             _lock_acquired = True  # treat as acquired-but-unlocked; proceed
@@ -619,7 +619,7 @@ def compress_context(
 
                     set_current_session_id(agent.session_id)
                 except Exception:
-                    os.environ["HERMES_SESSION_ID"] = agent.session_id
+                    os.environ["ARGUS_SESSION_ID"] = agent.session_id
                 # The gateway/tools session context (ContextVar + env) and the
                 # logging session context are SEPARATE mechanisms. The call above
                 # moves the former; the ``[session_id]`` tag on log lines comes
@@ -639,7 +639,7 @@ def compress_context(
                 try:
                     agent._session_db.create_session(
                         session_id=agent.session_id,
-                        source=agent.platform or os.environ.get("HERMES_SESSION_SOURCE", "cli"),
+                        source=agent.platform or os.environ.get("ARGUS_SESSION_SOURCE", "cli"),
                         model=agent.model,
                         model_config=agent._session_init_model_config,
                         parent_session_id=old_session_id,
@@ -664,7 +664,7 @@ def compress_context(
                         from gateway.session_context import set_current_session_id
                         set_current_session_id(agent.session_id)
                     except Exception:
-                        os.environ["HERMES_SESSION_ID"] = agent.session_id
+                        os.environ["ARGUS_SESSION_ID"] = agent.session_id
                     try:
                         from hermes_logging import set_session_context
                         set_session_context(agent.session_id)

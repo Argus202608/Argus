@@ -5,15 +5,15 @@ run`` was the standard pattern — the gateway ran as the container's
 main process, container exit code matched gateway exit code, no
 supervision. With s6 as PID 1, the same invocation now auto-redirects
 to the supervised path (`gateway start`) so users get auto-restart on
-crash and a supervised dashboard alongside (when ``HERMES_DASHBOARD=1``).
+crash and a supervised dashboard alongside (when ``ARGUS_DASHBOARD=1``).
 
 These tests verify the three load-bearing properties of that redirect:
 
   1. The default invocation **does** redirect (container stays up via
      ``sleep infinity`` while s6 supervises ``gateway-default``).
-  2. ``--no-supervise`` / ``HERMES_GATEWAY_NO_SUPERVISE=1`` opts out.
+  2. ``--no-supervise`` / ``ARGUS_GATEWAY_NO_SUPERVISE=1`` opts out.
   3. The supervised process itself does NOT recurse — the
-     ``HERMES_S6_SUPERVISED_CHILD`` sentinel breaks the loop.
+     ``ARGUS_S6_SUPERVISED_CHILD`` sentinel breaks the loop.
 
 Every ``docker exec`` runs as ``hermes`` per the conftest module
 docstring; see ``tests/docker/conftest.py`` for rationale.
@@ -105,12 +105,12 @@ def test_gateway_run_redirects_to_supervised(
 
     # Wait for the redirect breadcrumb to appear in docker logs.
     # Under heavy parallel load (32-way docker test fan-out), the CMD
-    # process (main-wrapper.sh → python → hermes gateway run) can take
+    # process (main-wrapper.sh → python → argus gateway run) can take
     # well over 5s to reach the redirect logic. The breadcrumb is the
     # definitive signal that the redirect fired — polling for it is
     # both faster on quick machines and flake-free on slow ones.
     # Under heavy parallel docker load (32-way fan-out), the CMD process
-    # (main-wrapper.sh → python → hermes gateway run) can take well over
+    # (main-wrapper.sh → python → argus gateway run) can take well over
     # 30s to import the codebase, load config, and reach the redirect
     # logic. 60s matches the deadline other boot-readiness polls use.
     logs = wait_for_docker_logs(
@@ -181,7 +181,7 @@ def test_gateway_run_no_supervise_flag_preserves_legacy_behavior(
 
     Three positive assertions confirm we took the pre-s6 path:
 
-      * The CMD process is a python ``hermes gateway run`` invocation
+      * The CMD process is a python ``argus gateway run`` invocation
         (not ``sleep infinity``).
       * The ``gateway-default`` s6 service slot is NOT created.
       * No supervision-redirect breadcrumb appears in docker logs.
@@ -248,7 +248,7 @@ def test_gateway_run_no_supervise_env_var(
     """
     start_container(
         built_image, container_name,
-        "HERMES_GATEWAY_NO_SUPERVISE=1",
+        "ARGUS_GATEWAY_NO_SUPERVISE=1",
         cmd="gateway run",
     )
 
@@ -270,7 +270,7 @@ def test_gateway_run_no_supervise_env_var(
     # it) but should not have want-state up.
     if status == "running":
         assert not _svstat_wants_up(container_name, "gateway-default"), (
-            "HERMES_GATEWAY_NO_SUPERVISE=1: gateway-default has "
+            "ARGUS_GATEWAY_NO_SUPERVISE=1: gateway-default has "
             "want-state up, implying the redirect dispatched `start` "
             f"despite the env-var opt-out. svstat:\n{_svstat(container_name)!r}"
         )
@@ -279,12 +279,12 @@ def test_gateway_run_no_supervise_env_var(
 def test_supervised_gateway_does_not_recurse(
     built_image: str, container_name: str,
 ) -> None:
-    """The HERMES_S6_SUPERVISED_CHILD sentinel must prevent the
-    supervised ``hermes gateway run`` from re-entering the redirect.
+    """The ARGUS_S6_SUPERVISED_CHILD sentinel must prevent the
+    supervised ``argus gateway run`` from re-entering the redirect.
 
     If recursion happened, every supervised gateway start would itself
     re-dispatch to s6 and exec ``sleep infinity`` — so the supervised
-    gateway slot would never actually run a python ``hermes gateway
+    gateway slot would never actually run a python ``argus gateway
     run`` process. The slot would oscillate or settle into a state
     with no python in the supervise tree at all.
 
@@ -297,18 +297,18 @@ def test_supervised_gateway_does_not_recurse(
 
     # Wait for the redirect to fire by polling for the breadcrumb.
     # Under CI parallel docker test fan-out, the CMD process
-    # (main-wrapper.sh → python → hermes gateway run) can take well
+    # (main-wrapper.sh → python → argus gateway run) can take well
     # over 6s to reach the redirect logic. A fixed sleep would race:
     # if we check too early, the CMD process hasn't exec'd into
     # `sleep infinity` yet and the s6-supervised gateway hasn't
-    # started either — so we'd see the CMD's `hermes gateway run`
+    # started either — so we'd see the CMD's `argus gateway run`
     # AND the supervised one (2 processes) and falsely conclude
     # recursion. Polling the breadcrumb is the definitive signal
     # that the redirect fired and the CMD process is now `sleep`.
     wait_for_docker_logs(container_name, "s6 supervision")
 
     # Now that the redirect fired, count python processes running
-    # `hermes gateway run`. If the recursion guard fails, s6 would
+    # `argus gateway run`. If the recursion guard fails, s6 would
     # respawn fresh `gateway run` processes on every cycle, leaving
     # multiple Python-process descendants under the gateway-default
     # supervise tree.
@@ -316,7 +316,7 @@ def test_supervised_gateway_does_not_recurse(
     assert r.returncode == 0
     n = int(r.stdout.strip() or 0)
     assert n <= 1, (
-        f"expected at most one supervised python `hermes gateway run` "
+        f"expected at most one supervised python `argus gateway run` "
         f"process (the legitimately-supervised gateway); found {n}. "
         f"Recursion guard may have failed. "
         f"ps:\n{docker_exec_sh(container_name, 'ps -eo pid,ppid,cmd').stdout}"
@@ -346,7 +346,7 @@ def test_supervised_gateway_does_not_recurse(
 def test_dashboard_supervised_when_env_set(
     built_image: str, container_name: str,
 ) -> None:
-    """When ``HERMES_DASHBOARD=1`` is set, ``docker run <image> gateway
+    """When ``ARGUS_DASHBOARD=1`` is set, ``docker run <image> gateway
     run`` should result in BOTH the gateway and the dashboard being
     supervised by s6 — the dashboard slot was always there but only
     activates with the env var. This is the headline benefit of the
@@ -355,7 +355,7 @@ def test_dashboard_supervised_when_env_set(
     """
     start_container(
         built_image, container_name,
-        "HERMES_DASHBOARD=1",
+        "ARGUS_DASHBOARD=1",
         cmd="gateway run",
     )
 

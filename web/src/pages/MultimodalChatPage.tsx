@@ -15,30 +15,29 @@
  *
  * Frames + questions share ONE session, so workers resolve the same buffer.
  */
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FC, type UIEvent } from "react";
-import { Activity, Bug, Camera, Database, FileText, Monitor, RefreshCw, Search, Send, Mic, Volume2, Square, Play, Loader2, ArrowDown, NotebookPen, ChevronDown, MessagesSquare, Table2, X } from "lucide-react";
+import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FC, type UIEvent } from "react";
+import { ArrowDown, Camera, ChevronDown, Database, Loader2, MessagesSquare, Mic, Monitor, NotebookPen, Play, Send, Square, Terminal, Volume2 } from "lucide-react";
 import { ChatModelPill } from "@/components/ChatModelPill";
+import { ChatSessionContext } from "@/contexts/chat-session-context";
 import { useSearchParams } from "react-router-dom";
 import { Button } from "@nous-research/ui/ui/components/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@nous-research/ui/ui/components/card";
 import { Badge } from "@nous-research/ui/ui/components/badge";
 import { GatewayClient } from "@/lib/gatewayClient";
 import { HERMES_BASE_PATH, api } from "@/lib/api";
-import type {
-  MmMemoryDebugEvent,
-  MmMemoryDebugFrameResponse,
-  MmMemoryDebugSearchResult,
-  MmMemoryDebugSessionResponse,
-  MmMemoryDebugSessionSummary,
-  MmMemoryDebugTraceResponse,
-} from "@/lib/api";
 import { Markdown } from "@/components/Markdown";
 import { MmReadinessBanner, type MmReadinessReport } from "@/components/MmReadinessBanner";
+// Debug-only panel behind the header's "Memory" button: lazy so its ~170 kB of
+// inspector UI stays out of the multimodal chunk until someone actually opens it.
+const MemoryDebugPanel = lazy(() =>
+  import("./MemoryDebugPanel").then((m) => ({ default: m.MemoryDebugPanel })));
+import { useCliDrawer } from "@/contexts/cli-drawer-context";
 import { usePageHeader } from "@/contexts/usePageHeader";
 import { useProfileScope } from "@/contexts/useProfileScope";
 import { preferLightCapture } from "@/lib/perf-hints";
 import { formatElapsed, useElapsedSeconds } from "@/hooks/useElapsedSeconds";
 import { visualCaptureProfile } from "@/lib/visual-capture-profile";
+import { RECALL_NO_CLUES, isSynthSaw } from "@/lib/mm-sentinels";
 import {
   isEphemeralControl,
   monitorPresentation,
@@ -46,6 +45,19 @@ import {
   resolveRegistryPull,
   type MonitorRegistryItem,
 } from "@/lib/monitor-control";
+import {
+  AsrTurnTransport,
+  asrFinishFailureMessage,
+  ownsAsrStopUi,
+  type AsrStopDisposition,
+  type AsrTurnMode,
+} from "@/lib/asr-turn-transport";
+import {
+  VoiceDialogRecovery,
+  type VoiceDialogActivation,
+} from "@/lib/voice-dialog-recovery";
+import { useI18n, useLocaleRevision } from "@/i18n";
+import { translateNow } from "@/i18n/runtime";
 
 type SourceType = "camera" | "screen" | null;
 
@@ -94,6 +106,11 @@ interface ChatMsg {
   toolSummary?: string;
   toolDurationMs?: number;
   toolDetail?: string;   // result_text / inline_diff (expandable)
+  // A failed call (`{"error": ...}` in the tool result). Kept separate from the
+  // bubble-level `isError` so the row can be styled as a failure and say WHY
+  // without the user having to expand it.
+  toolIsError?: boolean;
+  toolError?: string;
   // Structured, privacy-classified call args from tool.start's `args_fields`.
   // Ships in every mode (not just verbose) so a tool row always has something
   // to expand — a bare tool name can't tell the user what the model did.
@@ -461,6 +478,7 @@ interface Refs {
   capFps: number;
   capTimer: number | null;
   startTs: number;
+  captureAttemptId: string;
   sentFrames: number;
   // Frames skipped because the WS out-buffer was over the backpressure
   // threshold. Surfaced in the diag log so we can tell "capture is throttling"
@@ -482,6 +500,13 @@ interface Refs {
   micNode: AudioWorkletNode | null;
   micSource: MediaStreamAudioSourceNode | null;
   isRecording: boolean;
+  asrTransport: AsrTurnTransport | null;
+  micGeneration: number;
+  micFlushResolve: (() => void) | null;
+  micStopPromise: Promise<void> | null;
+  // A disconnect/session boundary cancels the exact old turn before a
+  // continuous Voice Dialog is allowed to bind to the replacement sid.
+  micBoundaryPromise: Promise<void> | null;
   // env audio (screen/people speaking → audio_observation in memory)
   envStream: MediaStream | null;
   envRecorder: MediaRecorder | null;
@@ -505,6 +530,76 @@ interface Refs {
   // Stashed so the monitor/watcher toggle (render scope) can re-pull the
   // authoritative registry after a toggle (confirm the optimistic flip).
   fetchRegistries?: (sid: string) => void;
+}
+
+type MicLifecycleState = "idle" | "connecting" | "recording" | "finalizing";
+
+/**
+ * Stop browser capture immediately. For a user-initiated finish we first ask
+ * the worklet to emit its sub-200ms tail, then close the audio graph. Cancel
+ * paths deliberately discard that tail and never submit it.
+ */
+async function stopLocalMic(r: Refs, flushTail: boolean): Promise<boolean> {
+  const node = r.micNode;
+  let flushPromise: Promise<boolean> = Promise.resolve(!flushTail);
+  if (flushTail && node && r.isRecording) {
+    flushPromise = new Promise<boolean>((resolve) => {
+      let settled = false;
+      let timeout = 0;
+      const finish = (confirmed: boolean) => {
+        if (settled) return;
+        settled = true;
+        if (timeout) window.clearTimeout(timeout);
+        r.micFlushResolve = null;
+        resolve(confirmed);
+      };
+      r.micFlushResolve = () => finish(true);
+      timeout = window.setTimeout(() => finish(false), 300);
+      try {
+        node.port.postMessage({ type: "flush" });
+      } catch {
+        finish(false);
+      }
+    });
+  }
+  // Queue the worklet flush first, then stop the physical track in the same
+  // synchronous turn. Capture ends immediately, while the already-processed
+  // tail remains available to the worklet's message handler.
+  try { r.micStream?.getTracks().forEach((track) => track.stop()); } catch { /* noop */ }
+  const flushConfirmed = await flushPromise;
+  r.isRecording = false;
+  r.micFlushResolve = null;
+  try {
+    if (node) {
+      node.port.onmessage = null;
+      node.port.close();
+      node.disconnect();
+    }
+  } catch { /* noop */ }
+  try { r.micSource?.disconnect(); } catch { /* noop */ }
+  try {
+    if (r.micAudioCtx && r.micAudioCtx.state !== "closed") await r.micAudioCtx.close();
+  } catch { /* noop */ }
+  r.micNode = null;
+  r.micSource = null;
+  r.micAudioCtx = null;
+  r.micStream = null;
+  return flushConfirmed;
+}
+
+/** Cancel the transport before tearing down PCM so late worklet messages drop. */
+function cancelActiveMic(r: Refs): Promise<void> {
+  r.micGeneration += 1;
+  const turn = r.asrTransport?.current();
+  const cancel = turn
+    ? r.asrTransport?.stop(turn.sessionId, turn.turnId, "cancel").catch(() => undefined)
+    : Promise.resolve();
+  const operation = Promise.allSettled([cancel, stopLocalMic(r, false)]).then(() => undefined);
+  r.micBoundaryPromise = operation;
+  void operation.finally(() => {
+    if (r.micBoundaryPromise === operation) r.micBoundaryPromise = null;
+  });
+  return operation;
 }
 
 function pickMicMime(): string {
@@ -821,7 +916,7 @@ const ChatComposer = memo(function ChatComposer({
   ttsEnabled, onTtsToggle,
   voiceDialogEnabled, onVoiceDialogToggle,
 }: {
-  micState: "idle" | "connecting" | "recording";
+  micState: MicLifecycleState;
   onSend: (text: string) => void;
   onMicToggle: () => void;
   generating: boolean;
@@ -831,12 +926,13 @@ const ChatComposer = memo(function ChatComposer({
   voiceDialogEnabled: boolean;
   onVoiceDialogToggle: () => void;
 }) {
+  const { t } = useI18n();
   const [askText, setAskText] = useState("");
   const taRef = useRef<HTMLTextAreaElement | null>(null);
   const submit = () => {
-    const t = askText.trim();
-    if (!t) return;
-    onSend(t);
+    const txt = askText.trim();
+    if (!txt) return;
+    onSend(txt);
     setAskText("");
   };
   // 单行起步, 内容换行时长高到 max-h-24 为止 —— 否则 rows={1} 的可视高度固定,
@@ -850,23 +946,26 @@ const ChatComposer = memo(function ChatComposer({
   }, [askText]);
   const connecting = micState === "connecting";
   const recording = micState === "recording";
+  const finalizing = micState === "finalizing";
   return (
     // items-end: composer surface 现在比三个 icon 按钮高, 按钮贴底对齐才不会飘在
     // 输入框中部 (desktop 同样用 items-end)。
     <div className="flex items-end gap-2 border-t p-3">
       <Button size="icon"
-        // Red only when actually recording. While connecting: neutral +
-        // disabled + spinner (not red). Idle: outlined.
+        // Red only when actually recording. Connecting stays clickable so a
+        // slow permission/backend handshake can be cancelled. Finalizing is
+        // disabled to make the one-submit boundary explicit and idempotent.
         // ★ 对话模式开时: 按钮态保持不变(不禁用/不联动高亮), 但点击无效 —— 拦截+
         //   提示在父级 onMicToggle 里做 (对话独占麦, 后台已联动)。
         destructive={recording}
         outlined={!recording}
-        disabled={connecting}
-        title={recording ? "点击结束录音"
-          : connecting ? "正在连接语音…"
-          : "点击开始说话(流式语音)"}
+        disabled={finalizing}
+        title={recording ? t.multimodal.voice.stopRecording
+          : connecting ? t.multimodal.voice.connecting
+          : finalizing ? t.multimodal.voice.connecting
+          : t.multimodal.voice.startSpeaking}
         onClick={onMicToggle}>
-        {connecting ? <Loader2 className="animate-spin" /> : <Mic />}
+        {connecting || finalizing ? <Loader2 className="animate-spin" /> : <Mic />}
       </Button>
       <Button size="icon"
         // 独立 TTS 语音播报开关 (与麦克风解耦): 开 = 实心高亮, 关 = 描边。
@@ -874,8 +973,8 @@ const ChatComposer = memo(function ChatComposer({
         //   拦截+提示在父级 onTtsToggle 里做。
         outlined={!ttsEnabled}
         title={ttsEnabled
-          ? "语音播报:开(主Agent/监控/深度分析气泡自动朗读)—点击关闭"
-          : "语音播报:关—点击开启自动朗读"}
+          ? t.multimodal.voice.ttsOnTitle
+          : t.multimodal.voice.ttsOffTitle}
         onClick={onTtsToggle}>
         <Volume2 />
       </Button>
@@ -885,8 +984,8 @@ const ChatComposer = memo(function ChatComposer({
           ? "bg-amber-400 text-background-base hover:bg-amber-500 active:bg-amber-500"
           : "hover:border-amber-400/70 hover:text-amber-300"}
         title={voiceDialogEnabled
-          ? "对话模式:开(语音自然交互, 智能分诊+秒回+可打断)—点击关闭"
-          : "对话模式:关—点击进入语音对话交互"}
+          ? t.multimodal.voice.dialogOnTitle
+          : t.multimodal.voice.dialogOffTitle}
         aria-pressed={voiceDialogEnabled}
         onClick={onVoiceDialogToggle}>
         <MessagesSquare />
@@ -908,7 +1007,7 @@ const ChatComposer = memo(function ChatComposer({
             if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); }
           }}
           rows={1}
-          placeholder="提问(画面会随问题一起发送)"
+          placeholder={t.multimodal.composer.placeholder}
           // min-w-0 让 flex 子项可以真正收缩(否则 textarea 的默认固有宽度会把
           // pill 挤出去); max-h-24 是长高的上限, 超过就内部滚动。
           className="max-h-24 min-w-0 flex-1 resize-none self-center overflow-y-auto border-0 bg-transparent p-0 text-sm leading-snug outline-none" />
@@ -918,12 +1017,12 @@ const ChatComposer = memo(function ChatComposer({
           accepted into the backend FIFO; Stop remains an explicit, separate
           action for cancelling the current turn + its queued successors. */}
       {generating && (
-        <Button className="shrink-0" size="icon" destructive title="停止当前回答" onClick={onStop}>
+        <Button className="shrink-0" size="icon" destructive title={t.multimodal.composer.stop} onClick={onStop}>
           <Square />
         </Button>
       )}
       <Button className="shrink-0" size="sm" prefix={<Send />} onClick={submit}>
-        {generating ? "排队发送" : "发送"}
+        {generating ? t.multimodal.composer.queued : t.multimodal.composer.send}
       </Button>
     </div>
   );
@@ -935,6 +1034,10 @@ const ChatComposer = memo(function ChatComposer({
 const AsrBar = memo(function AsrBar({
   recording, partial, buffer,
 }: { recording: boolean; partial: string; buffer: string[] }) {
+  // Re-render on language switch: this component's labels come from
+  // translateNow(), which React cannot see. Must precede the early return so
+  // the hook order stays stable across renders.
+  useLocaleRevision();
   if (!recording && !partial && buffer.length === 0) return null;
   const buffered = buffer.join(" ").trim();
   return (
@@ -1026,36 +1129,36 @@ function normalizeQueryWorkerOcrRecords(value: unknown): QueryWorkerOcrRecord[] 
 
 function queryOcrSourceLabel(sourceType?: string): string {
   const value = String(sourceType || "").trim().toLowerCase();
-  if (value === "camera" || value === "webcam") return "摄像头";
+  if (value === "camera" || value === "webcam") return translateNow("multimodal.ocr.cameraLive");
   if (["screen", "screenshare", "screen_share", "desktop", "display", "window", "tab"].includes(value)) {
-    return "屏幕共享";
+    return translateNow("multimodal.ocr.screenLive");
   }
-  return sourceType?.trim() || "来源未知";
+  return sourceType?.trim() || translateNow("multimodal.ocr.methodUnknown");
 }
 
 function queryOcrMethodLabel(evidenceSource?: string): string {
   const value = String(evidenceSource || "").trim().toLowerCase();
   if (value === "background_screen_texts" || value.includes("background") || value.includes("cache")) {
-    return "后台 OCR 缓存";
+    return translateNow("multimodal.ocr.backgroundCache");
   }
-  if (value === "synchronous_camera_ocr") return "摄像头即时 OCR";
-  if (value === "synchronous_screen_fallback") return "屏幕即时 OCR";
-  return evidenceSource?.trim() || "OCR 方法未知";
+  if (value === "synchronous_camera_ocr") return translateNow("multimodal.ocr.cameraLive");
+  if (value === "synchronous_screen_fallback") return translateNow("multimodal.ocr.screenLive");
+  return evidenceSource?.trim() || translateNow("multimodal.ocr.methodUnknown");
 }
 
 function queryOcrStateMessage(step: QueryWorkerProgressStep): string {
   if (step.ocrState === "timeout") {
-    return "OCR 超时；QueryWorker 已继续使用原始画面，不会因此阻塞回答。";
+    return translateNow("multimodal.ocr.timeout");
   }
   if (step.ocrState === "error") {
-    return "OCR 提取失败；QueryWorker 已继续使用原始画面。";
+    return translateNow("multimodal.ocr.error");
   }
   if (step.ocrState === "skipped") {
-    if (step.ocrReason === "no_frozen_frames") return "已跳过 OCR：没有可用的冻结输入帧。";
-    if (step.ocrReason === "ocr_unavailable") return "已跳过 OCR：OCR 服务当前不可用。";
-    return `已跳过 OCR${step.ocrReason ? `：${step.ocrReason}` : "。"}`;
+    if (step.ocrReason === "no_frozen_frames") return translateNow("multimodal.ocr.skippedNoFrames");
+    if (step.ocrReason === "ocr_unavailable") return translateNow("multimodal.ocr.skippedUnavailable");
+    return step.ocrReason ? translateNow("multimodal.ocr.skippedWithReason", step.ocrReason) : translateNow("multimodal.ocr.skippedGeneric");
   }
-  return "OCR 已完成，但没有识别到可用文字。";
+  return translateNow("multimodal.ocr.noTextFound");
 }
 
 function QueryWorkerOcrEvidence({ step }: { step: QueryWorkerProgressStep }) {
@@ -1064,9 +1167,9 @@ function QueryWorkerOcrEvidence({ step }: { step: QueryWorkerProgressStep }) {
   return (
     <details open className="mt-1.5 rounded border border-sky-300/20 bg-sky-300/5 px-2 py-1.5">
       <summary className="cursor-pointer select-none list-none text-[10px] font-medium text-sky-100">
-        OCR 辅助文字
+        {translateNow("multimodal.ocr.helperTitle")}
         <span className="ml-1.5 font-normal text-muted-foreground/70">
-          {records.length ? `${count} 条` : "无文字"}
+          {records.length ? translateNow("multimodal.ocr.countItems", count) : translateNow("multimodal.ocr.noText")}
           {step.ocrElapsedSec != null ? ` · ${step.ocrElapsedSec.toFixed(2)}s` : ""}
         </span>
       </summary>
@@ -1076,7 +1179,7 @@ function QueryWorkerOcrEvidence({ step }: { step: QueryWorkerProgressStep }) {
             <div key={`${record.frameTs ?? "unknown"}-${record.evidenceSource || "ocr"}-${index}`} className="rounded border border-sky-300/15 bg-black/15 p-1.5">
               <div className="flex flex-wrap gap-1">
                 <span className="rounded border border-sky-300/20 px-1.5 py-0.5 font-mono text-[9px] text-sky-100/75">
-                  {record.frameTs != null ? formatTraceTime(record.frameTs) : "时间未知"}
+                  {record.frameTs != null ? formatTraceTime(record.frameTs) : translateNow("multimodal.ocr.timeUnknown")}
                 </span>
                 <span className="rounded border border-sky-300/20 px-1.5 py-0.5 text-[9px] text-sky-100/75">
                   {queryOcrSourceLabel(record.sourceType)}
@@ -1091,7 +1194,7 @@ function QueryWorkerOcrEvidence({ step }: { step: QueryWorkerProgressStep }) {
                 </div>
               )}
               <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded bg-black/20 p-1.5 text-[10px] text-foreground/80">
-                {record.rawText || "（该帧未识别到文字）"}
+                {record.rawText || translateNow("multimodal.ocr.noTextInFrame")}
               </pre>
             </div>
           ))}
@@ -1102,7 +1205,7 @@ function QueryWorkerOcrEvidence({ step }: { step: QueryWorkerProgressStep }) {
         </div>
       )}
       <div className="mt-1 text-[9px] text-sky-100/45">
-        仅作文字识别辅助，最终判断仍以冻结原图为准。
+        {translateNow("multimodal.misc.ocrDisclaimer")}
       </div>
     </details>
   );
@@ -1114,7 +1217,7 @@ function sourceClipMetric(value: unknown): string | undefined {
   const end = formatTraceTime(value.t_end);
   if (!start || !end) return undefined;
   const count = Number(value.n_frames || 0);
-  return `触发片段 ${start}–${end}${count ? ` · ${count} 帧` : ""}`;
+  return translateNow("multimodal.evidence.sourceClip", start, end, count);
 }
 
 function evidenceSegmentLabel(segment: RecallEvidenceSegment): string {
@@ -1122,10 +1225,10 @@ function evidenceSegmentLabel(segment: RecallEvidenceSegment): string {
   const end = formatTraceTime(segment.t_end);
   if (!start) return "";
   const time = end && end !== start ? `${start}–${end}` : start;
-  const kind = segment.kind === "audio" ? "音频"
-    : segment.kind === "quote" ? "引语"
-      : segment.kind === "screen" ? "屏幕"
-        : segment.kind === "frame" ? "画面" : "记忆";
+  const kind = segment.kind === "audio" ? translateNow("multimodal.evidence.audio")
+    : segment.kind === "quote" ? translateNow("multimodal.evidence.quote")
+      : segment.kind === "screen" ? translateNow("multimodal.evidence.screen")
+        : segment.kind === "frame" ? translateNow("multimodal.evidence.frame") : translateNow("multimodal.evidence.memory");
   return `${kind} ${time}`;
 }
 
@@ -1141,10 +1244,10 @@ function RecallTracePanel({
   return (
     <details className="mt-1 rounded border border-emerald-400/30 bg-emerald-400/5 p-2 text-[11px] text-emerald-100/90">
       <summary className="cursor-pointer select-none font-medium text-emerald-200">
-        Recall 执行轨迹 · {items.length} 步{toolCount ? ` · ${toolCount} 个内部工具` : ""}
+        {translateNow("multimodal.recall.traceTitle", items.length, toolCount)}
       </summary>
       <div className="mt-1 text-[10px] text-emerald-100/55">
-        结构化决策与证据摘要，不包含模型隐藏思维链。
+        {translateNow("multimodal.recall.traceSubtitle")}
       </div>
       <div className="mt-2 space-y-2">
         {findings && (
@@ -1173,7 +1276,7 @@ function RecallTracePanel({
               </div>
               {e.decision_summary && (
                 <div className="mb-1 whitespace-pre-wrap break-words text-muted-foreground">
-                  决策摘要：{e.decision_summary}
+                  {translateNow("multimodal.recall.decisionSummary", e.decision_summary)}
                 </div>
               )}
               {e.error && (
@@ -1230,6 +1333,7 @@ export const QueryWorkerProgressPanel = memo(function QueryWorkerProgressPanel({
   status?: ChatMsg["workerStatus"];
   steps: QueryWorkerProgressStep[];
 }) {
+  useLocaleRevision();  // labels come from translateNow — see AsrBar
   const active = !status || status === "running";
   const visible = steps.slice(-QUERY_WORKER_PROGRESS_LIMIT);
   return (
@@ -1239,17 +1343,17 @@ export const QueryWorkerProgressPanel = memo(function QueryWorkerProgressPanel({
           ? <span className="inline-block animate-spin">◌</span>
           : status === "complete" ? <span className="text-emerald-400">✓</span>
             : <span className="text-red-400">!</span>}
-        <span className="font-semibold">QueryWorker 实时过程</span>
+        <span className="font-semibold">{translateNow("multimodal.queryWorker.title")}</span>
         <span className="font-mono text-[10px] text-cyan-300/60">#{taskId}</span>
         <span className="ml-auto text-[10px] text-muted-foreground/70">
-          {active ? "工作中" : status === "complete" ? "已完成" : status || "已结束"}
+          {active ? translateNow("multimodal.queryWorker.working") : status === "complete" ? translateNow("multimodal.queryWorker.completed") : status || translateNow("multimodal.queryWorker.ended")}
         </span>
       </div>
       <div className="mt-1 text-[10px] leading-snug text-cyan-100/55">
-        展示结构化决策摘要、工具与证据；不包含模型隐藏思维链。
+        {translateNow("multimodal.queryWorker.subtitle")}
       </div>
       {visible.length === 0 ? (
-        <div className="mt-1.5 animate-pulse text-muted-foreground/70">等待第一条 worker 进度…</div>
+        <div className="mt-1.5 animate-pulse text-muted-foreground/70">{translateNow("multimodal.queryWorker.waitingProgress")}</div>
       ) : (
         <div className="mt-2 space-y-1 border-l border-cyan-400/25 pl-2">
           {visible.map((step, idx) => {
@@ -1301,7 +1405,7 @@ export const QueryWorkerProgressPanel = memo(function QueryWorkerProgressPanel({
                 {!!step.plannedTools?.length && (
                   <div className="mt-1.5 space-y-1">
                     <div className="text-[10px] text-cyan-200/70">
-                      {step.callState === "called" ? "实际调用" : "计划调用"}
+                      {step.callState === "called" ? translateNow("multimodal.queryWorker.actualCall") : translateNow("multimodal.queryWorker.plannedCall")}
                     </div>
                     {step.plannedTools.map((tool, i) => (
                       <details
@@ -1329,7 +1433,7 @@ export const QueryWorkerProgressPanel = memo(function QueryWorkerProgressPanel({
                 )}
                 {!!step.toolResults?.length && (
                   <div className="mt-1.5 space-y-1">
-                    <div className="text-[10px] text-emerald-200/70">工具返回</div>
+                    <div className="text-[10px] text-emerald-200/70">{translateNow("multimodal.queryWorker.toolReturned")}</div>
                     {step.toolResults.map((tool, i) => (
                       <details
                         key={`${tool.name || "tool-result"}-${i}`}
@@ -1339,9 +1443,9 @@ export const QueryWorkerProgressPanel = memo(function QueryWorkerProgressPanel({
                         <summary className="cursor-pointer select-none break-words text-foreground/80">
                           <span className="font-medium text-emerald-200">{tool.name || "memory tool"}</span>
                           {tool.args ? <span className="text-muted-foreground"> · {argPreview(tool.args)}</span> : null}
-                          {tool.obs_len != null ? <span className="text-muted-foreground/70"> · {tool.obs_len} 字</span> : null}
+                          {tool.obs_len != null ? <span className="text-muted-foreground/70"> · {translateNow("multimodal.queryWorker.chars", tool.obs_len)}</span> : null}
                           {tool.elapsed_sec != null ? <span className="text-muted-foreground/70"> · {tool.elapsed_sec.toFixed(2)}s</span> : null}
-                          {tool.frame_ids?.length ? <span className="text-muted-foreground/70"> · {tool.frame_ids.length} 帧</span> : null}
+                          {tool.frame_ids?.length ? <span className="text-muted-foreground/70"> · {translateNow("multimodal.queryWorker.frames", tool.frame_ids.length)}</span> : null}
                           {tool.cache_hit ? <span className="text-amber-200/70"> · cache hit</span> : null}
                           {tool.anchor ? (
                             <span className="text-muted-foreground/70">
@@ -1375,7 +1479,9 @@ export const QueryWorkerProgressPanel = memo(function QueryWorkerProgressPanel({
                                   title={segment.preview || label}
                                   className="rounded border border-amber-300/20 bg-amber-300/5 px-1.5 py-0.5 font-mono text-[9px] text-amber-100/80"
                                 >
-                                  {label}{segment.frame_ids?.length ? ` · ${segment.frame_ids.length}帧` : ""}
+                                  {label}{segment.frame_ids?.length
+                                    ? ` · ${translateNow("multimodal.queryWorker.frames", segment.frame_ids.length)}`
+                                    : ""}
                                 </span>
                               );
                             })}
@@ -1398,8 +1504,8 @@ export const QueryWorkerProgressPanel = memo(function QueryWorkerProgressPanel({
                   <div className="mt-1.5">
                     <div className="mb-1 text-[10px] text-cyan-200/70">
                       {askTimeFrames
-                        ? "提问时刻冻结输入帧（QueryWorker 实际输入的同源缩略图）"
-                        : "Recall 证据帧"}
+                        ? translateNow("multimodal.queryWorker.frozenInputTitle")
+                        : translateNow("multimodal.queryWorker.recallEvidence")}
                     </div>
                     <div className={askTimeFrames
                       ? "grid grid-cols-1 gap-1 sm:grid-cols-3"
@@ -1416,7 +1522,7 @@ export const QueryWorkerProgressPanel = memo(function QueryWorkerProgressPanel({
                                 href={dataUrl}
                                 target="_blank"
                                 rel="noreferrer"
-                                title="点击放大查看"
+                                title={translateNow("multimodal.queryWorker.clickToEnlarge")}
                                 className="block"
                               >
                                 <img
@@ -1429,7 +1535,7 @@ export const QueryWorkerProgressPanel = memo(function QueryWorkerProgressPanel({
                               <div className="flex h-20 items-center justify-center text-[9px]">no thumbnail</div>
                             )}
                             <figcaption className="truncate px-1 py-0.5 font-mono text-[9px] text-cyan-200/70">
-                              {fr.frame_id || `${askTimeFrames ? "输入帧" : "frame"} ${i + 1}`}
+                              {fr.frame_id || `${askTimeFrames ? translateNow("multimodal.queryWorker.inputFrame") : "frame"} ${i + 1}`}
                               {fr.ts != null ? ` · ${formatTraceTime(fr.ts)}` : ""}
                               {fr.source_type ? ` · ${fr.source_type}` : ""}
                             </figcaption>
@@ -1466,29 +1572,30 @@ export const ToolArgsPanel = memo(function ToolArgsPanel({
 }: {
   fields?: ToolArgField[];
 }) {
+  useLocaleRevision();  // labels come from translateNow — see AsrBar
   if (!fields || !fields.length) return null;
   return (
     <div className="mt-1">
-      <div className="mb-0.5 text-[10px] text-muted-foreground/70">入参</div>
+      <div className="mb-0.5 text-[10px] text-muted-foreground/70">{translateNow("multimodal.misc.toolArgsLabel")}</div>
       <div className="space-y-px rounded border bg-background/50 p-2">
         {fields.map((f, i) =>
           // `elided` carries no key (it is the "+N more" tail, not a field), so
           // it can't use f.key as its React key and renders as a bare note.
           f.kind === "elided" ? (
             <div key="elided" className="font-mono text-[10px] leading-relaxed text-muted-foreground/50 italic">
-              还有 {f.count} 个字段 (未显示)
+              {translateNow("multimodal.misc.moreFields", f.count)}
             </div>
           ) : (
             <div key={`${f.key}-${i}`} className="flex gap-2 font-mono text-[10px] leading-relaxed">
               <span className="shrink-0 text-violet-300/80">{f.key}</span>
               {f.kind === "credential" ? (
                 // 凭证类字段连长度都不发 —— 密码的长度本身就是线索。
-                <span className="text-amber-400/70 italic">已隐去 (凭证)</span>
+                <span className="text-amber-400/70 italic">{translateNow("multimodal.misc.redactedCredentials")}</span>
               ) : f.kind === "freeform" ? (
                 // 正文类字段只有长度 —— 后端不发内容, 这里也就无从渲染。
-                <span className="text-muted-foreground/60 italic">{f.chars} 字符 (未显示)</span>
+                <span className="text-muted-foreground/60 italic">{translateNow("multimodal.misc.charsNotShown", f.chars)}</span>
               ) : f.kind === "shape" ? (
-                <span className="text-muted-foreground/80">{f.count} 项</span>
+                <span className="text-muted-foreground/80">{translateNow("multimodal.misc.items", f.count)}</span>
               ) : (
                 <span className="min-w-0 break-all text-foreground/80">{f.value}</span>
               )}
@@ -1500,22 +1607,184 @@ export const ToolArgsPanel = memo(function ToolArgsPanel({
   );
 });
 
+// ── Segment summary ─────────────────────────────────────────────────────────
+// What a step block DID, in one line, derived purely from the tool calls — so
+// it works with thinking mode OFF, where there is no reasoning to show and the
+// header was the content-free "Processing" no matter what ran.
+//
+// Deliberately family-based rather than per-tool: the backend's `_tool_summary`
+// only produces text for `web_search` and `web_extract` (2 of ~74 tools), so
+// per-tool summaries are empty for almost everything. Families are derived from
+// the tool NAME, which every call has.
+// Full literal key paths, not `multimodal.misc.${family}` — src/i18n/
+// key-integrity.test.ts scans for string-literal keys at the call site, so a
+// template literal would silently opt these keys out of the guard that catches
+// a key missing from one locale. (These constants are still outside its regex;
+// the work-segments test asserts every one of them resolves in both locales.)
+const STEP_FAMILY_KEYS = {
+  read: "multimodal.misc.stepRead",
+  edit: "multimodal.misc.stepEdit",
+  run: "multimodal.misc.stepRun",
+  search: "multimodal.misc.stepSearch",
+  browse: "multimodal.misc.stepBrowse",
+  look: "multimodal.misc.stepLook",
+} as const;
+
+const STEP_OTHER_KEY = "multimodal.misc.stepCall";
+const STEP_FAILED_KEY = "multimodal.misc.stepFailed";
+
+type StepFamily = keyof typeof STEP_FAMILY_KEYS;
+
+function stepFamilyOf(toolName: string): StepFamily | null {
+  const n = toolName.toLowerCase();
+
+  if (/^(read_file|view_file|read|cat|list_dir|glob|find)/.test(n)) return "read";
+  if (/^(edit_file|write_file|apply_patch|patch|str_replace)/.test(n)) return "edit";
+  if (/^(terminal|bash|shell|execute_code|run)/.test(n)) return "run";
+  if (/^(web_search|search|grep|ripgrep|recall)/.test(n)) return "search";
+  if (/^(browser_|web_extract|fetch|open_url)/.test(n)) return "browse";
+  if (/^(get_current_frame|query_multimodal|show_memory_frame|screenshot)/.test(n)) return "look";
+
+  return null;
+}
+
+/** One-line "what this step did", e.g. `读了 2 个文件 · 执行了 1 条命令`. */
+export function summarizeStep(
+  items: readonly { kind?: string; toolName?: string; toolDone?: boolean; toolIsError?: boolean }[],
+  tr: (key: string, n: number) => string,
+): string {
+  const counts = new Map<StepFamily | "other", number>();
+  let failed = 0;
+
+  for (const it of items) {
+    if (it.kind !== "tool" || !it.toolName) continue;
+    if (it.toolIsError) failed += 1;
+    const fam = stepFamilyOf(it.toolName) ?? "other";
+    counts.set(fam, (counts.get(fam) ?? 0) + 1);
+  }
+
+  const parts: string[] = [];
+
+  // Stable, meaningful order — not Map insertion order, so the same set of
+  // calls always reads the same way.
+  for (const fam of ["read", "edit", "run", "search", "browse", "look"] as const) {
+    const n = counts.get(fam);
+    if (n) parts.push(tr(STEP_FAMILY_KEYS[fam], n));
+  }
+
+  const other = counts.get("other");
+  if (other) parts.push(tr(STEP_OTHER_KEY, other));
+  if (failed) parts.push(tr(STEP_FAILED_KEY, failed));
+
+  return parts.join(" · ");
+}
+
 // Grouped "background" card (tools + status). Memoized so it only re-renders
 // when its `items` array identity changes (the parent rebuilds `rows` from a
 // new `messages` array only when a message actually changes).
 // Exported for the render test that pins disclosure nesting depth.
-export const BgBlock = memo(function BgBlock({ items }: { items: ChatMsg[] }) {
+export const BgBlock = memo(function BgBlock({ items, thinking, seg }: {
+  items: ChatMsg[];
+  // Reasoning that preceded THIS segment's tool calls (see buildRows). Kept on
+  // the segment so "what it was thinking" stays next to "what it then did" —
+  // previously reasoning was dropped outright once the turn stopped streaming,
+  // so a finished turn showed tool names with no rationale anywhere.
+  thinking?: string;
+  seg?: number;
+}) {
+  useLocaleRevision();  // labels come from translateNow — see AsrBar
   const running = items.some((it) => it.kind === "tool"
     && (!it.toolDone || it.workerStatus === "running"));
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [allExpanded, setAllExpanded] = useState(false);
+  // Collapsed by default: the header line already names the step count, so the
+  // rationale is one click away without spending vertical space every turn.
+  const [thinkingOpen, setThinkingOpen] = useState(false);
+  const toolCount = items.filter((it) => it.kind === "tool").length;
+
+  const hasExpandable = items.some(
+    (it) => it.kind === "tool" && (it.toolDetail || (it.recallTrace && it.recallTrace.length) || it.recallFindings || (it.toolArgs && it.toolArgs.length))
+  );
+
+  // Drives the native <details> children directly rather than lifting each
+  // row's open state into React — the rows are rendered in a .map() so per-row
+  // state would need a component split, and the DOM is the source of truth for
+  // individually-toggled disclosures anyway.
+  const toggleAll = useCallback(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const next = !allExpanded;
+    el.querySelectorAll("details").forEach((d) => { d.open = next; });
+    setAllExpanded(next);
+  }, [allExpanded]);
+
+  // "Read 2 files · Ran 1 command" instead of a bare "Processing". Derived from
+  // the calls themselves, so it carries real information with thinking mode OFF
+  // too. While the step is still running we keep "Processing" — the counts are
+  // not final yet and would visibly churn.
+  const anyFailed = items.some((it) => it.kind === "tool" && it.toolIsError);
+  const stepLabel = running
+    ? translateNow("multimodal.misc.processing")
+    : summarizeStep(items, (key, n) => translateNow(key, n))
+      || translateNow("multimodal.misc.processing");
+
   return (
     <div className="ml-9 rounded-md border border-dashed border-violet-400/40 bg-violet-400/5 px-2.5 py-1.5 text-[11px]">
       <div className="mb-1 flex items-center gap-1.5 font-medium text-violet-400">
+        {/* A step containing a failed call must not report itself as all-clear —
+            the header is what the user scans when collapsed. */}
         {running
           ? <span className="inline-block animate-spin">◌</span>
-          : <span className="text-emerald-500">✓</span>}
-        处理过程
+          : anyFailed
+            ? <span className="text-red-400">✕</span>
+            : <span className="text-emerald-500">✓</span>}
+        {stepLabel}
+        {/* Segment index: with several segments per turn the user needs to know
+            which round this is. Count is already implied by stepLabel. */}
+        {seg != null && toolCount > 0 && (
+          <span className="font-normal text-violet-400/70">{" · "}#{seg}</span>
+        )}
+        {hasExpandable && (
+          <span
+            className="ml-auto cursor-pointer select-none text-[11px] font-medium text-violet-400 hover:text-violet-300"
+            onClick={toggleAll}
+          >
+            {allExpanded
+              ? translateNow("multimodal.misc.collapseAll")
+              : translateNow("multimodal.misc.expandAll")}
+          </span>
+        )}
       </div>
-      <div className="space-y-0.5">
+      {/* 💭 This segment's rationale, above the calls it produced.
+          Raw chain-of-thought is long, usually English even in a zh UI, and is
+          NOT an answer — it must never compete with the prose or push the tool
+          rows off screen. So: always exactly one line when collapsed (which is
+          the default), and a bounded scroll area when opened. */}
+      {thinking && (
+        <div className="mb-1">
+          <button
+            type="button"
+            aria-expanded={thinkingOpen}
+            className="flex w-full cursor-pointer items-center gap-1 text-left text-[11px] text-muted-foreground/80 hover:text-muted-foreground"
+            onClick={() => setThinkingOpen((v) => !v)}
+          >
+            <span className="shrink-0">💭</span>
+            {/* Keep the one-line preview even when open, so the row never
+                collapses to a bare chevron and the header stays a fixed height
+                (an empty label here is why the block looked headless). */}
+            <span className="min-w-0 flex-1 truncate">
+              {thinking.replace(/\s+/g, " ")}
+            </span>
+            <span className="shrink-0 text-muted-foreground/50">{thinkingOpen ? "▾" : "▸"}</span>
+          </button>
+          {thinkingOpen && (
+            <div className="mt-0.5 max-h-40 overflow-auto whitespace-pre-wrap break-words border-l border-violet-400/25 pl-2 text-[11px] leading-relaxed text-muted-foreground/85">
+              {thinking}
+            </div>
+          )}
+        </div>
+      )}
+      <div className="space-y-0.5" ref={containerRef}>
         {items.map((it) => {
           if (it.kind === "status") {
             return (
@@ -1527,15 +1796,22 @@ export const BgBlock = memo(function BgBlock({ items }: { items: ChatMsg[] }) {
           // tool entry — collapsible if it has detail
           const head = (
             <>
-              {it.toolDone
-                ? <span className="text-emerald-500">✓</span>
-                : <span className="inline-block animate-spin text-violet-400">◌</span>}
+              {/* A failure must not wear the success checkmark. */}
+              {it.toolIsError
+                ? <span className="text-red-400">✕</span>
+                : it.toolDone
+                  ? <span className="text-emerald-500">✓</span>
+                  : <span className="inline-block animate-spin text-violet-400">◌</span>}
               {" "}
               {/* 未完成的工具: 名字 + 参数摘要一起走 .shimmer 流光, 与上方思考行同一
                   套动效语言。完成后换成静态实色 + ✓ + 耗时, 一眼区分"在跑"和"跑完"。
                   这里不挂计时器: 行在 map 里, 每行一个 hook 需要拆组件, 而完成态本就
                   显示 toolDurationMs, 运行态的时长由上方思考行的计时器代表。 */}
-              <span className={it.toolDone ? "font-medium text-foreground/90" : "shimmer font-medium text-violet-300"}>
+              <span className={
+                it.toolIsError ? "font-medium text-red-300"
+                  : it.toolDone ? "font-medium text-foreground/90"
+                    : "shimmer font-medium text-violet-300"
+              }>
                 {it.toolName}
               </span>
               {it.toolCtx ? (
@@ -1543,7 +1819,13 @@ export const BgBlock = memo(function BgBlock({ items }: { items: ChatMsg[] }) {
                   {" · "}{it.toolCtx.slice(0, 80)}
                 </span>
               ) : null}
-              {it.toolDone && it.toolSummary ? <span className="text-muted-foreground"> ↳ {it.toolSummary.slice(0, 120)}</span> : null}
+              {/* Why it failed, inline — no expand needed. This is the single
+                  highest-value line on a failed row and it used to be hidden. */}
+              {it.toolError ? (
+                <span className="text-red-400"> ↳ {it.toolError.split("\n")[0].slice(0, 160)}</span>
+              ) : it.toolDone && it.toolSummary ? (
+                <span className="text-muted-foreground"> ↳ {it.toolSummary.slice(0, 120)}</span>
+              ) : null}
               {it.toolDurationMs != null ? <span className="text-muted-foreground/60"> · {(it.toolDurationMs / 1000).toFixed(1)}s</span> : null}
             </>
           );
@@ -1557,7 +1839,7 @@ export const BgBlock = memo(function BgBlock({ items }: { items: ChatMsg[] }) {
                     {head}
                     {hasRecallTrace ? (
                       <span className="ml-2 rounded border border-emerald-400/30 px-1.5 py-0.5 text-[10px] text-emerald-300">
-                        展开 Recall Trace
+                        {translateNow("multimodal.misc.expandRecallTrace")}
                       </span>
                     ) : null}
                   </summary>
@@ -1572,7 +1854,7 @@ export const BgBlock = memo(function BgBlock({ items }: { items: ChatMsg[] }) {
                   {it.toolDetail && (
                     <div className="mt-1">
                       {hasRecallTrace && (
-                        <div className="mb-0.5 text-[10px] text-muted-foreground/70">原始输出</div>
+                        <div className="mb-0.5 text-[10px] text-muted-foreground/70">{translateNow("multimodal.misc.rawOutputLabel")}</div>
                       )}
                       <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words rounded border bg-background/50 p-2">{it.toolDetail}</pre>
                     </div>
@@ -1596,6 +1878,9 @@ export const BgBlock = memo(function BgBlock({ items }: { items: ChatMsg[] }) {
   // ★ 性能(#6): 按 items 逐元素引用比较 (不是数组引用)。rows useMemo 每次都 new 一个
   //   items 数组, 但纯 chat 流式期间 tool/status 消息对象 identity 不变 → 内容相同的
   //   bg 块在这里判等、跳过重渲染。只有本块的 tool/status 真变 (新增/patch) 才重渲染。
+  //   `thinking`/`seg` 也要比 —— 否则 interleaved reasoning 折进本段后画面不更新。
+  a.thinking === b.thinking &&
+  a.seg === b.seg &&
   a.items.length === b.items.length && a.items.every((it, i) => it === b.items[i]),
 );
 
@@ -1615,6 +1900,7 @@ const ClarifyBubble = memo(function ClarifyBubble({
   m: ChatMsg;
   onAnswer: (reqId: string, answer: string) => void;
 }) {
+  useLocaleRevision();  // labels come from translateNow — see AsrBar
   const reqId = m.clarifyReqId || "";
   const answered = m.clarifyAnswer !== undefined;
   const choices = m.clarifyChoices || [];
@@ -1639,7 +1925,7 @@ const ClarifyBubble = memo(function ClarifyBubble({
           ✓
         </div>
         <div className="min-w-0 flex-1 self-center text-xs text-muted-foreground">
-          已选择：<span className="text-foreground">{m.clarifyAnswer || "（空）"}</span>
+          {translateNow("multimodal.clarify.selected")}<span className="text-foreground">{m.clarifyAnswer || translateNow("multimodal.clarify.emptySelection")}</span>
         </div>
       </div>
     );
@@ -1650,7 +1936,7 @@ const ClarifyBubble = memo(function ClarifyBubble({
         ?
       </div>
       <div className="min-w-0 flex-1">
-        <div className="mb-1 text-xs font-medium text-amber-300">需要你确认</div>
+        <div className="mb-1 text-xs font-medium text-amber-300">{translateNow("multimodal.clarify.needsConfirmation")}</div>
         <div className="rounded-md border border-amber-400/40 bg-amber-400/5 p-2.5">
           <div className="mb-2 whitespace-pre-wrap text-sm text-amber-100">{m.clarifyQuestion}</div>
           {/* Only the unanswered state renders here — the answered case is
@@ -1670,9 +1956,9 @@ const ClarifyBubble = memo(function ClarifyBubble({
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
                 onKeyDown={(e) => { if (e.key === "Enter") submitText(); }}
-                placeholder="输入你的回答，回车提交…"
+                placeholder={translateNow("multimodal.clarify.placeholder")}
                 className="min-w-0 flex-1 rounded border bg-background px-2 py-1 text-xs" />
-              <Button size="sm" onClick={submitText}>提交</Button>
+              <Button size="sm" onClick={submitText}>{translateNow("multimodal.clarify.submit")}</Button>
             </div>
           )}
         </div>
@@ -1686,10 +1972,11 @@ const ClarifyBubble = memo(function ClarifyBubble({
 const WatcherReportBubble = memo(function WatcherReportBubble({
   m, onPlay,
 }: { m: ChatMsg; onPlay?: (text: string) => void }) {
+  const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const body = m.text.trim();
   // brief 形如 "腾讯会议新消息监控 · 第1段" → 拆成 标签(进紫框) + 段号(做正文折叠头)。
-  const rawBrief = m.brief || "深度分析";
+  const rawBrief = m.brief || t.multimodal.deepAnalysis.title;
   const sepIdx = rawBrief.lastIndexOf(" · ");
   const label = sepIdx >= 0 ? rawBrief.slice(0, sepIdx) : rawBrief;
   const segment = sepIdx >= 0 ? rawBrief.slice(sepIdx + 3) : "";
@@ -1711,9 +1998,9 @@ const WatcherReportBubble = memo(function WatcherReportBubble({
           {body && onPlay && (
             <button
               onClick={() => onPlay(body)}
-              title="播放语音"
+              title={t.multimodal.chat.playVoice}
               className="ml-1 inline-flex items-center gap-1 rounded border border-border/50 px-1.5 py-0.5 text-[10px] text-muted-foreground hover:border-primary/60 hover:text-primary">
-              <Play className="h-3 w-3" /> 播放
+              <Play className="h-3 w-3" /> {t.multimodal.chat.play}
             </button>
           )}
           {m.requestId && (
@@ -1727,7 +2014,7 @@ const WatcherReportBubble = memo(function WatcherReportBubble({
             className="flex w-full cursor-pointer select-none items-center gap-1.5 text-left text-sm"
             onClick={() => setOpen((o) => !o)}
           >
-            <span className="shrink-0 font-medium text-violet-200">{segment || "查看分析"}</span>
+            <span className="shrink-0 font-medium text-violet-200">{segment || t.multimodal.chat.viewAnalysis}</span>
             {m.deepRange && (
               <span className="shrink-0 tabular-nums text-xs font-normal text-violet-300/70">{m.deepRange}</span>
             )}
@@ -1742,10 +2029,10 @@ const WatcherReportBubble = memo(function WatcherReportBubble({
             <button
               type="button"
               onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
-              title={open ? "收起" : "展开全文"}
+              title={open ? t.multimodal.chat.collapse : t.multimodal.chat.expandFull}
               className="ml-auto inline-flex shrink-0 items-center gap-1 rounded border border-violet-400/50 px-1.5 py-0.5 text-[10px] text-violet-300 hover:border-violet-300 hover:text-violet-200">
               <ChevronDown className={`h-3 w-3 transition-transform ${open ? "rotate-180" : ""}`} />
-              {open ? "收起" : "展开全文"}
+              {open ? t.multimodal.chat.collapse : t.multimodal.chat.expandFull}
             </button>
           </div>
           {open && (
@@ -1797,19 +2084,23 @@ const ThinkingLine: FC<{ msg: ChatMsg; toolActivity?: string }> = ({ msg, toolAc
     if (!msg.awaitingFirstDelta) setFallbackThinking(false);
   }, [msg.awaitingFirstDelta]);
 
+  // ★ This line reports STATUS, not content. It used to scroll the tail of the
+  //   raw reasoning text, which re-rendered on every 80ms delta flush — combined
+  //   with the shimmer sweep and the pulsing emoji, a fast model made it visibly
+  //   twitch several times a second. Unreadable as content AND useless as a
+  //   "still alive" signal, which is all a one-line indicator can honestly be.
+  //
+  //   So: only stable labels here. The reasoning text itself is not lost — it is
+  //   kept on the turn and shown, per work segment, in the collapsed 💭 block
+  //   inside BgBlock (see buildRows), where it can be read at rest.
+  //
+  //   `reasoningSummary` is the one exception: it is an aux-model ~10-char label
+  //   that changes at most once per reasoning segment, not per token.
   let label = "Waiting response…";
   if (toolActivity) {
     label = toolActivity;
   } else if (msg.hasReasoning) {
-    if (msg.reasoningSummary) {
-      label = msg.reasoningSummary;
-    } else if (msg.reasoning) {
-      // 原文最后 1 行滚动 (取最后 60 字, 避免撑爆一行)
-      const tail = msg.reasoning.replace(/\s+$/, "").split(/\n/).pop() || "";
-      label = tail.length > 60 ? `…${tail.slice(-60)}` : (tail || "Thinking…");
-    } else {
-      label = "Thinking…";
-    }
+    label = msg.reasoningSummary || "Thinking…";
   } else if (fallbackThinking) {
     label = "Thinking…";
   }
@@ -1862,12 +2153,13 @@ const ChatBubble = memo(function ChatBubble({
   // ThinkingLine 作为最高优先级 label。无运行中工具时为空 → 回落到 reasoning 摘要。
   toolActivity?: string;
 }) {
+  const { t } = useI18n();
   // Monitor SPEAK bubbles are labelled with the short event label
   // (never "Assistant" / raw id) so the user sees what fired.
   const roleName = m.role === "user" ? "You"
-    : m.monitorId ? (m.monitorLabel || "监控提醒")
+    : m.monitorId ? (m.monitorLabel || t.multimodal.monitor.alert)
     : m.subRole === "query_worker" ? "QueryWorker"
-    : m.threadback ? "深度分析"
+    : m.threadback ? t.multimodal.deepAnalysis.title
     : m.role === "assistant" ? "Assistant" : "System";
   // Trim leading/trailing blank lines from the answer (the model often emits a
   // leading newline). Keep interior whitespace; while streaming, only trim the
@@ -1911,13 +2203,13 @@ const ChatBubble = memo(function ChatBubble({
             <Badge tone="outline"
               className={`border-violet-400/60 text-violet-300${
                 m.requestId && onReopenDeep ? " cursor-pointer hover:bg-violet-400/15" : ""}`}
-              title={m.requestId ? "点击重新打开该深度研究(只读)" : ""}
+              title={m.requestId ? t.multimodal.deepAnalysis.reopenReadonly : ""}
               onClick={m.requestId && onReopenDeep ? () => onReopenDeep(m.requestId as string) : undefined}>
-              {`🔬 ${m.brief || "深度分析"}${m.requestId ? ` #${m.requestId}` : ""}`}
+              {`🔬 ${m.brief || t.multimodal.deepAnalysis.title}${m.requestId ? ` #${m.requestId}` : ""}`}
             </Badge>
           ) : m.monitorId ? (
             <Badge tone="outline" className="border-amber-400/60 text-amber-300">
-              {m.monitorLabel || "监控"}
+              {m.monitorLabel || t.multimodal.monitor.title}
             </Badge>
           ) : (
             roleName
@@ -1930,18 +2222,18 @@ const ChatBubble = memo(function ChatBubble({
             && !m.deepResearch && m.subRole !== "query_worker" && model && (
             <Badge tone="secondary" className="ml-1">{model}</Badge>
           )}
-          {m.voice && <Badge tone="secondary" className="ml-1">🎤 语音</Badge>}
+          {m.voice && <Badge tone="secondary" className="ml-1">{t.multimodal.chat.voiceBadge}</Badge>}
           {m.queued && (
             <Badge tone="outline" className="ml-1">
-              {m.queuePosition ? `排队 #${m.queuePosition}` : "排队中"}
+              {m.queuePosition ? t.multimodal.chat.queuePosition(m.queuePosition) : t.multimodal.chat.queued}
             </Badge>
           )}
           {onPlay && m.role === "assistant" && !m.isError && !m.streaming && m.text.trim() && (
             <button
               onClick={() => onPlay(m.text)}
-              title="播放语音"
+              title={t.multimodal.chat.playVoice}
               className="ml-1 inline-flex items-center gap-1 rounded border border-border/50 px-1.5 py-0.5 text-[10px] text-muted-foreground hover:border-primary/60 hover:text-primary">
-              <Play className="h-3 w-3" /> 播放
+              <Play className="h-3 w-3" /> {t.multimodal.chat.play}
             </button>
           )}
           {/* 监控事件 id 挪到框外最右侧右对齐 (对齐 watcher 汇报形态)。 */}
@@ -1969,7 +2261,7 @@ const ChatBubble = memo(function ChatBubble({
               : m.role === "user" ? "bg-emerald-950/40" : "bg-muted/50"}`}>
             {m.queued && !body ? (
               <span className="inline-flex items-center gap-1 text-muted-foreground">
-                等待前一条回答完成
+                {t.multimodal.chat.waitingPrevious}
                 <span className="animate-pulse">…</span>
               </span>
             ) : m.role === "assistant" && !m.isError ? (
@@ -2015,13 +2307,11 @@ const LiveMarkdown = memo(function LiveMarkdown({ content }: { content: string }
 
 // One readable analysis-round card: 🎬 第N段 [mm:ss–mm:ss] → 👁 看到 →
 // 🔎/🧩 检索 → 🖼 crops → 📝 就绪. Mirrors the desktop SegmentCard.
-// 后端在模型 thought 为空时合成的占位句 (_workers.py)。它们不是真实画面描述,
-// 不作为段描述行展示 (否则整段只剩一句没信息量的"可直接解读本段画面")。
-const _SYNTH_SAW = new Set(["可直接解读本段画面", "继续观察本段画面"]);
 const SegmentCard = memo(function SegmentCard({ s, defaultOpen }: { s: BgSegment; defaultOpen?: boolean }) {
+  useLocaleRevision();  // labels come from translateNow — see AsrBar
   const range = s.tsRange ? ` ${fmtTs(s.tsRange[0])}–${fmtTs(s.tsRange[1])}` : "";
-  // 真实的段描述: 排除后端合成的占位句。
-  const desc = s.saw && !_SYNTH_SAW.has(s.saw.trim()) ? s.saw : "";
+  // 真实的段描述: 排除后端合成的占位句 (isSynthSaw, 见 lib/mm-sentinels)。
+  const desc = s.saw && !isSynthSaw(s.saw) ? s.saw : "";
   const empty = !desc && s.lookups.length === 0 && !s.ready && !(s.crops && s.crops.length)
     && !(s.toolCalls && s.toolCalls.length) && !(s.toolErrors && s.toolErrors.length);
   // req ④: only the current/active segment is expanded by default; older ones
@@ -2034,7 +2324,7 @@ const SegmentCard = memo(function SegmentCard({ s, defaultOpen }: { s: BgSegment
       <button onClick={() => setOpen((o) => !o)}
         className="flex w-full items-center gap-1.5 text-left font-semibold text-violet-300">
         <span className="shrink-0">{open ? "▾" : "▸"}</span>
-        <span className="shrink-0">🎬 第 {s.seg} 段</span>
+        <span className="shrink-0">🎬 {translateNow("multimodal.deepAnalysis.segment", s.seg)}</span>
         {range && <span className="shrink-0 font-normal text-violet-300/70 tabular-nums">{range}</span>}
         {s.scene && (
           <span className="ml-0.5 truncate rounded bg-violet-400/15 px-1.5 py-0.5 font-normal text-violet-200/90">
@@ -2049,7 +2339,7 @@ const SegmentCard = memo(function SegmentCard({ s, defaultOpen }: { s: BgSegment
           {desc}
         </div>
       ) : empty ? (
-        <div className="leading-snug text-violet-200/60">⏳ 正在分析这段画面…</div>
+        <div className="leading-snug text-violet-200/60">{translateNow("multimodal.deepAnalysis.analyzing")}</div>
       ) : null}
       {/* 💭 思考: 默认折叠 (<details>, 对齐主 Agent), 点击展开看全文。思考中 (本段还没
           ready) 时图标带脉冲动画, 避免被误认为界面卡死。
@@ -2058,7 +2348,7 @@ const SegmentCard = memo(function SegmentCard({ s, defaultOpen }: { s: BgSegment
         <details className="text-violet-200/70">
           <summary className="flex cursor-pointer list-none select-none items-center gap-1 leading-snug">
             <span className={s.ready ? "" : "animate-pulse"}>💭</span>
-            <span>思考过程{!s.ready && "…"}</span>
+            <span>{s.ready ? translateNow("multimodal.deepAnalysis.thinking") : translateNow("multimodal.deepAnalysis.thinkingInProgress")}</span>
             {!s.ready && (
               <span className="ml-0.5 inline-flex gap-0.5">
                 <span className="h-1 w-1 animate-bounce rounded-full bg-violet-400 [animation-delay:-0.3s]" />
@@ -2074,17 +2364,17 @@ const SegmentCard = memo(function SegmentCard({ s, defaultOpen }: { s: BgSegment
       )}
       {s.toolCalls && s.toolCalls.map((c, i) => (
         <div key={`tc${i}`} className="break-words leading-snug text-sky-300/80">
-          🔧 调用 {c.name}{c.arg ? `(${c.arg})` : ""}
+          {translateNow("multimodal.deepAnalysis.toolCall", c.name, c.arg || undefined)}
         </div>
       ))}
       {s.toolErrors && s.toolErrors.map((e, i) => (
         <div key={`te${i}`} className="break-words leading-snug text-red-400">
-          ⚠️ {e.name} 调用失败:{e.error}
+          {translateNow("multimodal.deepAnalysis.toolFailed", e.name, e.error)}
         </div>
       ))}
       {s.lookups.map((l, i) => (
         <div key={i} className="break-words leading-snug text-muted-foreground">
-          {l.kind === "search" ? "🔎 搜索" : "🧩 记忆"}「{l.query}」
+          {l.kind === "search" ? translateNow("multimodal.deepAnalysis.searchLookup", l.query) : translateNow("multimodal.deepAnalysis.memoryLookup", l.query)}
           {l.result ? ` → ${l.result}` : "…"}
         </div>
       ))}
@@ -2109,7 +2399,7 @@ const SegmentCard = memo(function SegmentCard({ s, defaultOpen }: { s: BgSegment
               // s.ready 但没有流式 answer 文本: 本段没有独立解读 (通常是模型直接跳到
               // 回答/无额外发现), 内容已并入下方的累积报告 —— 如实说明, 不摆"就绪"空架子。
               <span className="whitespace-pre-wrap text-muted-foreground">
-                📝 本段无独立解读，内容已并入下方报告
+                {translateNow("multimodal.deepAnalysis.noIndependentInterpretation")}
               </span>
             )}
           </div>
@@ -2177,6 +2467,7 @@ const DeepWindow = memo(function DeepWindow({
   expanded: boolean;
   onToggle: (rid: string) => void;
 }) {
+  const { t } = useI18n();
   const bodyScrollRef = useRef<HTMLDivElement | null>(null);
   // 用户是否停在底部。仅当停在底部时才随新内容自动下拉; 用户一旦向上翻 (atBottom
   // 变 false) 就不再打断他, 直到他自己滚回底部。onScroll 里用 24px 容差判定。
@@ -2198,7 +2489,9 @@ const DeepWindow = memo(function DeepWindow({
   const segPreview = waiting
     ? (waiting.paused ? `⏳ ${_wSeg}Waiting for new frames…` : `⏳ ${_wSeg}Buffering frames… (${waiting.have}/${waiting.need})`)
     : lastSeg
-      ? (lastSeg.saw ? `👁 ${lastSeg.saw}` : `🎬 第 ${lastSeg.seg} 段分析中…`)
+      ? (lastSeg.saw && !isSynthSaw(lastSeg.saw)
+        ? `👁 ${lastSeg.saw}`
+        : translateNow("multimodal.deepAnalysis.segmentAnalyzing", lastSeg.seg))
       : "";
   // ★ 性能: answerPreview 只在真需要时算 (没有 segPreview 且窗口收起才显示 preview)。
   //   旧代码每次渲染都 msgs.map/join/replace 全量拼接一遍, 展开时根本用不到。
@@ -2220,9 +2513,9 @@ const DeepWindow = memo(function DeepWindow({
       <button onClick={() => onToggle(rid)}
         className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left text-[11px] font-medium text-violet-300">
         <span>{expanded ? "▾" : "▸"}</span>
-        <span>🔬 深度分析{label ? ` · ${label}` : ` #${shortId}`}</span>
+        <span>🔬 {t.multimodal.deepAnalysis.title}{label ? ` · ${label}` : ` #${shortId}`}</span>
         {hasLiveWork ? <span className="animate-pulse">…</span>
-          : <span className="ml-auto text-[10px] font-normal text-violet-300/60">已完成</span>}
+          : <span className="ml-auto text-[10px] font-normal text-violet-300/60">{t.multimodal.deepAnalysis.completed}</span>}
       </button>
       {!expanded && preview && (
         <div className="truncate px-2.5 pb-1.5 text-[11px] text-violet-200/60">
@@ -2262,14 +2555,14 @@ const DeepWindow = memo(function DeepWindow({
             })()}
             {!answerPreview && hasLiveWork && segments.length === 0 && !waiting && (
               <div className="text-[11px] text-violet-200/70">
-                深度分析启动中…
+                {t.multimodal.deepAnalysis.starting}
               </div>
             )}
             {/* Final consolidated report (watcher.final) — the authoritative
                 result, shown in-panel; the main agent chat is never touched. */}
             {item?.finalReport && (
               <div className="rounded-md border border-violet-400/50 bg-violet-400/10 p-2">
-                <div className="mb-1 text-[11px] font-medium text-violet-200">📋 最终报告</div>
+                <div className="mb-1 text-[11px] font-medium text-violet-200">📋 {t.multimodal.deepAnalysis.finalReport}</div>
                 <div className="text-[12px] leading-relaxed text-violet-50">
                   {/* ★ 最终报告走 Markdown (表格 / LaTeX 公式), 不再纯文本。
                       节流解析 (LiveMarkdown): 长报告在同帧与主 agent 并发时不再双 O(n²) 撑爆主线程。 */}
@@ -2299,7 +2592,115 @@ const DeepWindow = memo(function DeepWindow({
 // module scope so the column components can reference it.
 type Row =
   | { type: "chat"; msg: ChatMsg }
-  | { type: "bg"; id: string; items: ChatMsg[] };
+  | { type: "bg"; id: string; items: ChatMsg[]; thinking?: string; seg?: number };
+
+// ── Work segments ────────────────────────────────────────────────────────────
+// A model turn is really `think → act → think → act → answer`. Rendering it as
+// "all the thinking in one pile, all the tools in another" is regular but drops
+// the causal chain — you can no longer tell WHICH thought led to WHICH call.
+// Rendering every part strictly inline is faithful but noisy (that is why the
+// piles existed in the first place).
+//
+// The fix is to group by TIME, not by TYPE — the same shelf model ui-tui
+// already ships (`lib/liveProgress.ts::appendToolShelfMessage`):
+//
+//   * assistant prose is a BARRIER — it closes the current segment.
+//   * consecutive tool/status rows MERGE into the open segment (so ten calls
+//     are one block, not ten cards).
+//   * the reasoning that preceded those calls rides on the SAME segment, so
+//     "what it was thinking" sits with "what it therefore did".
+//
+// Result: one block per segment, in true order, each carrying its own thinking.
+export function buildRows(messages: readonly ChatMsg[]): Row[] {
+  const out: Row[] = [];
+  // Reasoning seen since the last barrier, waiting to be attached to the
+  // segment its tool calls belong to.
+  let pendingThinking = "";
+  let segCount = 0;
+
+  for (const m of messages) {
+    // Live deep-research streams live in the left sub-windows; post-Clarify
+    // thread-backs (threadback=true) render here in the center chat.
+    if (m.subRole === "router" && !m.threadback) continue;
+    // Safety net: monitor + watcher_report never render in the center chat any
+    // more (they live in the right multimodal panel). Any legacy message that
+    // slipped through is filtered here.
+    if (m.subRole === "monitor" || m.subRole === "watcher_report") continue;
+
+    if (m.kind === "tool" || m.kind === "status") {
+      const last = out[out.length - 1];
+
+      if (last && last.type === "bg") {
+        last.items.push(m);
+        // Reasoning can arrive after the segment opened (interleaved thinking);
+        // fold it in rather than dropping it.
+        if (pendingThinking && !last.thinking) last.thinking = pendingThinking;
+      } else {
+        segCount += 1;
+        out.push({
+          type: "bg",
+          id: `bg_${m.id}`,
+          items: [m],
+          seg: segCount,
+          ...(pendingThinking ? { thinking: pendingThinking } : {}),
+        });
+      }
+
+      pendingThinking = "";
+      continue;
+    }
+
+    // ★ `ensureBubble` reuses ONE assistant message per turn: reasoning
+    //   accumulates onto it first, then the final answer text lands on that same
+    //   object. So by the time the turn finishes, the bubble carrying the answer
+    //   is ALSO the only carrier of that turn's reasoning. Claim its reasoning
+    //   for the segments that follow before treating it as a barrier, otherwise
+    //   the rationale is dropped the instant the answer arrives — which is the
+    //   old "reasoning only exists while streaming" bug in a new place.
+    const carriesReasoning = m.role === "assistant" && !!m.reasoning?.trim() && !m.isError;
+
+    // An assistant turn with reasoning but no visible prose yet is not a
+    // barrier — it is the "thinking" half of the segment that is about to open.
+    // Hold its reasoning and let the tool rows that follow claim it.
+    const isThinkingOnly = carriesReasoning && !m.text?.trim();
+
+    if (isThinkingOnly) {
+      const reasoning = m.reasoning!.trim();
+      const last = out[out.length - 1];
+
+      // Interleaved thinking (reasoning between two calls of the same round):
+      // fold it into the open segment and emit NO row, so the following tool
+      // still merges into that segment instead of starting a new one. A
+      // thinking-only row must never act as a barrier.
+      if (last && last.type === "bg") {
+        if (!last.thinking) last.thinking = reasoning;
+        pendingThinking = "";
+        continue;
+      }
+
+      // No segment open yet — hold the reasoning for the segment about to open,
+      // and emit the row so it renders as the live 💭 line while streaming.
+      pendingThinking = reasoning;
+      out.push({ type: "chat", msg: m });
+      continue;
+    }
+
+    // Prose + reasoning on the same object (the finished-turn shape): the prose
+    // is still a barrier for what came BEFORE it, but its reasoning belongs to
+    // the segments that come AFTER, so carry it forward instead of clearing.
+    if (carriesReasoning) {
+      pendingThinking = m.reasoning!.trim();
+      out.push({ type: "chat", msg: m });
+      continue;
+    }
+
+    // Real prose (or an error / user turn) — barrier. Close the segment.
+    if (m.text?.trim() || m.role === "user") pendingThinking = "";
+    out.push({ type: "chat", msg: m });
+  }
+
+  return out;
+}
 
 type WatcherReg = { watcher_id: string; label?: string; task_instruction?: string; status?: string };
 type MonitorReg = MonitorRegistryItem;
@@ -2329,6 +2730,7 @@ const LeftPanels = memo(function LeftPanels({
   onStopStream: () => void;
   onStartScreen: () => void;
 }) {
+  const { t } = useI18n();
   return (
     <div className="flex min-h-0 flex-col gap-3 overflow-y-auto">
       <Card>
@@ -2337,12 +2739,12 @@ const LeftPanels = memo(function LeftPanels({
             <video ref={videoRef} autoPlay playsInline muted
               className="h-full w-full object-cover [transform:translateZ(0)]" />
             {!sourceType && (
-              <div className="absolute left-2 top-2 rounded bg-black/60 px-2 py-1 text-xs text-white">未开启画面</div>
+              <div className="absolute left-2 top-2 rounded bg-black/60 px-2 py-1 text-xs text-white">{t.multimodal.video.notStarted}</div>
             )}
             {sourceType && (
               <div className="absolute right-2 top-2 flex items-center gap-1 rounded bg-black/60 px-2 py-1 text-xs text-white">
                 <span className="h-2 w-2 animate-pulse rounded-full bg-red-500" />
-                REC · {sourceType === "camera" ? "摄像头" : "屏幕"} · {frameCount} 帧
+                {t.multimodal.video.recFrames(sourceType === "camera" ? t.multimodal.video.camera : t.multimodal.video.screenShare, frameCount)}
               </div>
             )}
           </div>
@@ -2350,13 +2752,13 @@ const LeftPanels = memo(function LeftPanels({
             <Button size="sm" prefix={<Camera />}
               destructive={sourceType === "camera"} disabled={sourceType === "screen"}
               onClick={() => (sourceType === "camera" ? onStopStream() : onStartCamera())}>
-              {sourceType === "camera" ? "停止摄像头" : "启动摄像头"}
+              {sourceType === "camera" ? t.multimodal.video.stopCamera : t.multimodal.video.startCamera}
             </Button>
             <Button size="sm" prefix={<Monitor />}
               destructive={sourceType === "screen"} outlined={sourceType !== "screen"}
               disabled={sourceType === "camera"}
               onClick={() => (sourceType === "screen" ? onStopStream() : onStartScreen())}>
-              {sourceType === "screen" ? "停止共享" : "共享屏幕"}
+              {sourceType === "screen" ? t.multimodal.video.stopScreen : t.multimodal.video.startScreen}
             </Button>
           </div>
         </CardContent>
@@ -2366,12 +2768,12 @@ const LeftPanels = memo(function LeftPanels({
       <Card>
         <CardHeader className="pb-2">
           <CardTitle className="text-xs uppercase tracking-wide text-muted-foreground">
-            🎯 注入帧 {anchorFrames.length > 0 && <span className="text-primary">· {anchorFrames.length}</span>}
+            🎯 {t.multimodal.observations.injectedFrames} {anchorFrames.length > 0 && <span className="text-primary">· {anchorFrames.length}</span>}
           </CardTitle>
         </CardHeader>
         <CardContent className="pt-0">
           {anchorFrames.length === 0
-            ? <div className="text-xs italic text-muted-foreground">(提问时若有画面流,这里显示模型本回合实际看到的帧)</div>
+            ? <div className="text-xs italic text-muted-foreground">{t.multimodal.observations.injectedFramesHint}</div>
             : (
               <div className="flex gap-1.5 overflow-x-auto">
                 {anchorFrames.map((f, i) => (
@@ -2391,13 +2793,13 @@ const LeftPanels = memo(function LeftPanels({
       <Card>
         <CardHeader className="pb-2">
           <CardTitle className="text-xs uppercase tracking-wide text-muted-foreground">
-            画面观察 <span className="text-primary">v{ctxVersion}</span>
+            {t.multimodal.observations.videoObs} <span className="text-primary">{t.multimodal.observations.videoObsVersion(ctxVersion)}</span>
           </CardTitle>
         </CardHeader>
         <CardContent className="pt-0">
           <div ref={obsScrollRef} className="max-h-52 space-y-2 overflow-y-auto rounded border bg-background/50 p-2 text-xs">
             {obs.length === 0
-              ? <span className="italic text-muted-foreground">(空)</span>
+              ? <span className="italic text-muted-foreground">{t.multimodal.observations.empty}</span>
               : obs.map((o, i) => (
                   <div key={`obs-${i}`} className="rounded border border-border/60 bg-background/60 p-2">
                     <div className="mb-1 flex items-center gap-1">
@@ -2414,12 +2816,12 @@ const LeftPanels = memo(function LeftPanels({
       {/* ④ 音频观察 */}
       <Card>
         <CardHeader className="pb-2">
-          <CardTitle className="text-xs uppercase tracking-wide text-muted-foreground">音频观察</CardTitle>
+          <CardTitle className="text-xs uppercase tracking-wide text-muted-foreground">{t.multimodal.observations.audioObs}</CardTitle>
         </CardHeader>
         <CardContent className="pt-0">
           <div ref={audioObsScrollRef} className="max-h-44 space-y-2 overflow-y-auto rounded border bg-background/50 p-2 text-xs">
             {audioObs.length === 0
-              ? <span className="italic text-muted-foreground">(共享屏幕并分享音频后才有)</span>
+              ? <span className="italic text-muted-foreground">{t.multimodal.observations.audioObsHint}</span>
               : audioObs.map((o, i) => (
                   <div key={`aobs-${i}`} className="rounded border border-border/60 bg-background/60 p-2">
                     <div className="mb-1 flex items-center gap-1">
@@ -2436,12 +2838,12 @@ const LeftPanels = memo(function LeftPanels({
       {/* ⑤ SearchFactStore: 外部检索证据 */}
       <Card>
         <CardHeader className="pb-2">
-          <CardTitle className="text-xs uppercase tracking-wide text-muted-foreground">搜索事实</CardTitle>
+          <CardTitle className="text-xs uppercase tracking-wide text-muted-foreground">{t.multimodal.observations.searchFacts}</CardTitle>
         </CardHeader>
         <CardContent className="pt-0">
           <div className="max-h-48 overflow-y-auto rounded border bg-background/50 p-2 text-xs">
             {factsList.length === 0
-              ? <span className="italic text-muted-foreground">(暂无)</span>
+              ? <span className="italic text-muted-foreground">{t.multimodal.observations.noneYet}</span>
               : <ul className="space-y-1">{factsList.map(([k, v]) => (
                   <li key={k}><span className="text-violet-400">{k}</span>: {String(v)}</li>
                 ))}</ul>}
@@ -2471,7 +2873,7 @@ const ChatColumn = memo(function ChatColumn({
   isRecordingUI: boolean;
   asrPartial: string;
   asrBuffer: string[];
-  micState: "idle" | "connecting" | "recording";
+  micState: MicLifecycleState;
   ttsEnabled: boolean;
   onTtsToggle: () => void;
   voiceDialogEnabled: boolean;
@@ -2481,6 +2883,7 @@ const ChatColumn = memo(function ChatColumn({
   onSend: (text: string) => void;
   onMicToggle: () => void;
 }) {
+  useLocaleRevision();  // labels come from translateNow — see AsrBar
   // ★ 自动跟随底部 (替代 Virtuoso followOutput)。仅当用户原本就在底部才下拉。
   //   移进 ChatColumn: 只在 rows 变(消息/流式)时跑, 不再被 ctx/anchor/frameCount 触发。
   useLayoutEffect(() => {
@@ -2507,7 +2910,7 @@ const ChatColumn = memo(function ChatColumn({
         <button
           type="button"
           onClick={() => scrollChatToBottom(true)}
-          title="跳到最新"
+          title={translateNow("multimodal.misc.jumpToLatest")}
           className="absolute bottom-20 right-4 z-10 flex h-8 w-8 items-center justify-center rounded-full border border-border bg-background/90 text-muted-foreground shadow-md backdrop-blur hover:text-foreground">
           <ArrowDown className="h-4 w-4" />
         </button>
@@ -2537,6 +2940,7 @@ const RegistryPanels = memo(function RegistryPanels({
   onToggleMonitor: (m: MonitorReg) => void;
   onToggleWatcher: (w: WatcherReg) => void;
 }) {
+  const { t } = useI18n();
   return (
     <>
       {/* ① Monitor registry (multi-instance, set_monitor CRUD) */}
@@ -2544,13 +2948,17 @@ const RegistryPanels = memo(function RegistryPanels({
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-xs uppercase tracking-wide text-muted-foreground">
-              👁 监控任务 <span className="text-amber-300">· {monitors.filter((m) => m.status !== "deleted").length}</span>
+              {t.multimodal.monitor.titleWithCount(monitors.filter((m) => m.status !== "deleted").length)}
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-2 pt-2 text-[11px]">
             {monitors.filter((m) => m.status !== "deleted").map((m) => {
-              const { active: on, canToggle, done, modeLabel, statusLabel } = monitorPresentation(m);
-              const label = (m.label && m.label.trim()) || m.brief.slice(0, 10) || "监控";
+              const { active: on, canToggle, done, mode, statusToken } = monitorPresentation(m);
+              const modeLabel = mode === "once" ? t.multimodal.monitor.once : t.multimodal.monitor.continuous;
+              const statusLabel = statusToken === "done" ? t.multimodal.monitor.statusDone
+                : statusToken === "active" ? t.multimodal.monitor.statusActive
+                : t.multimodal.monitor.statusInterrupted;
+              const label = (m.label && m.label.trim()) || m.brief.slice(0, 10) || t.multimodal.monitor.title;
               return (
                 <div key={m.monitor_id}
                   className={`flex items-center justify-between gap-2 rounded border px-2.5 py-2 ${
@@ -2571,8 +2979,8 @@ const RegistryPanels = memo(function RegistryPanels({
                     disabled={!canToggle}
                     onClick={() => canToggle && onToggleMonitor(m)}
                     title={done
-                      ? "单次监控已完成；如需再等待一次，请新建监控"
-                      : on ? "点击暂停该监控" : "点击恢复该监控"}
+                      ? t.multimodal.monitor.completedOnce
+                      : on ? t.multimodal.monitor.pauseHint : t.multimodal.monitor.resumeHint}
                     aria-label={`${label}：${statusLabel}`}
                     className={`relative h-4 w-7 flex-shrink-0 rounded-full transition-colors ${
                       done ? "cursor-not-allowed bg-emerald-400/35"
@@ -2592,21 +3000,21 @@ const RegistryPanels = memo(function RegistryPanels({
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-xs uppercase tracking-wide text-muted-foreground">
-              🔬 深度分析 <span className="text-violet-300">· {watchers.length}</span>
+              🔬 {t.multimodal.deepAnalysis.title} <span className="text-violet-300">· {watchers.length}</span>
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-2 pt-2 text-[11px]">
             {watchers.filter((w) => w.status !== "deleted").map((w) => {
               const on = w.status === "running";
               const label = (w.label && w.label.trim())
-                || (w.task_instruction || "").slice(0, 12) || "深度分析";
+                || (w.task_instruction || "").slice(0, 12) || t.multimodal.deepAnalysis.title;
               // ★ 五态标签: running=进行中 / done=已完成 / stopping=正在停止 /
               //   interrupted=已中断(需开流重启)。
               const statusLabel =
-                w.status === "running" ? "进行中"
-                : w.status === "done" ? "已完成"
-                : w.status === "stopping" ? "正在停止"
-                : "已中断";
+                w.status === "running" ? t.multimodal.deepAnalysis.inProgress
+                : w.status === "done" ? t.multimodal.deepAnalysis.completed
+                : w.status === "stopping" ? t.multimodal.deepAnalysis.statusStopping
+                : t.multimodal.monitor.statusInterrupted;
               return (
                 <div key={w.watcher_id}
                   className={`flex items-center justify-between gap-2 rounded border px-2.5 py-2 ${
@@ -2621,7 +3029,7 @@ const RegistryPanels = memo(function RegistryPanels({
                   </span>
                   <button
                     onClick={() => onToggleWatcher(w)}
-                    title={on ? "点击暂停该分析" : "点击恢复该分析(需视频流)"}
+                    title={on ? t.multimodal.deepAnalysis.pauseHint : t.multimodal.deepAnalysis.resumeHint}
                     className={`relative h-4 w-7 flex-shrink-0 rounded-full transition-colors ${
                       on ? "bg-violet-400/70" : "bg-muted-foreground/30"}`}>
                     <span className={`absolute top-0.5 h-3 w-3 rounded-full bg-background transition-all ${
@@ -2652,10 +3060,15 @@ const MonitorPanel = memo(function MonitorPanel({
   onToggleCollapsed: (mid: string) => void;
   onToggleExpanded: (mid: string) => void;
 }) {
+  const { t } = useI18n();
   const mid = monitor.monitor_id;
   const label = (monitor.label && monitor.label.trim())
-    || monitor.brief.slice(0, 12) || "监控";
-  const { active: on, done, modeLabel, statusLabel } = monitorPresentation(monitor);
+    || monitor.brief.slice(0, 12) || t.multimodal.monitor.title;
+  const { active: on, done, mode, statusToken } = monitorPresentation(monitor);
+  const modeLabel = mode === "once" ? t.multimodal.monitor.once : t.multimodal.monitor.continuous;
+  const statusLabel = statusToken === "done" ? t.multimodal.monitor.statusDone
+    : statusToken === "active" ? t.multimodal.monitor.statusActive
+    : t.multimodal.monitor.statusInterrupted;
   const streaming = alerts.some((a) => a.streaming);
   const hiddenCount = Math.max(0, alerts.length - MONITOR_ALERTS_VISIBLE);
   const shown = expanded ? alerts : alerts.slice(-MONITOR_ALERTS_VISIBLE);
@@ -2669,7 +3082,7 @@ const MonitorPanel = memo(function MonitorPanel({
         className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left text-[11px] font-medium text-amber-200">
         <span className="shrink-0 text-amber-300/70">{collapsed ? "▸" : "▾"}</span>
         <span>👁</span>
-        <span className="min-w-0 truncate">监控 · {label}</span>
+        <span className="min-w-0 truncate">{t.multimodal.monitor.label(label)}</span>
         <span className="shrink-0 rounded border border-current/20 px-1 text-[9px] font-normal opacity-70">{modeLabel}</span>
         {streaming
           ? <span className="animate-pulse text-amber-300/70">…</span>
@@ -2680,13 +3093,13 @@ const MonitorPanel = memo(function MonitorPanel({
         <div className="border-t border-amber-400/20 px-2 py-2">
           {alerts.length === 0 && (
             <div className="text-[11px] text-amber-200/70">
-              {done ? "单次监控已完成" : on ? "监控中,暂无命中…" : "监控已暂停"}
+              {done ? t.multimodal.monitor.completedOnceShort : on ? t.multimodal.monitor.noHitsYet : t.multimodal.monitor.paused}
             </div>
           )}
           {hiddenCount > 0 && (
             <button onClick={() => onToggleExpanded(mid)}
               className="mb-1.5 text-[10px] text-amber-300/70 hover:text-amber-200">
-              {expanded ? "▾ 收起早期" : `▸ 展开更多 (${hiddenCount})`}
+              {expanded ? t.multimodal.monitor.collapseEarly : t.multimodal.monitor.showMore(hiddenCount)}
             </button>
           )}
           <div className={`space-y-1.5 ${expanded ? "max-h-64 overflow-y-auto" : ""}`}>
@@ -2733,6 +3146,7 @@ const DeepColumn = memo(function DeepColumn({
   onToggleMonitorCollapsed: (mid: string) => void;
   onToggleMonitorExpanded: (mid: string) => void;
 }) {
+  useLocaleRevision();  // labels come from translateNow — see AsrBar (before the early return)
   if (!showDeepCol) return null;
   // Monitor panels: display in the order the monitors were created (registry
   // is already sorted by created_at asc — the earliest sits at the top). Users
@@ -2807,7 +3221,7 @@ const DeepColumn = memo(function DeepColumn({
   );
 });
 
-interface MmTrajectoryFrame {
+export interface MmTrajectoryFrame {
   frame_id?: string;
   ts?: number;
   jpeg_b64?: string;
@@ -2815,7 +3229,7 @@ interface MmTrajectoryFrame {
   source_type?: string;
 }
 
-interface MmTrajectoryEntry {
+export interface MmTrajectoryEntry {
   id: string;
   seq: number;
   ts: number;
@@ -2936,7 +3350,7 @@ export function queryWorkerProgressFromTrajectory(item: MmTrajectoryEntry): {
   };
 
   if (outerPhase === "started") {
-    title = `接手问题并锁定提问时刻 · 冻结输入帧 ${Number(p.n_frames || 0)}`;
+    title = translateNow("multimodal.recall.started", Number(p.n_frames || 0));
     addMetric(Number(p.ask_ts) ? `ask_ts ${Number(p.ask_ts).toFixed(1)}s` : undefined);
   } else if (outerPhase === "ocr_evidence") {
     worker = "OCR";
@@ -2966,18 +3380,18 @@ export function queryWorkerProgressFromTrajectory(item: MmTrajectoryEntry): {
     }
     status = ocrState === "timeout" || ocrState === "error" ? "error" : "complete";
     title = ocrState === "available"
-      ? `OCR 辅助文字 · ${ocrRecordCount} 条`
-      : ocrState === "skipped" ? "OCR 辅助文字 · 已跳过"
-        : ocrState === "timeout" ? "OCR 辅助文字 · 超时"
-          : ocrState === "error" ? "OCR 辅助文字 · 提取失败"
-            : "OCR 辅助文字 · 未识别到文字";
+      ? translateNow("multimodal.ocr.helperAvailable", ocrRecordCount)
+      : ocrState === "skipped" ? translateNow("multimodal.ocr.helperSkipped")
+        : ocrState === "timeout" ? translateNow("multimodal.ocr.helperTimeout")
+          : ocrState === "error" ? translateNow("multimodal.ocr.helperError")
+            : translateNow("multimodal.ocr.helperEmpty");
   } else if (outerPhase === "delegate_start") {
-    title = "开始分析问题，准备决定 Recall / Search";
+    title = translateNow("multimodal.recall.analysisStart");
   } else if (outerPhase === "router_react") {
     const noTools = recallTasks.length === 0 && toolCalls.length === 0;
     title = noTools
-      ? "完成一轮规划 · 本轮未调用 Recall / Search"
-      : `完成一轮规划${recallTasks.length ? ` · Recall ${recallTasks.length}` : ""}${toolCalls.length ? ` · Search ${toolCalls.length}` : ""}`;
+      ? translateNow("multimodal.recall.planRoundNoTools")
+      : translateNow("multimodal.recall.planRound", recallTasks.length, toolCalls.length);
     plannedTools = [
       ...toolCalls.filter(isRecord).map((call) => ({
         name: String(call.name || "search tool"),
@@ -2990,18 +3404,18 @@ export function queryWorkerProgressFromTrajectory(item: MmTrajectoryEntry): {
       })),
     ];
     callState = "planned";
-    addMetric(round ? `外层第 ${round} 轮` : undefined);
+    addMetric(round ? translateNow("multimodal.recall.outerRound", round) : undefined);
     addMetric(elapsed != null ? `${elapsed.toFixed(2)}s` : undefined);
   } else if (outerPhase === "recall_skipped") {
     worker = "RecallWorker";
     title = ev.reason === "retry_limit_after_two_failures"
-      ? "停止重试 Recall · 相同任务已连续失败 2 次"
-      : "跳过重复 Recall · 已用本次分析的召回结果";
+      ? translateNow("multimodal.recall.retryLimitStop")
+      : translateNow("multimodal.recall.skipDuplicate");
     detail = String(ev.brief || "");
-    addMetric(round ? `外层第 ${round} 轮` : undefined);
+    addMetric(round ? translateNow("multimodal.recall.outerRound", round) : undefined);
   } else if (outerPhase === "bg_progress" && channel === "recall") {
     if (phase === "bg_progress") {
-      title = `Recall 调用 · ${String(ev.tool_name || "recall_memory")}${round ? ` · 外层第 ${round} 轮` : ""}`;
+      title = translateNow("multimodal.recall.recallCall", String(ev.tool_name || "recall_memory"), round || undefined);
       detail = String(ev.brief || ev.obs_summary || "");
       if (typeof ev.tool_name === "string") {
         plannedTools = [{
@@ -3011,12 +3425,12 @@ export function queryWorkerProgressFromTrajectory(item: MmTrajectoryEntry): {
         callState = "called";
       }
     } else if (phase === "start") {
-      title = "开始召回多模态记忆";
+      title = translateNow("multimodal.recall.startRecall");
       detail = String(ev.brief || "");
       addMetric(typeof ev.model === "string" ? `model ${ev.model}` : undefined);
       addMetric(Number(ev.ask_ts) ? `ask_ts ${Number(ev.ask_ts).toFixed(1)}s` : undefined);
     } else if (phase === "tool_obs") {
-      title = `Recall 第${round || "?"}轮读取记忆工具 · ${observations.length} 项结果`;
+      title = translateNow("multimodal.recall.roundRead", round || "?", observations.length);
       toolResults = observations.map((obs) => ({
         name: String(obs.name || "memory tool"),
         ...(isRecord(obs.args) ? { args: obs.args } : {}),
@@ -3044,18 +3458,20 @@ export function queryWorkerProgressFromTrajectory(item: MmTrajectoryEntry): {
           : {}),
       }));
       addMetric(Number.isFinite(Number(ev.parallel_elapsed_sec))
-        ? `并行读取 ${Number(ev.parallel_elapsed_sec).toFixed(2)}s` : undefined);
+        ? translateNow("multimodal.recall.parallelRead", Number(ev.parallel_elapsed_sec).toFixed(2)) : undefined);
       addMetric(Array.isArray(ev.new_frame_ids) && ev.new_frame_ids.length
-        ? `新证据帧 ${ev.new_frame_ids.length}` : undefined);
+        ? translateNow("multimodal.recall.newEvidenceFrames", ev.new_frame_ids.length) : undefined);
     } else if (phase === "distill") {
-      title = `Recall 第${round || "?"}轮提炼出有效线索`;
+      title = translateNow("multimodal.recall.roundDistill", round || "?");
       detail = String(ev.clue || "");
     } else if (decisionRound) {
       const canAnswer = ev.can_answer === true;
       const nNext = Number(ev.n_next_calls || 0);
-      title = `Recall 第${round || "?"}轮决策 · ${
-        canAnswer ? "证据已足够" : nNext ? `继续检索 ${nNext} 个工具` : "无后续工具"
-      }`;
+      const verdict = canAnswer
+        ? translateNow("multimodal.recall.decisionEnough")
+        : nNext ? translateNow("multimodal.recall.decisionContinueTools", nNext)
+          : translateNow("multimodal.recall.decisionNoTools");
+      title = translateNow("multimodal.recall.roundDecision", round || "?", verdict);
       detail = String(ev.decision_summary || ev.useful_info || "");
       const nextCalls = Array.isArray(ev.next_tool_calls)
         ? ev.next_tool_calls.filter(isRecord) : [];
@@ -3066,24 +3482,24 @@ export function queryWorkerProgressFromTrajectory(item: MmTrajectoryEntry): {
       callState = "planned";
       addMetric(`can_answer ${String(canAnswer)}`);
       addMetric(Number(ev.n_clues_so_far || 0)
-        ? `已有线索 ${Number(ev.n_clues_so_far)}` : undefined);
+        ? translateNow("multimodal.recall.cluesSoFar", Number(ev.n_clues_so_far)) : undefined);
       if (ev.useful_info && ev.decision_summary) {
-        detail += `${detail ? "\n" : ""}证据摘要：${String(ev.useful_info)}`;
+        detail += `${detail ? "\n" : ""}${translateNow("multimodal.recall.evidenceSummary", String(ev.useful_info))}`;
       }
     } else if (phase === "tool_skipped") {
-      title = `Recall 第${round || "?"}轮跳过重复记忆读取`;
+      title = translateNow("multimodal.recall.roundSkipDuplicate", round || "?");
       detail = String(ev.name || "memory tool");
       plannedTools = [{
         name: String(ev.name || "memory tool"),
         ...(isRecord(ev.args) ? { args: ev.args } : {}),
       }];
     } else if (phase === "verify") {
-      title = `Recall 视觉复核 · 保留 ${Number(ev.n_kept || 0)}/${Number(ev.n_in || 0)} 帧`;
-      detail = String(ev.visual_correction || "未发现需要纠正的画面冲突");
+      title = translateNow("multimodal.recall.visualReview", Number(ev.n_kept || 0), Number(ev.n_in || 0));
+      detail = String(ev.visual_correction || translateNow("multimodal.recall.noVisualConflict"));
     } else if (phase === "fast_table") {
       status = "complete";
       const toolName = String(ev.tool_name || "search_screen_text");
-      title = `Recall 快速工具返回 · ${toolName} · ${Number(ev.findings_len || 0)} 字证据`;
+      title = translateNow("multimodal.recall.quickTool", toolName, Number(ev.findings_len || 0));
       detail = String(ev.findings_preview || ev.obs_summary || "");
       toolResults = [{
         name: toolName,
@@ -3118,29 +3534,31 @@ export function queryWorkerProgressFromTrajectory(item: MmTrajectoryEntry): {
       addMetric(elapsed != null ? `${elapsed.toFixed(2)}s` : undefined);
     } else if (phase === "error") {
       status = "error";
-      title = `Recall 请求失败${ev.stage ? ` · ${String(ev.stage)}` : ""}`;
-      detail = String(ev.error || "未知错误");
+      title = translateNow("multimodal.recall.failed", ev.stage ? String(ev.stage) : undefined);
+      detail = String(ev.error || translateNow("multimodal.errors.unknown"));
       addMetric(typeof ev.model === "string" ? `model ${ev.model}` : undefined);
       addMetric(elapsed != null ? `${elapsed.toFixed(2)}s` : undefined);
     } else if (phase === "done") {
       status = "complete";
       const found = Number(ev.n_clues || 0) > 0
         || (String(ev.findings_preview || "")
-          && String(ev.findings_preview || "") !== "(记忆里未找到相关线索)");
-      title = `Recall 完成 · ${found ? `${Number(ev.n_clues || 0)} 条线索` : "未找到可靠线索"}`;
+          && String(ev.findings_preview || "") !== RECALL_NO_CLUES);
+      title = found
+        ? translateNow("multimodal.recall.completeFound", Number(ev.n_clues || 0))
+        : translateNow("multimodal.recall.completeNotFound");
       detail = String(ev.findings_preview || "");
-      addMetric(Number(ev.rounds || 0) ? `内层轮数 ${Number(ev.rounds)}` : undefined);
-      addMetric(Number(ev.findings_len || 0) ? `证据 ${Number(ev.findings_len)} 字` : undefined);
+      addMetric(Number(ev.rounds || 0) ? translateNow("multimodal.recall.innerRounds", Number(ev.rounds)) : undefined);
+      addMetric(Number(ev.findings_len || 0) ? translateNow("multimodal.recall.evidenceChars", Number(ev.findings_len)) : undefined);
       addMetric(elapsed != null ? `${elapsed.toFixed(2)}s` : undefined);
     } else {
-      title = `Recall ${phase}${round ? ` · 第${round}轮` : ""}`;
+      title = translateNow("multimodal.recall.phase", phase, round || undefined);
       detail = String(ev.clue || ev.obs_summary || "");
     }
   } else if (outerPhase === "bg_progress" && channel === "search") {
     const toolName = String(ev.tool_name || "text_search");
     title = phase === "bg_progress"
-      ? `Search 调用 · ${toolName}`
-      : `Search ${phase === "start" ? "开始检索" : phase}`;
+      ? translateNow("multimodal.recall.searchCall", toolName)
+      : translateNow("multimodal.recall.searchPhase", phase === "start" ? translateNow("multimodal.recall.searchStart") : phase);
     detail = String(ev.brief || ev.obs_summary || ev.findings || "");
     plannedTools = [{
       name: toolName,
@@ -3153,8 +3571,10 @@ export function queryWorkerProgressFromTrajectory(item: MmTrajectoryEntry): {
   } else if (outerPhase === "recall_done") {
     status = "complete";
     const found = ev.found !== false
-      && String(ev.findings_preview || "") !== "(记忆里未找到相关线索)";
-    title = `Recall 返回 · ${found ? `${Number(ev.n_clues || 0)} 条线索` : "未找到可靠线索"}${rawFrames.length ? ` · ${rawFrames.length} 帧` : ""}`;
+      && String(ev.findings_preview || "") !== RECALL_NO_CLUES;
+    title = found
+      ? translateNow("multimodal.recall.returnFound", Number(ev.n_clues || 0), rawFrames.length)
+      : translateNow("multimodal.recall.returnNotFound", rawFrames.length);
     detail = String(ev.findings_preview || "");
     toolResults = [{
       name: String(ev.tool_name || "recall_memory"),
@@ -3166,12 +3586,12 @@ export function queryWorkerProgressFromTrajectory(item: MmTrajectoryEntry): {
         ? { frame_ids: ev.frame_ids.map(String).filter(Boolean) }
         : {}),
     }];
-    addMetric(Number(ev.rounds || 0) ? `内层轮数 ${Number(ev.rounds)}` : undefined);
-    addMetric(Number(ev.findings_len || 0) ? `证据 ${Number(ev.findings_len)} 字` : undefined);
+    addMetric(Number(ev.rounds || 0) ? translateNow("multimodal.recall.innerRounds", Number(ev.rounds)) : undefined);
+    addMetric(Number(ev.findings_len || 0) ? translateNow("multimodal.recall.evidenceChars", Number(ev.findings_len)) : undefined);
     addMetric(elapsed != null ? `${elapsed.toFixed(2)}s` : undefined);
   } else if (outerPhase === "search_done") {
     status = "complete";
-    title = `Search 返回 · ${Number(ev.findings_len || 0)} 字证据`;
+    title = translateNow("multimodal.recall.searchReturn", Number(ev.findings_len || 0));
     detail = String(ev.findings_preview || "");
     toolResults = [{
       name: String(ev.tool_name || "text_search"),
@@ -3190,21 +3610,21 @@ export function queryWorkerProgressFromTrajectory(item: MmTrajectoryEntry): {
     addMetric(ev.cache_hit === true ? "cache hit" : undefined);
     addMetric(elapsed != null ? `${elapsed.toFixed(2)}s` : undefined);
   } else if (outerPhase === "answer_ready") {
-    title = "证据已齐，正在组织最终答案";
+    title = translateNow("multimodal.recall.composingAnswer");
     detail = String(ev.text_preview || "");
   } else if (["complete", "error", "cancelled"].includes(outerPhase)) {
     terminal = true;
     status = outerPhase as QueryWorkerProgressStep["status"];
-    title = outerPhase === "complete" ? "回答已完成并回填原问题"
-      : outerPhase === "cancelled" ? "任务已取消" : "任务执行失败";
+    title = outerPhase === "complete" ? translateNow("multimodal.recall.answerComplete")
+      : outerPhase === "cancelled" ? translateNow("multimodal.recall.taskCancelled") : translateNow("multimodal.recall.taskFailed");
     detail = String(p.answer_preview || "");
     addMetric(elapsed != null ? `${elapsed.toFixed(2)}s` : undefined);
   } else if (outerPhase === "tool_error") {
     status = "error";
     worker = channel === "recall" ? "RecallWorker"
       : channel === "search" ? "SearchWorker" : worker;
-    title = `${channel === "search" ? "Search" : "Recall"} 子任务失败 · ${String(ev.target || "unknown")}`;
-    detail = String(ev.findings || "未知错误");
+    title = translateNow("multimodal.recall.subtaskFailed", channel === "search" ? "Search" : "Recall", String(ev.target || "unknown"));
+    detail = String(ev.findings || translateNow("multimodal.errors.unknown"));
     if (typeof ev.tool_name === "string") {
       plannedTools = [{
         name: ev.tool_name,
@@ -3250,807 +3670,17 @@ export function queryWorkerProgressFromTrajectory(item: MmTrajectoryEntry): {
   };
 }
 
-type MemoryDebugTab = "memory" | "frame" | "search" | "debug";
-
-function fmtDebugTime(seconds?: number): string {
-  if (seconds == null || !isFinite(seconds)) return "";
-  const m = Math.floor(seconds / 60);
-  const s = Math.floor(seconds % 60);
-  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
-}
-
-function fmtDebugWall(seconds?: number): string {
-  if (!seconds) return "";
-  return new Date(seconds * 1000).toLocaleString();
-}
-
-function fmtDebugBytes(bytes?: number): string {
-  const n = Number(bytes || 0);
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-  return `${(n / 1024 / 1024).toFixed(1)} MB`;
-}
-
-function debugJson(v: unknown): string {
-  if (typeof v === "string") return v;
-  try { return JSON.stringify(v, null, 2); } catch { return String(v); }
-}
-
-function extractDebugBox(block: unknown): number[] | null {
-  if (!block || typeof block !== "object") return null;
-  const b = block as Record<string, unknown>;
-  const raw = b.bbox || b.box || b.rect || b.points || b.polygon || b.poly;
-  if (!Array.isArray(raw)) return null;
-  if (raw.length >= 4 && raw.every((x) => typeof x === "number")) {
-    const nums = raw.slice(0, 4) as number[];
-    if (nums[2] > nums[0] && nums[3] > nums[1]) return nums;
-    return [nums[0], nums[1], nums[0] + Math.max(0, nums[2]), nums[1] + Math.max(0, nums[3])];
-  }
-  const pts = raw.filter((p) => Array.isArray(p) && p.length >= 2) as unknown[][];
-  if (pts.length >= 2) {
-    const xs = pts.map((p) => Number(p[0])).filter(Number.isFinite);
-    const ys = pts.map((p) => Number(p[1])).filter(Number.isFinite);
-    if (xs.length && ys.length) return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
-  }
-  return null;
-}
-
-function blockText(block: unknown): string {
-  if (!block || typeof block !== "object") return "";
-  return String((block as Record<string, unknown>).text || "");
-}
-
-const OcrOverlayImage = memo(function OcrOverlayImage({
-  imageB64, blocks,
-}: { imageB64: string; blocks: unknown[] }) {
-  const [size, setSize] = useState<{ w: number; h: number } | null>(null);
-  const boxes = useMemo(() => {
-    const arr = Array.isArray(blocks) ? blocks : [];
-    const rawBoxes = arr.map((b) => ({ block: b, box: extractDebugBox(b) })).filter((x) => x.box) as Array<{ block: unknown; box: number[] }>;
-    if (!size || rawBoxes.length === 0) return [];
-    const maxX = Math.max(...rawBoxes.map((x) => Math.max(x.box[0], x.box[2])));
-    const maxY = Math.max(...rawBoxes.map((x) => Math.max(x.box[1], x.box[3])));
-    const norm = maxX <= 1.5 && maxY <= 1.5;
-    return rawBoxes.map(({ block, box }) => {
-      const [x1, y1, x2, y2] = box;
-      return {
-        block,
-        left: norm ? x1 * 100 : (x1 / Math.max(maxX, size.w)) * 100,
-        top: norm ? y1 * 100 : (y1 / Math.max(maxY, size.h)) * 100,
-        width: norm ? (x2 - x1) * 100 : ((x2 - x1) / Math.max(maxX, size.w)) * 100,
-        height: norm ? (y2 - y1) * 100 : ((y2 - y1) / Math.max(maxY, size.h)) * 100,
-      };
-    });
-  }, [blocks, size]);
-  if (!imageB64) {
-    return <div className="flex aspect-video items-center justify-center border bg-black text-xs text-muted-foreground">no frame image</div>;
-  }
-  return (
-    <div className="relative overflow-hidden border bg-black">
-      <img
-        src={`data:image/jpeg;base64,${imageB64}`}
-        alt="memory frame"
-        className="max-h-[48vh] w-full object-contain"
-        onLoad={(e) => setSize({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight })}
-      />
-      {boxes.map((b, i) => (
-        <div
-          key={i}
-          title={blockText(b.block)}
-          className="absolute border border-amber-300/90 bg-amber-300/10"
-          style={{
-            left: `${Math.max(0, Math.min(100, b.left))}%`,
-            top: `${Math.max(0, Math.min(100, b.top))}%`,
-            width: `${Math.max(0.4, Math.min(100, b.width))}%`,
-            height: `${Math.max(0.4, Math.min(100, b.height))}%`,
-          }}
-        />
-      ))}
-    </div>
-  );
-});
-
-const MemoryTableView = memo(function MemoryTableView({
-  rows, columns,
-}: { rows: unknown[]; columns: string[] }) {
-  const displayRows = rows.slice(0, 30);
-  if (columns.length === 0 && displayRows.length === 0) {
-    return <div className="text-xs italic text-muted-foreground">(no structured rows)</div>;
-  }
-  if (columns.length === 0) {
-    return <pre className="max-h-56 overflow-auto whitespace-pre-wrap border bg-background/50 p-2 text-[11px]">{debugJson(displayRows)}</pre>;
-  }
-  return (
-    <div className="max-h-64 overflow-auto border">
-      <table className="w-full border-collapse text-[11px]">
-        <thead className="sticky top-0 bg-background">
-          <tr>{columns.map((c) => <th key={c} className="border-b border-r px-2 py-1 text-left font-medium">{c}</th>)}</tr>
-        </thead>
-        <tbody>
-          {displayRows.map((row, i) => {
-            const obj = row && typeof row === "object" && !Array.isArray(row)
-              ? row as Record<string, unknown> : {};
-            return (
-              <tr key={i}>
-                {columns.map((c) => (
-                  <td key={c} className="max-w-[220px] border-r border-t px-2 py-1 align-top">
-                    <span className="whitespace-pre-wrap break-words">{String(obj[c] ?? "")}</span>
-                  </td>
-                ))}
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
-  );
-});
-
-const MemoryEventCard = memo(function MemoryEventCard({
-  event, level, onFrame,
-}: {
-  event: MmMemoryDebugEvent;
-  level: "micro" | "macro" | "super";
-  onFrame: (frameId: string) => void;
-}) {
-  const entities = event.entity_names || event.key_entities || [];
-  const frameIds = event.frame_ids || [];
-  const title = event.label || event.action || event.id;
-  const description = event.summary || event.description || "(暂无描述)";
-  return (
-    <details className="rounded border bg-background/50 p-2 text-xs" open={level !== "micro"}>
-      <summary className="cursor-pointer list-none">
-        <span className={`mr-2 rounded px-1.5 py-0.5 font-mono text-[10px] ${
-          level === "super" ? "bg-violet-500/15 text-violet-200"
-            : level === "macro" ? "bg-amber-500/15 text-amber-200"
-              : "bg-cyan-500/15 text-cyan-200"
-        }`}>{level}</span>
-        <span className="font-semibold">{title}</span>
-        <span className="ml-2 font-mono text-muted-foreground">
-          {fmtDebugTime(event.t_start)}–{fmtDebugTime(event.t_end)}
-        </span>
-      </summary>
-      <div className="mt-2 whitespace-pre-wrap leading-relaxed text-foreground/85">{description}</div>
-      {(entities.length > 0 || frameIds.length > 0) && (
-        <div className="mt-2 flex flex-wrap gap-1">
-          {entities.map((name) => (
-            <span key={name} className="rounded bg-muted px-1.5 py-0.5">entity: {name}</span>
-          ))}
-          {frameIds.map((fid) => (
-            <button
-              key={fid}
-              type="button"
-              onClick={() => onFrame(fid)}
-              className="rounded border border-emerald-400/30 px-1.5 py-0.5 font-mono text-emerald-200 hover:bg-emerald-400/10"
-            >
-              {fid}
-            </button>
-          ))}
-        </div>
-      )}
-      {((event.narrative_arc?.length || 0) > 0 || Object.keys(event.entity_arcs || {}).length > 0) && (
-        <div className="mt-2 rounded bg-black/20 p-2">
-          {event.narrative_arc?.map((phase, i) => (
-            <div key={i} className="mb-1 last:mb-0">{debugJson(phase)}</div>
-          ))}
-          {Object.entries(event.entity_arcs || {}).map(([name, arc]) => (
-            <div key={name}><span className="font-semibold">{name}</span> → {debugJson(arc)}</div>
-          ))}
-        </div>
-      )}
-    </details>
-  );
-});
-
-const MemoryDebugPanel = memo(function MemoryDebugPanel({
-  open, onClose, currentSessionId, trajectory,
-}: {
-  open: boolean;
-  onClose: () => void;
-  currentSessionId: string;
-  trajectory: MmTrajectoryEntry[];
-}) {
-  const [tab, setTab] = useState<MemoryDebugTab>("memory");
-  const [sessions, setSessions] = useState<MmMemoryDebugSessionSummary[]>([]);
-  const [selectedDb, setSelectedDb] = useState("");
-  const [overview, setOverview] = useState<MmMemoryDebugSessionResponse | null>(null);
-  const [trace, setTrace] = useState<MmMemoryDebugTraceResponse | null>(null);
-  const [frame, setFrame] = useState<MmMemoryDebugFrameResponse | null>(null);
-  const [selectedFrameId, setSelectedFrameId] = useState("");
-  const [searchQ, setSearchQ] = useState("");
-  const [searchScope, setSearchScope] = useState<"latest" | "today" | "all">("all");
-  const [searchResults, setSearchResults] = useState<MmMemoryDebugSearchResult[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [workerFilter, setWorkerFilter] = useState("all");
-  const [trajectoryDisplayLimit, setTrajectoryDisplayLimit] = useState(200);
-  const selectedDbManually = useRef(false);
-
-  useEffect(() => {
-    selectedDbManually.current = false;
-    setSelectedDb("");
-    setSelectedFrameId("");
-    setFrame(null);
-  }, [currentSessionId]);
-
-  const refreshSessions = useCallback(async () => {
-    if (!open) return;
-    setLoading(true);
-    setError("");
-    try {
-      const res = await api.getMultimodalMemoryDebugSessions(80);
-      setSessions(res.sessions);
-      setSelectedDb((prev) => {
-        const previousStillExists = Boolean(
-          prev && res.sessions.some((s) => s.name === prev),
-        );
-        if (selectedDbManually.current && previousStillExists) return prev;
-        const current = res.sessions.find(
-          (s) => s.meta?.hermes_session_id === currentSessionId,
-        );
-        if (current) return current.name;
-        if (previousStillExists) return prev;
-        const newestNonEmpty = res.sessions.find((s) =>
-          Object.values(s.counts || {}).some((n) => Number(n) > 0));
-        return newestNonEmpty?.name || res.sessions[0]?.name || "";
-      });
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setLoading(false);
-    }
-  }, [open, currentSessionId]);
-
-  useEffect(() => { void refreshSessions(); }, [refreshSessions]);
-
-  const refreshOverview = useCallback(async () => {
-    if (!open || !selectedDb) return;
-    setLoading(true);
-    setError("");
-    try {
-      const ov = await api.getMultimodalMemoryDebugSession(
-        selectedDb, { session_id: currentSessionId, limit: 260 },
-      );
-      setOverview(ov);
-      setSelectedFrameId((prev) => prev || ov.timeline[ov.timeline.length - 1]?.frame_id || "");
-      if (tab === "debug") {
-        const tr = await api.getMultimodalMemoryDebugTrace({
-          session_id: currentSessionId, db: selectedDb, limit: 160,
-        });
-        setTrace(tr);
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setLoading(false);
-    }
-  }, [open, selectedDb, currentSessionId, tab]);
-
-  useEffect(() => { void refreshOverview(); }, [refreshOverview]);
-
-  useEffect(() => {
-    if (!open || tab !== "frame" || !selectedDb || !selectedFrameId) return;
-    let cancelled = false;
-    api.getMultimodalMemoryDebugFrame(selectedDb, selectedFrameId)
-      .then((res) => { if (!cancelled) setFrame(res); })
-      .catch((e) => { if (!cancelled) setError(e instanceof Error ? e.message : String(e)); });
-    return () => { cancelled = true; };
-  }, [open, tab, selectedDb, selectedFrameId]);
-
-  const runSearch = useCallback(async () => {
-    const q = searchQ.trim();
-    if (!q) return;
-    setLoading(true);
-    setError("");
-    try {
-      const res = await api.searchMultimodalMemoryDebug(q, {
-        scope: searchScope,
-        session: searchScope === "latest" ? selectedDb : undefined,
-        limit: 50,
-      });
-      setSearchResults(res.results);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setLoading(false);
-    }
-  }, [searchQ, searchScope, selectedDb]);
-
-  const workers = useMemo(() => Array.from(new Set(
-    trajectory.map((it) => it.worker).filter(Boolean),
-  )).sort(), [trajectory]);
-  const visibleTrajectory = useMemo(() => (
-    workerFilter === "all"
-      ? trajectory
-      : trajectory.filter((it) => it.worker === workerFilter)
-  ), [trajectory, workerFilter]);
-  const renderedTrajectory = useMemo(
-    () => visibleTrajectory.slice(-trajectoryDisplayLimit),
-    [visibleTrajectory, trajectoryDisplayLimit],
-  );
-  if (!open) return null;
-  const counts = overview?.session.counts || {};
-  const logs = trace?.logs || overview?.trace.logs || [];
-  const activeFrame = frame?.frame_id === selectedFrameId ? frame : null;
-  const blocks = activeFrame?.screen_text?.ocr_blocks || [];
-  const health = overview?.health || {};
-  const memory = overview?.memory;
-  const entities = memory?.entities || [];
-  const microEvents = memory?.events.micro || [];
-  const macroEvents = memory?.events.macro || [];
-  const superEvents = memory?.events.super || [];
-  const entityStates = memory?.evolution.entity_states || [];
-  const revisions = memory?.evolution.revisions || [];
-  const eventCount = microEvents.length + macroEvents.length + superEvents.length;
-  const evolutionCount = entityStates.length + revisions.length;
-  const tabLabels: Record<MemoryDebugTab, string> = {
-    memory: "本次记忆",
-    frame: "帧详情",
-    search: "搜索",
-    debug: "高级 Debug",
-  };
-
-  return (
-    <div className="fixed inset-y-0 right-0 z-50 flex w-[min(980px,96vw)] flex-col border-l border-border bg-background/95 shadow-2xl backdrop-blur">
-      <div className="flex items-center gap-2 border-b px-3 py-2">
-        <Database className="h-4 w-4 text-emerald-300" />
-        <div className="min-w-0 flex-1">
-          <div className="text-sm font-semibold">本次多模态记忆</div>
-          <div className="truncate text-[11px] text-muted-foreground">
-            帧 · 实体 · 事件 · 演化 · {overview?.session.meta?.summary || selectedDb || "暂无记忆库"}
-          </div>
-        </div>
-        <Button size="icon" outlined title="刷新" onClick={() => { void refreshSessions(); void refreshOverview(); }}>
-          <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
-        </Button>
-        <Button size="icon" outlined title="关闭" onClick={onClose}><X className="h-4 w-4" /></Button>
-      </div>
-      <div className="flex flex-wrap items-center gap-2 border-b px-3 py-2">
-        <select
-          value={selectedDb}
-          onChange={(e) => {
-            selectedDbManually.current = true;
-            setSelectedDb(e.target.value);
-            setSelectedFrameId("");
-            setFrame(null);
-          }}
-          className="min-w-0 flex-1 rounded border bg-background px-2 py-1 text-xs"
-        >
-          {sessions.map((s) => (
-            <option key={s.name} value={s.name}>
-              {s.name} · frames {s.counts.memory_frames || 0} · OCR {s.counts.screen_texts || 0}
-            </option>
-          ))}
-        </select>
-        <div className="flex gap-1">
-          {(["memory", "frame", "search", "debug"] as MemoryDebugTab[]).map((k) => (
-            <button
-              key={k}
-              type="button"
-              onClick={() => setTab(k)}
-              className={`rounded border px-2 py-1 text-xs ${tab === k ? "border-emerald-300 text-emerald-200" : "border-border text-muted-foreground"}`}
-            >
-              {tabLabels[k]}
-            </button>
-          ))}
-        </div>
-      </div>
-      {error && <div className="border-b border-red-400/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">{error}</div>}
-      <div className="min-h-0 flex-1 overflow-y-auto p-3">
-        {tab === "memory" && (
-          <div className="space-y-5">
-            <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
-              {[
-                ["记忆帧", overview?.timeline.length || 0, counts.memory_frames || 0],
-                ["实体", entities.length, counts.entities || 0],
-                ["事件", eventCount, (counts.micro_events || 0) + (counts.macro_events || 0) + (counts.super_events || 0)],
-                ["演化记录", evolutionCount, (counts.entity_states || 0) + (counts.revision_log || 0)],
-              ].map(([label, shown, total]) => (
-                <div key={String(label)} className="rounded border bg-background/50 p-3">
-                  <div className="text-[11px] text-muted-foreground">{label}</div>
-                  <div className="mt-1 font-mono text-xl text-emerald-200">{String(shown)}</div>
-                  {Number(total) > Number(shown) && (
-                    <div className="text-[10px] text-muted-foreground">库内共 {String(total)}</div>
-                  )}
-                </div>
-              ))}
-            </div>
-
-            <section className="space-y-2">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="text-sm font-semibold">1. 本次留下了哪些帧</h3>
-                  <p className="text-[11px] text-muted-foreground">只显示真正进入 memory_frames 的证据帧；不是每秒采样日志。</p>
-                </div>
-                <Button size="sm" outlined onClick={() => setTab("frame")}>查看全部与 OCR</Button>
-              </div>
-              {(overview?.timeline.length || 0) === 0 ? (
-                <div className="rounded border p-3 text-xs italic text-muted-foreground">本次还没有写入任何记忆帧。</div>
-              ) : (
-                <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
-                  {(overview?.timeline || []).slice(-48).reverse().map((it) => (
-                    <button
-                      key={it.frame_id}
-                      type="button"
-                      onClick={() => { setSelectedFrameId(it.frame_id); setTab("frame"); }}
-                      className="overflow-hidden rounded border bg-background/50 text-left hover:border-emerald-300/60"
-                    >
-                      {it.thumb_b64 ? (
-                        <img src={`data:image/jpeg;base64,${it.thumb_b64}`} alt={it.frame_id} className="h-24 w-full object-cover" />
-                      ) : <div className="flex h-24 items-center justify-center bg-black/30 text-[10px] text-muted-foreground">no image</div>}
-                      <div className="p-1.5">
-                        <div className="truncate font-mono text-[10px] text-emerald-200">{fmtDebugTime(it.t_observed)} · {it.frame_id}</div>
-                        <div className="truncate text-[10px] text-muted-foreground">{it.source || "unknown"} · {it.note || it.micro_id || "key frame"}</div>
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </section>
-
-            <section className="space-y-2">
-              <div>
-                <h3 className="text-sm font-semibold">2. 本次有哪些实体</h3>
-                <p className="text-[11px] text-muted-foreground">人物、物体、地点及其属性、别名、出现次数和证据帧。</p>
-              </div>
-              {entities.length === 0 ? (
-                <div className="rounded border p-3 text-xs italic text-muted-foreground">尚未抽取出实体。</div>
-              ) : (
-                <div className="grid grid-cols-1 gap-2 lg:grid-cols-2">
-                  {entities.map((entity) => (
-                    <details key={entity.id} className="rounded border bg-background/50 p-3 text-xs" open={entities.length <= 8}>
-                      <summary className="cursor-pointer list-none">
-                        <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 font-mono text-[10px] text-emerald-200">{entity.type}</span>
-                        <span className="ml-2 font-semibold">{entity.name}</span>
-                        <span className="ml-2 text-muted-foreground">出现 {entity.seen_count} 次 · {fmtDebugTime(entity.first_seen)}–{fmtDebugTime(entity.last_seen)}</span>
-                      </summary>
-                      {entity.aliases.length > 0 && (
-                        <div className="mt-2 text-muted-foreground">别名：{entity.aliases.join(" / ")}</div>
-                      )}
-                      <div className="mt-2 flex flex-wrap gap-1">
-                        {Object.entries(entity.attributes || {}).map(([key, value]) => (
-                          <span key={key} className="rounded bg-muted px-1.5 py-0.5">
-                            <span className="text-muted-foreground">{key}:</span> {debugJson(value)}
-                          </span>
-                        ))}
-                      </div>
-                      {entity.frame_ids.length > 0 && (
-                        <div className="mt-2 flex flex-wrap gap-1">
-                          {entity.frame_ids.map((fid) => (
-                            <button
-                              key={fid}
-                              type="button"
-                              onClick={() => { setSelectedFrameId(fid); setTab("frame"); }}
-                              className="rounded border border-emerald-400/30 px-1.5 py-0.5 font-mono text-[10px] text-emerald-200"
-                            >{fid}</button>
-                          ))}
-                        </div>
-                      )}
-                    </details>
-                  ))}
-                </div>
-              )}
-            </section>
-
-            <section className="space-y-2">
-              <div>
-                <h3 className="text-sm font-semibold">3. 本次发生了哪些事件</h3>
-                <p className="text-[11px] text-muted-foreground">micro 是局部观察，macro 是阶段总结，super 是跨阶段叙事。</p>
-              </div>
-              {eventCount === 0 ? (
-                <div className="rounded border p-3 text-xs italic text-muted-foreground">尚未形成事件。</div>
-              ) : (
-                <div className="space-y-2">
-                  {[...superEvents, ...macroEvents, ...microEvents].map((event) => (
-                    <MemoryEventCard
-                      key={event.id}
-                      event={event}
-                      level={superEvents.includes(event) ? "super" : macroEvents.includes(event) ? "macro" : "micro"}
-                      onFrame={(fid) => { setSelectedFrameId(fid); setTab("frame"); }}
-                    />
-                  ))}
-                </div>
-              )}
-            </section>
-
-            <section className="space-y-2">
-              <div>
-                <h3 className="text-sm font-semibold">4. 实体和事件如何演化</h3>
-                <p className="text-[11px] text-muted-foreground">按时间展示首次发现、属性变化、新别名，以及 Reviewer 对记忆的修订。</p>
-              </div>
-              {evolutionCount === 0 ? (
-                <div className="rounded border p-3 text-xs italic text-muted-foreground">尚无演化或修订记录。</div>
-              ) : (
-                <div className="space-y-2">
-                  {entityStates.map((state) => (
-                    <div key={`state-${state.id}`} className="rounded border-l-2 border-l-cyan-300 border-y border-r bg-background/50 p-2 text-xs">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="font-mono text-cyan-200">{fmtDebugTime(state.t_observed)}</span>
-                        <span className="font-semibold">{state.entity_name}</span>
-                        <span className="rounded bg-muted px-1.5 py-0.5">{state.state_label}</span>
-                        <span className="text-muted-foreground">{state.source}</span>
-                      </div>
-                      <div className="mt-2 flex flex-wrap gap-1">
-                        {Object.entries(state.attributes_delta || {}).map(([key, value]) => (
-                          <span key={key} className="rounded bg-cyan-500/10 px-1.5 py-0.5"><span className="text-muted-foreground">{key} →</span> {debugJson(value)}</span>
-                        ))}
-                        {state.new_aliases.map((alias) => <span key={alias} className="rounded bg-violet-500/10 px-1.5 py-0.5">+ alias {alias}</span>)}
-                      </div>
-                      {state.evidence_frame_ids.length > 0 && (
-                        <div className="mt-2 flex flex-wrap gap-1">
-                          {state.evidence_frame_ids.map((fid) => (
-                            <button key={fid} type="button" onClick={() => { setSelectedFrameId(fid); setTab("frame"); }} className="font-mono text-[10px] text-emerald-200 underline-offset-2 hover:underline">{fid}</button>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                  {revisions.map((revision) => (
-                    <details key={`revision-${revision.id}`} className={`rounded border-l-2 border-y border-r bg-background/50 p-2 text-xs ${revision.success ? "border-l-amber-300" : "border-l-red-300"}`}>
-                      <summary className="cursor-pointer list-none">
-                        <span className="font-mono text-amber-200">{fmtDebugWall(revision.t_applied)}</span>
-                        <span className="ml-2 font-semibold">Reviewer: {revision.op}</span>
-                        <span className="ml-2 text-muted-foreground">{revision.target_ids.join(", ")}</span>
-                      </summary>
-                      <div className="mt-2 whitespace-pre-wrap">{revision.reason || revision.error || "(无说明)"}</div>
-                      <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap rounded bg-black/20 p-2 text-[11px]">{debugJson(revision.payload)}</pre>
-                    </details>
-                  ))}
-                </div>
-              )}
-            </section>
-          </div>
-        )}
-
-        {tab === "debug" && (
-          <div className="space-y-3">
-            <div className="sticky top-0 z-10 flex flex-wrap items-center gap-2 rounded border bg-background/95 p-2 text-xs backdrop-blur">
-              <Activity className="h-3.5 w-3.5 text-cyan-300" />
-              <span className="font-semibold">Live worker trajectory</span>
-              <span className="text-muted-foreground">
-                showing {renderedTrajectory.length} / {visibleTrajectory.length} events
-              </span>
-              <select
-                value={workerFilter}
-                onChange={(e) => setWorkerFilter(e.target.value)}
-                className="ml-auto rounded border bg-background px-2 py-1 text-xs"
-              >
-                <option value="all">all workers</option>
-                {workers.map((w) => <option key={w} value={w}>{w}</option>)}
-              </select>
-            </div>
-            {visibleTrajectory.length === 0 ? (
-              <div className="rounded border p-3 text-xs italic text-muted-foreground">
-                暂无 trajectory。开始摄像头/共享屏幕、提问、Recall 或 Monitor 后会实时出现。
-              </div>
-            ) : [...renderedTrajectory].reverse().map((it) => {
-              const rawFrames = (it.payload?.frames || []) as MmTrajectoryFrame[];
-              const frames = Array.isArray(rawFrames) ? rawFrames : [];
-              return (
-                <details key={it.id} open={frames.length > 0} className="rounded border bg-background/50 p-2 text-xs">
-                  <summary className="cursor-pointer list-none">
-                    <span className="font-mono text-cyan-300">#{it.seq}</span>
-                    <span className="ml-2 font-semibold text-emerald-200">{it.worker}</span>
-                    <span className="ml-2 rounded bg-muted px-1.5 py-0.5 font-mono">{it.phase}</span>
-                    <span className="ml-2 text-muted-foreground">{fmtDebugWall(it.ts)}</span>
-                    <span className="ml-2 text-[10px] text-muted-foreground">{it.event}</span>
-                  </summary>
-                  {frames.length > 0 && (
-                    <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
-                      {frames.map((fr, i) => {
-                        const b64 = fr.thumb_b64 || fr.jpeg_b64 || "";
-                        const usableB64 = b64 && !b64.startsWith("<omitted");
-                        return (
-                          <figure key={`${fr.frame_id || fr.ts || i}-${i}`} className="overflow-hidden rounded border bg-black/20">
-                            {usableB64
-                              ? <img src={`data:image/jpeg;base64,${b64}`} alt="recall evidence" className="h-28 w-full object-contain" />
-                              : <div className="flex h-28 items-center justify-center text-[10px] text-muted-foreground">thumbnail omitted</div>}
-                            <figcaption className="px-1.5 py-1 font-mono text-[10px] text-muted-foreground">
-                              {fr.frame_id || `frame ${i + 1}`} · {fmtDebugTime(fr.ts)}
-                            </figcaption>
-                          </figure>
-                        );
-                      })}
-                    </div>
-                  )}
-                  <pre className="mt-2 max-h-96 overflow-auto whitespace-pre-wrap break-words rounded bg-black/20 p-2 text-[11px] leading-snug">
-                    {debugJson(it.payload)}
-                  </pre>
-                </details>
-              );
-            })}
-            {renderedTrajectory.length < visibleTrajectory.length && (
-              <Button
-                size="sm"
-                outlined
-                onClick={() => setTrajectoryDisplayLimit((n) => Math.min(n + 200, 2000))}
-              >
-                再显示 200 条
-              </Button>
-            )}
-          </div>
-        )}
-
-        {tab === "debug" && (
-          <div className="grid min-h-0 grid-cols-1 gap-3 lg:grid-cols-[1fr_1fr]">
-            <section className="min-w-0">
-              <div className="mb-2 flex items-center gap-1 text-xs font-semibold text-muted-foreground">
-                <Activity className="h-3.5 w-3.5" /> Recall Messages
-              </div>
-              <div className="space-y-2">
-                {(trace?.messages || []).length === 0 ? (
-                  <div className="rounded border p-2 text-xs italic text-muted-foreground">No persisted recall tool messages for this session.</div>
-                ) : trace!.messages.map((m, i) => (
-                  <details key={`${m.timestamp}-${i}`} className="rounded border bg-background/50 p-2 text-xs">
-                    <summary className="cursor-pointer list-none">
-                      <span className="font-mono text-emerald-300">{m.tool_name || m.role}</span>
-                      <span className="ml-2 text-muted-foreground">{fmtDebugWall(m.timestamp)}</span>
-                    </summary>
-                    <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words">{m.content || debugJson(m.tool_calls)}</pre>
-                  </details>
-                ))}
-              </div>
-            </section>
-            <section className="min-w-0">
-              <div className="mb-2 flex items-center gap-1 text-xs font-semibold text-muted-foreground">
-                <FileText className="h-3.5 w-3.5" /> Relevant Logs
-              </div>
-              <pre className="max-h-[70vh] overflow-auto rounded border bg-black/30 p-2 text-[11px] leading-snug text-muted-foreground">
-                {logs.join("\n") || "No recall/writer/OCR logs found."}
-              </pre>
-            </section>
-          </div>
-        )}
-
-        {tab === "frame" && (
-          <div className="grid min-h-0 grid-cols-1 gap-3 lg:grid-cols-[330px_minmax(0,1fr)]">
-            <section className="min-w-0">
-              <div className="mb-2 flex items-center justify-between text-xs text-muted-foreground">
-                <span>All-scene memory frames · {overview?.timeline.length || 0}</span>
-                <span>Indexed {counts.memory_frames || 0} · OCR {counts.screen_texts || 0} · Tables {counts.screen_tables || 0}</span>
-              </div>
-              <div className="max-h-[72vh] space-y-1 overflow-y-auto">
-                {(overview?.timeline || []).map((it) => (
-                  <button
-                    key={it.frame_id}
-                    type="button"
-                    onClick={() => setSelectedFrameId(it.frame_id)}
-                    className={`flex w-full gap-2 rounded border p-2 text-left text-xs ${selectedFrameId === it.frame_id ? "border-emerald-300/70 bg-emerald-400/10" : "border-border bg-background/40"}`}
-                  >
-                    {it.thumb_b64 ? <img src={`data:image/jpeg;base64,${it.thumb_b64}`} alt="" className="h-12 w-16 shrink-0 object-cover" /> : <div className="h-12 w-16 shrink-0 bg-black" />}
-                    <span className="min-w-0 flex-1">
-                      <span className="block font-mono text-emerald-300">{fmtDebugTime(it.t_observed)} · {it.frame_id}</span>
-                      <span className="block truncate text-muted-foreground">
-                        <span className="mr-1 rounded bg-muted px-1 py-0.5">{it.source_type || it.source || "unknown"}</span>
-                        {it.window_title || it.app || it.note || it.micro_id}
-                      </span>
-                      <span className="line-clamp-2 text-foreground/80">{it.raw_preview || it.observation_preview || "(visual key frame; no OCR text)"}</span>
-                    </span>
-                    {it.table_count > 0 && <Table2 className="h-4 w-4 shrink-0 text-amber-300" />}
-                  </button>
-                ))}
-              </div>
-            </section>
-            <section className="min-w-0 space-y-3">
-              <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                <span className="font-mono text-emerald-300">{selectedFrameId || "no frame selected"}</span>
-                {activeFrame?.memory_frame && <span>{fmtDebugTime(activeFrame.memory_frame.t_observed)}</span>}
-                {activeFrame?.memory_frame?.source_type && <span className="rounded bg-muted px-1.5 py-0.5">{activeFrame.memory_frame.source_type}</span>}
-                {activeFrame?.screen_text && <span>{fmtDebugTime(activeFrame.screen_text.t_observed)}</span>}
-                {activeFrame?.screen_text?.source && <span>{activeFrame.screen_text.source}</span>}
-              </div>
-              <OcrOverlayImage imageB64={activeFrame?.image_b64 || ""} blocks={blocks} />
-              <div>
-                <div className="mb-1 text-xs font-semibold text-muted-foreground">All-scene Memory Frame Metadata</div>
-                <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded border bg-background/50 p-2 text-[11px]">{debugJson(activeFrame?.memory_frame || {})}</pre>
-              </div>
-              <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
-                <div>
-                  <div className="mb-1 text-xs font-semibold text-muted-foreground">OCR Raw Text</div>
-                  <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded border bg-background/50 p-2 text-[11px]">{activeFrame?.screen_text?.raw_text || "(empty)"}</pre>
-                </div>
-                <div>
-                  <div className="mb-1 text-xs font-semibold text-muted-foreground">OCR Blocks · {Array.isArray(blocks) ? blocks.length : 0}</div>
-                  <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded border bg-background/50 p-2 text-[11px]">{debugJson((Array.isArray(blocks) ? blocks : []).slice(0, 80))}</pre>
-                </div>
-              </div>
-              {(activeFrame?.tables || []).map((t) => (
-                <div key={`${t.table_id}-${t.frame_id}`} className="space-y-1">
-                  <div className="text-xs font-semibold text-amber-200">{t.table_id} · {t.title || "table"}</div>
-                  <MemoryTableView rows={t.rows} columns={t.columns} />
-                </div>
-              ))}
-              <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
-                <pre className="max-h-52 overflow-auto whitespace-pre-wrap rounded border bg-background/50 p-2 text-[11px]">{debugJson(activeFrame?.micro_events || [])}</pre>
-                <pre className="max-h-52 overflow-auto whitespace-pre-wrap rounded border bg-background/50 p-2 text-[11px]">{debugJson(activeFrame?.entities || [])}</pre>
-              </div>
-            </section>
-          </div>
-        )}
-
-        {tab === "search" && (
-          <div className="space-y-3">
-            <div className="flex gap-2">
-              <div className="relative min-w-0 flex-1">
-                <Search className="pointer-events-none absolute left-2 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                <input
-                  value={searchQ}
-                  onChange={(e) => setSearchQ(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter") void runSearch(); }}
-                  placeholder="Search OCR / tables / events across sessions"
-                  className="w-full rounded border bg-background py-2 pl-8 pr-3 text-sm"
-                />
-              </div>
-              <select value={searchScope} onChange={(e) => setSearchScope(e.target.value as typeof searchScope)}
-                className="rounded border bg-background px-2 text-xs">
-                <option value="all">all sessions</option>
-                <option value="today">today</option>
-                <option value="latest">selected DB</option>
-              </select>
-              <Button size="sm" prefix={<Search />} onClick={() => void runSearch()}>Search</Button>
-            </div>
-            <div className="space-y-2">
-              {searchResults.map((r, i) => (
-                <details key={`${r.session}-${r.kind}-${r.frame_id}-${i}`} className="rounded border bg-background/50 p-2 text-xs" open={i < 3}>
-                  <summary className="flex cursor-pointer list-none items-center gap-2">
-                    {r.thumb_b64 ? <img src={`data:image/jpeg;base64,${r.thumb_b64}`} alt="" className="h-10 w-14 object-cover" /> : null}
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate font-medium">{r.title}</span>
-                      <span className="font-mono text-muted-foreground">{r.session} · {r.kind} · score {r.score} · {r.frame_id || ""}</span>
-                    </span>
-                  </summary>
-                  <pre className="mt-2 max-h-44 overflow-auto whitespace-pre-wrap rounded border bg-black/20 p-2">{r.snippet}</pre>
-                  {r.table && <MemoryTableView rows={r.table.row_hits.map((x) => x.row)} columns={r.table.columns} />}
-                </details>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {tab === "debug" && (
-          <div className="space-y-3">
-            <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
-              {Object.entries(counts).map(([k, v]) => (
-                <div key={k} className="rounded border bg-background/50 p-2">
-                  <div className="text-[10px] uppercase text-muted-foreground">{k}</div>
-                  <div className="font-mono text-lg text-emerald-200">{String(v)}</div>
-                </div>
-              ))}
-            </div>
-            <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
-              <div className="rounded border bg-background/50 p-2 text-xs">
-                <div className="mb-1 font-semibold text-muted-foreground">Session</div>
-                <div>mtime: {overview?.session.mtime ? fmtDebugWall(overview.session.mtime) : ""}</div>
-                <div>size: {fmtDebugBytes(overview?.session.size)}</div>
-                <div>frame files: {String(health.frame_files ?? 0)}</div>
-                <div>micro no frames: {String(health.micro_events_without_frames ?? 0)}</div>
-                <div>empty OCR: {String(health.screen_texts_without_raw_text ?? 0)}</div>
-              </div>
-              <div className="rounded border bg-background/50 p-2 text-xs">
-                <div className="mb-1 font-semibold text-muted-foreground">Meta</div>
-                <pre className="max-h-40 overflow-auto whitespace-pre-wrap">{debugJson(overview?.session.meta || {})}</pre>
-              </div>
-            </div>
-            <div>
-              <div className="mb-1 text-xs font-semibold text-muted-foreground">Recent Writer / OCR / Recall Warnings</div>
-              <pre className="max-h-[42vh] overflow-auto rounded border bg-black/30 p-2 text-[11px] leading-snug text-muted-foreground">
-                {debugJson(health.recent_log_warnings || [])}
-              </pre>
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-});
 
 export default function MultimodalChatPage() {
+  const { t } = useI18n();
   const refs = useRef<Refs>({
     gw: null, sessionId: "", storedSid: "", stream: null, sourceType: null,
     capFps: 2, capTimer: null,
-    startTs: 0, sentFrames: 0, droppedFrames: 0, isAnswering: false,
+    startTs: 0, captureAttemptId: "", sentFrames: 0, droppedFrames: 0,
+    isAnswering: false,
     micStream: null, micAudioCtx: null, micNode: null, micSource: null,
-    isRecording: false,
+    isRecording: false, asrTransport: null, micGeneration: 0, micFlushResolve: null,
+    micStopPromise: null, micBoundaryPromise: null,
     envStream: null, envRecorder: null, envStop: false, envMime: "audio/webm",
     envWindowSec: 5, envSliceTimer: null, envCaptureId: "", envChunkSeq: 0,
     envLastError: "",
@@ -4073,6 +3703,13 @@ export default function MultimodalChatPage() {
   // Invalidates trajectory.list responses that race a session switch or a
   // newer hydrate request for the same live session.
   const trajectoryHydrationGenerationRef = useRef(0);
+  // Voice Dialog is continuous user intent layered over an exact live-session
+  // ASR owner. The recovery state survives transport/session replacement while
+  // each activation remains bound to one sid + attempt.
+  const voiceDialogRecoveryRef = useRef(new VoiceDialogRecovery());
+  const runVoiceDialogActivationRef = useRef<
+    (activation: VoiceDialogActivation) => void
+  >(() => undefined);
   const ttsRefs = useRef<TtsRefs>({
     audioCtx: null, audioNextStart: 0, active: [], ttsMuteUntil: 0,
     currentRid: null, cancelled: new Set(),
@@ -4080,6 +3717,7 @@ export default function MultimodalChatPage() {
   });
 
   const { setAfterTitle, setEnd } = usePageHeader();
+  const { setOpen: setCliDrawerOpen } = useCliDrawer();
   // ?mm=<id> selects which session to open (set by the sidebar session list).
   // scopedProfile scopes the "default = newest session" lookup on first load.
   const [searchParams, setSearchParams] = useSearchParams();
@@ -4094,10 +3732,10 @@ export default function MultimodalChatPage() {
   const [model, setModel] = useState("");
   const [sourceType, setSourceType] = useState<SourceType>(null);
   const [frameCount, setFrameCount] = useState(0);
-  // Mic lifecycle: idle → connecting (ASR WS opening, button shows a spinner,
-  // NOT red) → recording (red). Any failure returns to idle. stopMic flips to
-  // idle IMMEDIATELY (button de-actives at once, teardown runs after).
-  const [micState, setMicState] = useState<"idle" | "connecting" | "recording">("idle");
+  // Mic lifecycle: local capture begins while the backend connects; a manual
+  // second click stops the physical track immediately, then waits in
+  // ``finalizing`` until the backend has flushed and submitted exactly once.
+  const [micState, setMicState] = useState<MicLifecycleState>("idle");
   const isRecordingUI = micState === "recording";
   // 独立 TTS 语音播报开关 (与麦克风解耦)。默认关; 切换时通知后端 announcer。
   // toggleTts 定义在 pushTopToast 之后 (需引用它做"对话托管"拦截提示)。
@@ -4155,7 +3793,7 @@ export default function MultimodalChatPage() {
   //   已强制 TTS 生效), 单独点喇叭无效 → 拦截 + 顶部小提示 (按钮态不变)。
   const toggleTts = useCallback(() => {
     if (voiceDialogEnabled) {
-      pushTopToast("对话模式下语音播报已自动生效, 请先关闭对话模式再单独控制", "info");
+      pushTopToast(t.multimodal.toasts.dialogModeTtsAutoEnabled, "info");
       return;
     }
     setTtsEnabled((prev) => {
@@ -4271,26 +3909,21 @@ export default function MultimodalChatPage() {
   //   (按 items 【逐元素引用】比较, 见 BgBlock 定义处) —— tool/status 对象在纯 chat
   //   流式期间 identity 不变, 故内容相同的 bg 块 memo 命中、跳过。��处保持纯函数、
   //   不在 render 期读写 ref。
-  const rows = useMemo<Row[]>(() => {
-    const out: Row[] = [];
-    for (const m of messages) {
-      // Live deep-research streams live in the left sub-windows; post-Clarify
-      // thread-backs (threadback=true) render here in the center chat.
-      if (m.subRole === "router" && !m.threadback) continue;
-      // Safety net: monitor + watcher_report never render in the center chat
-      // any more (they live in the right multimodal panel). Any legacy message
-      // that slipped through is filtered here.
-      if (m.subRole === "monitor" || m.subRole === "watcher_report") continue;
-      if (m.kind === "tool" || m.kind === "status") {
-        const last = out[out.length - 1];
-        if (last && last.type === "bg") last.items.push(m);
-        else out.push({ type: "bg", id: `bg_${m.id}`, items: [m] });
-      } else {
-        out.push({ type: "chat", msg: m });
-      }
-    }
-    return out;
-  }, [messages]);
+  const rows = useMemo<Row[]>(() => buildRows(messages), [messages]);
+
+  // Live gateway+session handed to leaf controls that issue session-scoped RPCs
+  // (the composer's thinking dial). Identity is stable for the page's lifetime —
+  // it reads refs.current on call instead of capturing gw/sessionId, so a
+  // reconnect or session switch can't invalidate the memoized composer subtree.
+  const chatSessionCtx = useMemo(
+    () => ({
+      resolve: () => {
+        const r = refs.current;
+        return r.gw && r.sessionId ? { gw: r.gw, sessionId: r.sessionId } : null;
+      },
+    }),
+    [],
+  );
 
   // (Chat auto-scroll useLayoutEffect moved into <ChatColumn> so it only runs
   //  when `rows` changes — not on every ctx/anchor/frameCount setState.)
@@ -4367,7 +4000,7 @@ export default function MultimodalChatPage() {
   //   以后端为准: 直接发, 后端拒了走 catch → rollback + toast。
   const onToggleMonitor = useCallback((m: MonitorReg) => {
     const on = m.enabled !== false;
-    const label = (m.label && m.label.trim()) || m.brief.slice(0, 10) || "监控";
+    const label = (m.label && m.label.trim()) || m.brief.slice(0, 10) || t.multimodal.monitor.title;
     const r = refs.current;
     if (!r.gw || !r.sessionId) return;
     setMonitors((prev) => prev.map((x) =>
@@ -4381,16 +4014,16 @@ export default function MultimodalChatPage() {
       setMonitors((prev) => prev.map((x) =>
         (x.monitor_id === m.monitor_id && x.enabled === !on)
           ? { ...x, enabled: on } : x));
-      // ★ M: 开启 AND 关闭失��都提示。
+      // ★ M: 开启 AND 关闭失败都提示。
       pushTopToast(
-        `${!on ? "无法开启" : "无法暂停"}监控「${label}」: ${e?.error || e?.message || "未知错误"}`,
+        t.multimodal.toasts.monitorToggleFailed(!on, label, e?.error || e?.message || t.multimodal.errors.unknown),
         "error");
     });
-  }, [pushTopToast]);
+  }, [pushTopToast, t]);
   const onToggleWatcher = useCallback((w: WatcherReg) => {
     const on = w.status === "running";
     const label = (w.label && w.label.trim())
-      || (w.task_instruction || "").slice(0, 12) || "深度分析";
+      || (w.task_instruction || "").slice(0, 12) || t.multimodal.deepAnalysis.title;
     const r = refs.current;
     if (!r.gw || !r.sessionId) return;
     const want = !on;
@@ -4408,15 +4041,66 @@ export default function MultimodalChatPage() {
           && x.status === (want ? "running" : "stopping"))
           ? { ...x, status: on ? "running" : "interrupted" } : x));
       pushTopToast(
-        `${want ? "无法开启" : "无法暂停"}深度研究「${label}」: ${e?.error || e?.message || "未知错误"}`,
+        t.multimodal.toasts.watcherToggleFailed(want, label, e?.error || e?.message || t.multimodal.errors.unknown),
         "error");
     });
-  }, [pushTopToast]);
+  }, [pushTopToast, t]);
 
   // (Chat auto-scroll: see the useLayoutEffect on `rows` above — scrolls the
   // plain scroll div to bottom on new content when the user is already at bottom.)
 
   const addMsg = useCallback((m: ChatMsg) => setMessages((p) => capMsgs([...p, m])), []);
+
+  const offerVoiceDialogSession = useCallback((sessionId: string) => {
+    const recovery = voiceDialogRecoveryRef.current;
+    const activation = recovery.sessionAvailable(sessionId);
+    if (activation) {
+      runVoiceDialogActivationRef.current(activation);
+      return;
+    }
+    // A user may switch OFF while the socket has no live sid. Reconcile the
+    // newly resumed backend to the authoritative OFF intent so a durable
+    // session cannot retain a stale VoiceAgent-routing bit.
+    const r = refs.current;
+    if (!recovery.wantsVoiceDialog() && r.gw && r.sessionId === sessionId) {
+      void r.gw.request("multimodal.voice_dialog_toggle", {
+        session_id: sessionId,
+        enabled: false,
+      }).catch(() => undefined);
+    }
+  }, []);
+
+  const markVoiceDialogBoundary = useCallback(() => {
+    voiceDialogRecoveryRef.current.boundary();
+  }, []);
+
+  const leaveVoiceDialogSession = useCallback((): Promise<void> => {
+    const r = refs.current;
+    const oldOwnerSid = voiceDialogRecoveryRef.current.boundary();
+    // Deliberate A→B/New navigation still has a valid owner transport. Clear
+    // A's durable routing bit before B is allowed to rearm continuous ASR.
+    const disableOld = oldOwnerSid && r.gw && r.sessionId === oldOwnerSid
+      ? r.gw.request("multimodal.voice_dialog_toggle", {
+          session_id: oldOwnerSid,
+          enabled: false,
+        }).catch(() => undefined)
+      : Promise.resolve();
+    const cancelOldTurn = cancelActiveMic(r);
+    const operation = Promise.allSettled([disableOld, cancelOldTurn]).then(() => undefined);
+    r.micBoundaryPromise = operation;
+    void operation.finally(() => {
+      if (r.micBoundaryPromise === operation) r.micBoundaryPromise = null;
+    });
+    return operation;
+  }, []);
+
+  const failWaitingVoiceDialog = useCallback(() => {
+    if (!voiceDialogRecoveryRef.current.sessionUnavailable()) return;
+    setVoiceDialogEnabled(false);
+    const text = translateNow("multimodal.errors.voiceDialogNoSession");
+    pushTopToast(text, "error");
+    addMsg({ id: nid(), role: "system", text });
+  }, [addMsg, pushTopToast]);
 
   // ★ 切换会话时清空 ALL 上一会话的 UI 状态 (对齐 desktop resetDeepUi + 更全)。
   //   只清 messages/curAssistantId 会让旧会话的深研窗/注入帧/观察面板/监控列表/
@@ -4587,6 +4271,8 @@ export default function MultimodalChatPage() {
   useEffect(() => {
     const gw = new GatewayClient();
     refs.current.gw = gw;
+    const asrTransport = new AsrTurnTransport(gw);
+    refs.current.asrTransport = asrTransport;
 
     // ★ Session-scoped guard (对齐 desktop mine()). Backend _emit stamps every
     //   event with session_id = the LIVE sid. After a ?mm= switch (or any
@@ -5134,8 +4820,16 @@ export default function MultimodalChatPage() {
           .slice(-QUERY_WORKER_PROGRESS_LIMIT) : [];
       const terminalWorkerStep = [...bufferedWorkerProgress]
         .reverse().find((step) => step.terminal);
+      // A failed call used to render EXACTLY like a successful one (green ✓,
+      // same styling) — the only trace was the error text buried inside the
+      // collapsed detail. `tools/registry.py` returns failures as
+      // `{"error": "..."}`, so read that and let the row show it.
+      const resultObj = p.result && typeof p.result === "object" && !Array.isArray(p.result)
+        ? (p.result as Record<string, unknown>) : null;
+      const toolError = typeof resultObj?.error === "string" ? resultObj.error.trim() : "";
       msgQueue.push({ action: "patch_tool", toolId: p.tool_id || "", toolName: p.name, patch: {
         toolDone: true, toolSummary: summary, toolDurationMs: durMs, toolDetail: detail,
+        ...(toolError ? { toolIsError: true, toolError } : {}),
         ...(recallDebug?.trace?.length ? { recallTrace: recallDebug.trace } : {}),
         ...(recallDebug?.findings ? { recallFindings: recallDebug.findings } : {}),
         ...(turnRequestId ? { requestId: turnRequestId } : {}),
@@ -5221,7 +4915,7 @@ export default function MultimodalChatPage() {
     const offError = gw.on<{ message?: string; request_id?: string }>("error", (ev) => {
       if (!isMine(ev)) return;
       const p = ev.payload || {};
-      const msg = p.message || "未知错误";
+      const msg = p.message || translateNow("multimodal.errors.unknown");
       if (p.request_id) {
         const id = curAssistantId.current.get(p.request_id);
         curAssistantId.current.delete(p.request_id);
@@ -5229,7 +4923,7 @@ export default function MultimodalChatPage() {
         if (id) {
           setMessages((prev) => prev.map((m) => (
             m.id === id
-              ? { ...m, text: `错误: ${msg}`, streaming: false,
+              ? { ...m, text: `${translateNow("multimodal.misc.errorPrefix")}: ${msg}`, streaming: false,
                   queued: false, queuePosition: undefined, isError: true }
               : m
           )));
@@ -5247,7 +4941,7 @@ export default function MultimodalChatPage() {
         ...prev.map((m) => (m.streaming
           ? { ...m, streaming: false, queued: false, queuePosition: undefined }
           : m)),
-        { id: nid(), role: "system", text: `错误: ${msg}`, isError: true },
+        { id: nid(), role: "system", text: `${translateNow("multimodal.misc.errorPrefix")}: ${msg}`, isError: true },
       ]));
     });
     const offSessionInfo = gw.on<{ model?: string }>("session.info", (ev) => {
@@ -5409,7 +5103,7 @@ export default function MultimodalChatPage() {
           // A tool call failed (req ③: surface failures, don't swallow).
           const s = segFor();
           s.toolErrors = s.toolErrors || [];
-          s.toolErrors.push({ name: String(p.target || p.brief || "tool"), error: clip(p.findings || p.obs_summary || "调用失败", 120) });
+          s.toolErrors.push({ name: String(p.target || p.brief || "tool"), error: clip(p.findings || p.obs_summary || translateNow("multimodal.misc.callFailed"), 120) });
         } else if (t === "bg_progress") {
           // A search/recall dispatched — show it "in flight" (query, no result yet).
           const s = segFor();
@@ -5422,8 +5116,8 @@ export default function MultimodalChatPage() {
           const s = segFor();
           const kind = t === "recall_done" ? "recall" : "search";
           const query = clip(p.brief, 80);
-          const clues = t === "recall_done" && p.n_clues ? ` · ${p.n_clues} 条线索` : "";
-          const result = `找到 ${p.findings_len || 0} 字${clues}`
+          const clues = t === "recall_done" && p.n_clues ? translateNow("multimodal.misc.clues", p.n_clues) : "";
+          const result = translateNow("multimodal.misc.foundChars", p.findings_len || 0, clues)
             + (p.elapsed_sec != null ? ` · ${Number(p.elapsed_sec).toFixed(1)}s` : "");
           const existing = s.lookups.find((l) => l.kind === kind && l.query === query && !l.done);
           if (existing) { existing.result = result; existing.done = true; }
@@ -5517,7 +5211,7 @@ export default function MultimodalChatPage() {
           return capMsgs([...prev, {
             id: nid(), role: "assistant", text: "", kind: "clarify",
             clarifyReqId: reqId,
-            clarifyQuestion: p.question || "请选择",
+            clarifyQuestion: p.question || t.multimodal.misc.pleaseSelect,
             clarifyChoices: choices,
           }]);
         });
@@ -5528,14 +5222,21 @@ export default function MultimodalChatPage() {
       sample_rate?: number; is_final?: boolean;
     }>("multimodal.tts", (ev) => onTtsChunk(ev.payload || {}));
     // Streaming realtime ASR: live partial preview + EOU buffer + final.
-    const offAsrPartial = gw.on<{ text?: string }>(
-      "multimodal.asr_partial", (ev) => { if (!isMine(ev)) return; setAsrPartial(ev.payload?.text || ""); });
+    const offAsrPartial = gw.on<{ text?: string; turn_id?: string }>(
+      "multimodal.asr_partial", (ev) => {
+        if (!asrTransport.ownsEvent(ev.session_id, ev.payload?.turn_id)) return;
+        setAsrPartial(ev.payload?.text || "");
+      });
     // EOU listening state: already-stitched segments (shown as dimmed prefix in AsrBar).
-    const offAsrBuffer = gw.on<{ segments?: string[] }>(
-      "multimodal.asr_buffer", (ev) => { if (!isMine(ev)) return; setAsrBuffer(ev.payload?.segments ?? []); });
-    const offAsrFinal = gw.on<{ text?: string; request_id?: string }>(
+    const offAsrBuffer = gw.on<{ segments?: string[]; turn_id?: string }>(
+      "multimodal.asr_buffer", (ev) => {
+        if (!asrTransport.ownsEvent(ev.session_id, ev.payload?.turn_id)) return;
+        setAsrBuffer(ev.payload?.segments ?? []);
+      });
+    const offAsrFinal = gw.on<{ text?: string; request_id?: string; turn_id?: string }>(
       "multimodal.asr_final", (ev) => {
-        if (!isMine(ev)) return;
+        const turnId = ev.payload?.turn_id;
+        if (!asrTransport.ownsEvent(ev.session_id, turnId)) return;
         const t = (ev.payload?.text || "").trim();
         if (t) addMsg({
           id: nid(), role: "user", text: t, voice: true,
@@ -5543,6 +5244,9 @@ export default function MultimodalChatPage() {
         });
         setAsrPartial("");
         setAsrBuffer([]);
+        if (typeof ev.session_id === "string" && typeof turnId === "string") {
+          asrTransport.noteFinal(ev.session_id, turnId);
+        }
       });
     // Anchor debug: the exact frames injected into the vision model this turn.
     const offAnchor = gw.on<{ frames?: { ts: number | null; jpeg_b64: string }[] }>(
@@ -5780,6 +5484,7 @@ export default function MultimodalChatPage() {
         refs.current.sessionId = liveSid;
         refs.current.storedSid = storedSid;
         try { localStorage.setItem(_MM_SESSION_KEY, storedSid); } catch { /* noop */ }
+        offerVoiceDialogSession(liveSid);
         if (restoreHistory) {
           // ★ F: 孤儿 monitor/watcher (history 有、本 session 磁盘无) → 丢弃气泡 + 提示。
           const orphans = new Set(
@@ -5827,6 +5532,7 @@ export default function MultimodalChatPage() {
         const storedSid = res?.stored_session_id || liveSid;
         refs.current.sessionId = liveSid;
         refs.current.storedSid = storedSid;
+        offerVoiceDialogSession(liveSid);
         if (storedSid) {
           try { localStorage.setItem(_MM_SESSION_KEY, storedSid); } catch { /* noop */ }
         }
@@ -5838,7 +5544,8 @@ export default function MultimodalChatPage() {
         return storedSid;
       } catch (e) {
         addMsg({ id: nid(), role: "system",
-          text: `会话建立失败: ${e instanceof Error ? e.message : String(e)}` });
+          text: translateNow("multimodal.errors.sessionFailed",
+            e instanceof Error ? e.message : String(e)) });
         return "";
       }
     };
@@ -5877,7 +5584,9 @@ export default function MultimodalChatPage() {
 
         await createSession();
       } finally {
-        sessionEstablishedRef.current = true;
+        const stillOpen = gw.state === "open";
+        sessionEstablishedRef.current = stillOpen;
+        if (stillOpen && !refs.current.sessionId) failWaitingVoiceDialog();
       }
     };
     // Expose the resume core so the ?mm= watcher effect can switch sessions.
@@ -5892,6 +5601,7 @@ export default function MultimodalChatPage() {
       setConnState(s);
       if (s !== "open") {
         sessionEstablishedRef.current = false;
+        markVoiceDialogBoundary();
         // Pause frame capture while disconnected — pushing into a dead socket
         // just burns CPU/encoding for frames that go nowhere.
         try { stopCapture(); } catch { /* noop */ }
@@ -5908,17 +5618,15 @@ export default function MultimodalChatPage() {
         // ★ J: 断线时后端 ASR 会话被回收, 但前端仍以为在录音 (红点常亮, PCM 打到死
         //   socket)。这里同步拆本地 mic (inline, 因 stopMic 定义在此 effect 之后)。
         const r = refs.current;
-        if (r.isRecording) {
-          r.isRecording = false;
+        if (r.asrTransport?.current() || r.isRecording || r.micStream) {
+          void cancelActiveMic(r);
           setMicState("idle");
-          try { if (r.micNode) { r.micNode.port.onmessage = null; r.micNode.port.close(); r.micNode.disconnect(); } } catch { /* noop */ }
-          try { r.micSource?.disconnect(); } catch { /* noop */ }
-          try { void r.micAudioCtx?.close(); } catch { /* noop */ }
-          try { r.micStream?.getTracks().forEach((t) => t.stop()); } catch { /* noop */ }
-          r.micNode = null; r.micSource = null; r.micAudioCtx = null; r.micStream = null;
           setAsrPartial("");
-        setAsrBuffer([]);
+          setAsrBuffer([]);
         }
+        // Never route post-disconnect work through the stale runtime id. The
+        // durable id remains in storedSid/localStorage for establishSession.
+        r.sessionId = "";
       }
     });
     const offReconnect = gw.onReconnect(() => {
@@ -5941,7 +5649,8 @@ export default function MultimodalChatPage() {
           .then((r) => { if (r && typeof r.ready === "boolean") setMmReadiness(r); })
           .catch(() => { /* advisory is best-effort */ });
       })
-      .catch((e: Error) => addMsg({ id: nid(), role: "system", text: `连接失败: ${e.message}` }));
+      .catch((e: Error) => addMsg({ id: nid(), role: "system",
+        text: translateNow("multimodal.errors.connectionFailed", e.message) }));
 
     return () => {
       flushDisposed = true;
@@ -5990,24 +5699,9 @@ export default function MultimodalChatPage() {
       } catch { /* noop */ }
       ttsRefs.current.audioCtx = null;
       // Stop the streaming mic (not covered by stopStream, which only tears
-      // down the video + env-audio path).
-      try {
-        const rr = refs.current;
-        if (rr.micNode) {
-          try { rr.micNode.port.onmessage = null; } catch { /* noop */ }
-          try { rr.micNode.port.close(); } catch { /* noop */ }
-          try { rr.micNode.disconnect(); } catch { /* noop */ }
-        }
-        if (rr.micSource) rr.micSource.disconnect();
-        if (rr.micAudioCtx && rr.micAudioCtx.state !== "closed") void rr.micAudioCtx.close();
-      } catch { /* noop */ }
-      if (refs.current.micStream) {
-        refs.current.micStream.getTracks().forEach((t) => t.stop());
-        refs.current.micStream = null;
-      }
-      refs.current.micNode = null;
-      refs.current.micSource = null;
-      refs.current.micAudioCtx = null;
+      // down the video + env-audio path). Unmount is always cancel, never send.
+      cancelActiveMic(refs.current);
+      refs.current.asrTransport = null;
       // Clear the per-key bubble map so it can't leak across a remount.
       curAssistantId.current.clear();
       refs.current.isAnswering = false;
@@ -6031,15 +5725,22 @@ export default function MultimodalChatPage() {
     //   (replace, 不留 new 在历史)。切换前先关流 + 清 UI。
     if (mmParam === "new") {
       sessionEstablishedRef.current = false;
+      const oldOwnerClosed = leaveVoiceDialogSession();
+      // Session navigation is an intentional synchronous UI boundary.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setMicState("idle");
       if (refs.current.stream) { try { stopStream(); } catch { /* noop */ } }
+      refs.current.sessionId = "";
       // 切换会话必须【同步】清空上一会话 UI (气泡/深研窗/面板), 否则旧内容会串到新
       // 会话——这是有意的同步 reset, 不是 cascading-render bug。
       // eslint-disable-next-line react-hooks/set-state-in-effect
       resetSessionUi();
-      void refs.current.createSession?.().then((newSid) => {
+      void oldOwnerClosed.then(() => refs.current.createSession?.() || "").then((newSid) => {
         if (newSid) setSearchParams({ mm: newSid }, { replace: true });
       }).finally(() => {
-        sessionEstablishedRef.current = true;
+        const stillOpen = refs.current.gw?.state === "open";
+        sessionEstablishedRef.current = stillOpen;
+        if (stillOpen && !refs.current.sessionId) failWaitingVoiceDialog();
       });
       return;
     }
@@ -6050,11 +5751,18 @@ export default function MultimodalChatPage() {
     //   stopStream() 会给旧 session 发 source_stopped{started:false} (让旧会话的
     //   monitor/watcher 停止等帧) + 停本地采集。新会话默认无流, 用户按需重开;
     //   因此不需要给新会话补 started:true 握手 (本来就没流)。
+    const oldOwnerClosed = leaveVoiceDialogSession();
+    // Session navigation is an intentional synchronous UI boundary.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setMicState("idle");
     if (refs.current.stream) { try { stopStream(); } catch { /* noop */ } }
+    refs.current.sessionId = "";
     // 切换前清空上一会话的【全部】UI 状态 (气泡/深研窗/注入帧/观察/监控/toast/帧数),
     // 再由 resumeSessionById(restoreHistory=true) 灌入新会话的 transcript + registries。
     resetSessionUi();
-    void resume(mmParam, true);
+    void oldOwnerClosed.then(() => resume(mmParam, true)).then((ok) => {
+      if (!ok && refs.current.gw?.state === "open") failWaitingVoiceDialog();
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mmParam, connected]);
 
@@ -6147,7 +5855,11 @@ export default function MultimodalChatPage() {
     let inFlight = false;
     r.capTimer = window.setInterval(() => {
       const gw = r.gw;
-      if (!gw || !r.sessionId) return;
+      const sessionId = r.sessionId;
+      const stream = r.stream;
+      const sourceType = r.sourceType;
+      const captureAttemptId = r.captureAttemptId;
+      if (!gw || !sessionId || !stream || !sourceType || !captureAttemptId) return;
       if (inFlight) return;
       // ★ Capture NEVER pauses — not even while the agent is answering. Pausing
       //   on isAnswering dropped a run of frames every time the agent spoke,
@@ -6162,6 +5874,8 @@ export default function MultimodalChatPage() {
         try {
       const data = await captureFrame();
       if (!data) return;
+      if (r.gw !== gw || r.sessionId !== sessionId || r.stream !== stream
+        || r.sourceType !== sourceType || r.captureAttemptId !== captureAttemptId) return;
       const ts = (performance.now() - r.startTs) / 1000;
       // Yield so stream flushes + UI events run before JSON.stringify blocks.
       await new Promise<void>((resolve) => { setTimeout(resolve, 0); });
@@ -6172,7 +5886,13 @@ export default function MultimodalChatPage() {
       // can drop the NEXT tick if the pipe is backed up.
       const buffered = gw.notify(
         "multimodal.frame",
-        { session_id: r.sessionId, ts, jpeg_b64: data, source_type: r.sourceType },
+        {
+          session_id: sessionId,
+          ts,
+          jpeg_b64: data,
+          source_type: sourceType,
+          capture_attempt_id: captureAttemptId,
+        },
       );
       if (buffered < 0) return; // socket not open
       if (buffered > BUF_LIMIT) {
@@ -6209,6 +5929,10 @@ export default function MultimodalChatPage() {
   const attachStream = useCallback(async (stream: MediaStream, st: SourceType) => {
     const r = refs.current;
     r.stream = stream; r.sourceType = st;
+    const random = typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+    r.captureAttemptId = `webcap_${random}`;
     setSourceType(st);
     const v = videoRef.current;
     if (v) { v.srcObject = stream; await v.play().catch(() => {}); }
@@ -6218,13 +5942,17 @@ export default function MultimodalChatPage() {
     // run knows to keep waiting for frames (vs one-shot when no source).
     if (r.gw && r.sessionId) {
       r.gw.request("multimodal.source_stopped", {
-        session_id: r.sessionId, started: true, source_type: st,
+        session_id: r.sessionId,
+        started: true,
+        source_type: st,
+        capture_attempt_id: r.captureAttemptId,
       }).catch(() => { /* best-effort */ });
     }
   }, [startCapture]);
 
   const stopStream = useCallback(() => {
     const r = refs.current;
+    const captureAttemptId = r.captureAttemptId;
     stopCapture();
     // Inline env-audio teardown (avoid const-ordering coupling with stopEnvAudio).
     r.envStop = true;
@@ -6242,13 +5970,16 @@ export default function MultimodalChatPage() {
     r.envLastError = "";
     if (r.stream) r.stream.getTracks().forEach((t) => t.stop());
     r.stream = null; r.sourceType = null;
+    r.captureAttemptId = "";
     setSourceType(null);
     if (videoRef.current) videoRef.current.srcObject = null;
     // Tell the backend the video source CLOSED, so any continuous deep-analysis
     // run stops waiting for new frames and finishes after draining the buffer.
     if (r.gw && r.sessionId) {
       r.gw.request("multimodal.source_stopped", {
-        session_id: r.sessionId, started: false,
+        session_id: r.sessionId,
+        started: false,
+        capture_attempt_id: captureAttemptId,
       }).catch(() => { /* best-effort */ });
     }
   }, [stopCapture]);
@@ -6271,51 +6002,95 @@ export default function MultimodalChatPage() {
       });
       await attachStream(stream, "camera");
     } catch (e: any) {
-      addMsg({ id: nid(), role: "system", text: `摄像头启动失败: ${e?.message}` });
+      addMsg({ id: nid(), role: "system",
+        text: translateNow("multimodal.errors.cameraFailed", String(e?.message)) });
     }
   }, [attachStream, addMsg]);
 
-  // ── Mic: streaming realtime ASR (DashScope). Mic PCM → multimodal.asr_audio;
-  //    server-side VAD segments speech → asr_partial (live preview) + asr_final
-  //    (submitted as a user turn on the backend).
+  // ── Mic: streaming realtime ASR (DashScope). Ordinary mic is one
+  //    manual turn: click to capture + preview, click again to flush and submit
+  //    one combined utterance. Voice-dialog remains continuous/auto-segmented.
   //
   //    Downsampling runs in an AudioWorklet (dedicated audio thread) so main-
   //    thread stays free for UI; the worklet batches ~200ms of PCM before
   //    posting to us, cutting RPC rate ~2.5x vs the old 85ms cadence. Server-
   //    side VAD (silence_ms=1200) doesn't care about packet cadence.
   // ────────────────────────────────────────────────────────────────────────
-  const startMic = useCallback(async () => {
+  const startMic = useCallback(async (
+    mode: AsrTurnMode = "manual_turn",
+  ): Promise<boolean> => {
     const r = refs.current;
-    if (r.isRecording) return;
-    if (!r.gw || !r.sessionId) return;
-    // Immediate feedback: enter "connecting" (spinner, NOT red) so the user
-    // knows the click registered while the ASR WebSocket opens. The button
-    // only turns red after the whole chain (asr_start + mic + worklet) succeeds.
+    const transport = r.asrTransport;
+    if (r.isRecording || r.micStopPromise || transport?.current()) return false;
+    if (!r.gw || !r.sessionId || !transport) return false;
+    const sessionId = r.sessionId;
+    const generation = ++r.micGeneration;
     setMicState("connecting");
+    setAsrPartial("");
+    setAsrBuffer([]);
+
+    let mediaPromise: Promise<MediaStream>;
     try {
-      // Open the streaming session first; bail if the backend has no key.
-      const res: any = await r.gw.request("multimodal.asr_start", {
-        session_id: r.sessionId,
+      // Start local permission/capture first. Backend startup begins in this
+      // same task and the transport buffers PCM until it is ready.
+      mediaPromise = navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          channelCount: 1,
+        },
       });
-      if (!res?.enabled) {
+    } catch (error) {
+      setMicState("idle");
+      if (mode === "manual_turn") {
         addMsg({ id: nid(), role: "system",
-          text: "流式语音未启用(需在配置里填 dashscope_api_key)。" });
-        setMicState("idle");
-        return;
+          text: translateNow("multimodal.errors.micFailed",
+            error instanceof Error ? error.message : String(error)) });
       }
-      const stream = await navigator.mediaDevices.getUserMedia({
-        // Full software 3A incl. auto-gain (AGC levels your voice above the
-        // background). Browser ceiling: suppresses steady noise but can't
-        // beam-form / target-speaker like a phone, so nearby speech still leaks.
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 },
-      });
+      return false;
+    }
+
+    const turn = transport.begin(sessionId, mode);
+    const backendReady = turn.ready.then(() => true).catch((error) => {
+      const current = transport.current();
+      if (refs.current.micGeneration !== generation || current?.turnId !== turn.turnId) return false;
+      refs.current.micGeneration += 1;
+      void transport.stop(sessionId, turn.turnId, "cancel").catch(() => undefined);
+      void stopLocalMic(refs.current, false);
+      setMicState("idle");
+      setAsrPartial("");
+      setAsrBuffer([]);
+      if (mode === "manual_turn") {
+        addMsg({ id: nid(), role: "system",
+          text: translateNow("multimodal.errors.streamingVoiceFailed",
+            error instanceof Error ? error.message : String(error)) });
+      }
+      return false;
+    });
+
+    try {
+      const stream = await mediaPromise;
+      if (r.micGeneration !== generation || transport.current()?.turnId !== turn.turnId) {
+        stream.getTracks().forEach((track) => track.stop());
+        return false;
+      }
       r.micStream = stream;
       const Ctx = window.AudioContext || (window as any).webkitAudioContext;
       const ctx = new Ctx();
       r.micAudioCtx = ctx;
+      if (ctx.state === "suspended") await ctx.resume();
+      if (r.micGeneration !== generation || transport.current()?.turnId !== turn.turnId) {
+        await stopLocalMic(r, false);
+        return false;
+      }
       // Worklet lives at /pcm-worklet.js served from public/. Prefix with the
       // deployed base path so it resolves correctly under a non-root mount.
       await ctx.audioWorklet.addModule(`${HERMES_BASE_PATH}/pcm-worklet.js`);
+      if (r.micGeneration !== generation || transport.current()?.turnId !== turn.turnId) {
+        await stopLocalMic(r, false);
+        return false;
+      }
       const source = ctx.createMediaStreamSource(stream);
       r.micSource = source;
       const node = new AudioWorkletNode(ctx, "pcm-downsample-processor", {
@@ -6327,7 +6102,11 @@ export default function MultimodalChatPage() {
       // encodes + fires one RPC per batch — no per-sample math here.
       node.port.onmessage = (ev: MessageEvent) => {
         const rr = refs.current;
-        if (!rr.isRecording || !rr.gw || !rr.sessionId) return;
+        if (ev.data && !(ev.data instanceof ArrayBuffer) && ev.data.type === "flushed") {
+          rr.micFlushResolve?.();
+          return;
+        }
+        if (!rr.isRecording) return;
         // Barge-in guard: while the assistant's TTS is audible (+ tail), drop the
         // mic PCM so speaker output isn't re-captured and looped back into ASR.
         if (Date.now() < ttsRefs.current.ttsMuteUntil) return;
@@ -6339,58 +6118,184 @@ export default function MultimodalChatPage() {
         let bin = "";
         for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
         const pcm_b64 = btoa(bin);
-        rr.gw.request("multimodal.asr_audio", {
-          session_id: rr.sessionId, pcm_b64,
-        }).catch(() => {});
+        transport.pushPcm(sessionId, turn.turnId, pcm_b64);
       };
       source.connect(node);
       node.connect(ctx.destination);
       r.isRecording = true;
-      // Fully connected → NOW turn the button red.
+      // Physical capture is live. If backend start is still pending, the
+      // bounded pre-roll retains these packets in order.
       setMicState("recording");
-    } catch (e: any) {
-      addMsg({ id: nid(), role: "system", text: `麦克风启动失败: ${e?.message}` });
+      return await backendReady;
+    } catch (error) {
+      if (r.micGeneration !== generation) return false;
+      r.micGeneration += 1;
+      await stopLocalMic(r, false);
+      await transport.stop(sessionId, turn.turnId, "cancel").catch(() => undefined);
       setMicState("idle");
-      try { await r.gw?.request("multimodal.asr_stop", { session_id: r.sessionId }); } catch { /* noop */ }
+      if (mode === "manual_turn") {
+        addMsg({ id: nid(), role: "system",
+          text: translateNow("multimodal.errors.micFailed",
+            error instanceof Error ? error.message : String(error)) });
+      }
+      return false;
     }
   }, [addMsg]);
 
-  const stopMic = useCallback(async () => {
+  const stopMic = useCallback(async (disposition: AsrStopDisposition = "finish") => {
     const r = refs.current;
-    if (!r.isRecording) return;
-    r.isRecording = false;
-    // De-active the button IMMEDIATELY (before the async teardown / asr_stop),
-    // so it visibly goes inactive the instant the user clicks stop.
-    setMicState("idle");
-    try {
-      if (r.micNode) {
-        try { r.micNode.port.onmessage = null; } catch { /* noop */ }
-        try { r.micNode.port.close(); } catch { /* noop */ }
-        try { r.micNode.disconnect(); } catch { /* noop */ }
-      }
-      if (r.micSource) { try { r.micSource.disconnect(); } catch { /* noop */ } }
-      if (r.micAudioCtx) { try { await r.micAudioCtx.close(); } catch { /* noop */ } }
-      if (r.micStream) r.micStream.getTracks().forEach((t) => t.stop());
-    } finally {
-      r.micNode = null; r.micSource = null; r.micAudioCtx = null; r.micStream = null;
+    const transport = r.asrTransport;
+    if (r.micStopPromise) {
+      if (disposition !== "cancel") return r.micStopPromise;
+      // New/profile/session/disconnect is a stronger boundary than a manual
+      // finish already waiting on the provider. Invalidate the old UI owner,
+      // stop the physical input, and send a distinct exact-turn cancellation.
+      const finishingTurn = transport?.current();
+      r.micGeneration += 1;
+      setMicState("idle");
+      setAsrPartial("");
+      setAsrBuffer([]);
+      const cancelled = finishingTurn && transport
+        ? transport.stop(finishingTurn.sessionId, finishingTurn.turnId, "cancel")
+        : Promise.resolve();
+      await stopLocalMic(r, false);
+      await cancelled.catch(() => undefined);
+      return;
     }
-    if (r.gw && r.sessionId) {
-      r.gw.request("multimodal.asr_stop", { session_id: r.sessionId }).catch(() => {});
+    const turn = transport?.current();
+    if (!turn || !transport) {
+      await stopLocalMic(r, false);
+      setMicState("idle");
+      return;
     }
-    setAsrPartial("");
-        setAsrBuffer([]);
-    // ★ 麦关 → 强制关对话模式: 对话模式必须有活麦, 否则相当于哑火。用 functional
-    //   setter 拿到最新值判断, 避免闭包旧值; 只在真的处于开态时下发后端 toggle
-    //   RPC, 不做多余的服务端调用。
-    setVoiceDialogEnabled((prev) => {
-      if (!prev) return prev;
+    const stopGeneration = ++r.micGeneration;
+    const stillOwnsStopUi = () => ownsAsrStopUi(
+      r.micGeneration,
+      stopGeneration,
+      r.sessionId,
+      turn.sessionId,
+    );
+    setMicState(disposition === "finish" ? "finalizing" : "idle");
+    const anchorParams = disposition === "finish" && r.stream
+      && r.captureAttemptId && r.startTs > 0
+      ? {
+          anchor_ts: Math.max(0, (performance.now() - r.startTs) / 1000),
+          capture_attempt_id: r.captureAttemptId,
+        }
+      : {};
+
+    const operation = (async () => {
       try {
-        r.gw?.request("multimodal.voice_dialog_toggle",
-          { session_id: r.sessionId, enabled: false }).catch(() => {});
-      } catch { /* noop */ }
-      return false;
-    });
-  }, []);
+        if (disposition === "cancel") {
+          // Mark the turn cancelled first so late worklet packets fail closed.
+          const cancelled = transport.stop(turn.sessionId, turn.turnId, "cancel");
+          await stopLocalMic(r, false);
+          await cancelled;
+        } else {
+          // Physical capture stops synchronously inside stopLocalMic. Its
+          // already-processed tail is flushed before the one backend finish.
+          const flushConfirmed = await stopLocalMic(r, true);
+          if (!flushConfirmed) {
+            await transport.stop(turn.sessionId, turn.turnId, "cancel")
+              .catch(() => undefined);
+            throw new Error(translateNow("multimodal.errors.micFlushFailed"));
+          }
+          const result = await transport.stop(
+            turn.sessionId,
+            turn.turnId,
+            "finish",
+            anchorParams,
+          );
+          const failure = asrFinishFailureMessage(result);
+          if (failure) throw new Error(failure);
+        }
+      } catch (error) {
+        if (disposition === "finish" && stillOwnsStopUi()) {
+          addMsg({ id: nid(), role: "system",
+            text: translateNow("multimodal.errors.voiceSendFailed",
+              error instanceof Error ? error.message : String(error)) });
+        }
+      } finally {
+        // A session switch/newer capture owns the UI now; this old stop must
+        // not clear its state or live transcript when it eventually settles.
+        if (stillOwnsStopUi()) {
+          setMicState("idle");
+          setAsrPartial("");
+          setAsrBuffer([]);
+        }
+      }
+    })();
+    r.micStopPromise = operation;
+    try {
+      await operation;
+    } finally {
+      if (r.micStopPromise === operation) r.micStopPromise = null;
+    }
+  }, [addMsg]);
+
+  const runVoiceDialogActivation = useCallback(async (
+    activation: VoiceDialogActivation,
+  ) => {
+    const recovery = voiceDialogRecoveryRef.current;
+    const failClosed = (message: string) => {
+      if (!recovery.activationFailed(activation)) return;
+      setVoiceDialogEnabled(false);
+      const r = refs.current;
+      void cancelActiveMic(r);
+      if (r.gw && r.sessionId === activation.sessionId) {
+        void r.gw.request("multimodal.voice_dialog_toggle", {
+          session_id: activation.sessionId,
+          enabled: false,
+        }).catch(() => undefined);
+      }
+      pushTopToast(message, "error");
+      addMsg({ id: nid(), role: "system", text: message });
+    };
+
+    try {
+      // A reconnect/session switch first tombstones the exact old ASR turn. Do
+      // not let the replacement turn race that cancellation in the transport.
+      const boundary = refs.current.micBoundaryPromise;
+      if (boundary) await boundary;
+      if (!recovery.owns(activation)) return;
+
+      const r = refs.current;
+      const gw = r.gw;
+      if (!gw || r.sessionId !== activation.sessionId) {
+        failClosed(translateNow("multimodal.errors.voiceDialogUnbound"));
+        return;
+      }
+
+      const toggleResult = await gw.request<{ ok?: boolean; enabled?: boolean }>(
+        "multimodal.voice_dialog_toggle",
+        { session_id: activation.sessionId, enabled: true },
+      );
+      if (toggleResult?.ok === false || toggleResult?.enabled !== true) {
+        throw new Error("voice_dialog_toggle_rejected");
+      }
+      if (!recovery.owns(activation)
+        || refs.current.gw !== gw
+        || refs.current.sessionId !== activation.sessionId) return;
+
+      const started = await startMic("continuous");
+      if (!started) throw new Error("continuous_asr_start_failed");
+      if (!recovery.activationSucceeded(activation)) {
+        // OFF/boundary won while getUserMedia or backend ASR was starting.
+        // The exact turn must not survive that stale activation.
+        void cancelActiveMic(refs.current);
+      }
+    } catch {
+      failClosed(translateNow("multimodal.errors.voiceDialogStartFailed"));
+    }
+  }, [addMsg, pushTopToast, startMic]);
+  // Gateway/session callbacks are registered by the mount-once effect above;
+  // a ref gives them the latest activation implementation without rebuilding
+  // the WebSocket connection or capturing stale React state.
+  useEffect(() => {
+    runVoiceDialogActivationRef.current = (activation) => {
+      void runVoiceDialogActivation(activation);
+    };
+  }, [runVoiceDialogActivation]);
 
   // ── Env audio: screen/people speaking → multimodal.env_audio → memory ────
   const startEnvRecorder = useCallback(() => {
@@ -6410,7 +6315,8 @@ export default function MultimodalChatPage() {
           const key = `recorder:${e instanceof Error ? e.message : String(e)}`;
           if (r.envLastError !== key) {
             r.envLastError = key;
-            pushTopToast(`共享音频录制失败: ${e instanceof Error ? e.message : String(e)}`, "error");
+            pushTopToast(translateNow("multimodal.errors.sharedAudioRecordFailed",
+              e instanceof Error ? e.message : String(e)), "error");
           }
           return;
         }
@@ -6473,14 +6379,14 @@ export default function MultimodalChatPage() {
           const latest = refs.current;
           if (latest.envLastError !== reason) {
             latest.envLastError = reason;
-            pushTopToast(`共享音频 ASR 未接收: ${reason}`, "error");
+            pushTopToast(translateNow("multimodal.errors.sharedAudioAsrNotReceived", reason), "error");
           }
         }).catch((e) => {
           const reason = e instanceof Error ? e.message : String(e);
           const latest = refs.current;
           if (latest.envLastError !== reason) {
             latest.envLastError = reason;
-            pushTopToast(`共享音频 ASR 请求失败: ${reason}`, "error");
+            pushTopToast(translateNow("multimodal.errors.sharedAudioAsrFailed", reason), "error");
           }
         });
       };
@@ -6508,7 +6414,8 @@ export default function MultimodalChatPage() {
             const key = `stop:${e instanceof Error ? e.message : String(e)}`;
             if (latest.envLastError !== key) {
               latest.envLastError = key;
-              pushTopToast(`共享音频切片失败: ${e instanceof Error ? e.message : String(e)}`, "error");
+              pushTopToast(translateNow("multimodal.errors.sharedAudioSliceFailed",
+                e instanceof Error ? e.message : String(e)), "error");
             }
             return;
           }
@@ -6521,7 +6428,8 @@ export default function MultimodalChatPage() {
         const key = `start:${e instanceof Error ? e.message : String(e)}`;
         if (r.envLastError !== key) {
           r.envLastError = key;
-          pushTopToast(`共享音频录制启动失败: ${e instanceof Error ? e.message : String(e)}`, "error");
+          pushTopToast(translateNow("multimodal.errors.sharedAudioStartFailed",
+            e instanceof Error ? e.message : String(e)), "error");
         }
       }
     };
@@ -6560,7 +6468,8 @@ export default function MultimodalChatPage() {
   const startScreen = useCallback(async () => {
     if (refs.current.stream) return;
     if (!navigator.mediaDevices?.getDisplayMedia) {
-      addMsg({ id: nid(), role: "system", text: "浏览器不支持屏幕共享" });
+      addMsg({ id: nid(), role: "system",
+        text: translateNow("multimodal.errors.screenNotSupported") });
       return;
     }
     try {
@@ -6584,17 +6493,18 @@ export default function MultimodalChatPage() {
       const audioTracks = stream.getAudioTracks();
       if (audioTracks.length > 0) {
         startEnvAudio(stream);
-        pushTopToast(`共享音频已接入 ASR (${audioTracks.length} 条音轨)`, "info");
+        pushTopToast(translateNow("multimodal.toasts.sharedAudioConnected", audioTracks.length), "info");
       } else {
         pushTopToast(
-          "屏幕共享已开始，但浏览器没有提供音轨；请选择带音频的标签页/窗口并勾选共享音频。",
+          translateNow("multimodal.toasts.sharedAudioNoTracks"),
           "warning",
         );
       }
     } catch (e: unknown) {
       const err = e instanceof Error ? e : new Error(String(e));
       if (err.name !== "NotAllowedError") {
-        addMsg({ id: nid(), role: "system", text: `屏幕共享失败: ${err.message}` });
+        addMsg({ id: nid(), role: "system",
+          text: translateNow("multimodal.errors.screenShareFailed", err.message) });
       }
     }
   }, [addMsg, attachStream, pushTopToast, startEnvAudio, stopStream]);
@@ -6669,7 +6579,7 @@ export default function MultimodalChatPage() {
         refs.current.isAnswering = curAssistantId.current.size > 0;
         setMessages((prev) => prev.map((m) => (
           m.id === answerId
-            ? { ...m, text: `发送失败: ${e.message}`, streaming: false,
+            ? { ...m, text: translateNow("multimodal.errors.sendFailed", e.message), streaming: false,
                 queued: false, queuePosition: undefined, isError: true }
             : m
         )));
@@ -6685,7 +6595,7 @@ export default function MultimodalChatPage() {
       ? prev.map((m) => (m.streaming
         ? {
             ...m,
-            text: m.text || (m.queued ? "已取消" : m.text),
+            text: m.text || (m.queued ? translateNow("multimodal.errors.cancelled") : m.text),
             streaming: false,
             queued: false,
             queuePosition: undefined,
@@ -6697,18 +6607,19 @@ export default function MultimodalChatPage() {
       .catch(() => { /* best-effort — turn may have already finished */ });
   }, []);
 
-  // Mic toggle (稳定引用给 <ChatColumn>)。connecting 期忽略点击 (避免 double
-  // asr_start / 竞态 teardown); recording → stop; idle → start。仅随 micState 变。
+  // Mic toggle (稳定引用给 <ChatColumn>)。Connecting 可点击取消;
+  // recording 的第二击才 finish + 提交; finalizing 期防重复。
   // ★ 对话模式开时麦由对话托管, 单独点麦无效 —— 拦截 + 顶部小提示 (按钮态不变)。
   const onMicToggle = useCallback(() => {
     if (voiceDialogEnabled) {
-      pushTopToast("对话模式下麦克风已由对话接管, 请先关闭对话模式再单独控制", "info");
+      pushTopToast(t.multimodal.toasts.dialogModeMicBlocked, "info");
       return;
     }
-    if (micState === "connecting") return;
-    if (micState === "recording") void stopMic();
-    else void startMic();
-  }, [micState, stopMic, startMic, voiceDialogEnabled, pushTopToast]);
+    if (micState === "finalizing") return;
+    if (micState === "connecting") void stopMic("cancel");
+    else if (micState === "recording") void stopMic("finish");
+    else void startMic("manual_turn");
+  }, [micState, stopMic, startMic, voiceDialogEnabled, pushTopToast, t]);
 
   // 【对话模式】= 后台统一接管麦/喇叭 (用户方案: UI 麦/喇叭按钮态保持不变, 仅后台联动)。
   //   ON  → ①后端 voice_dialog_toggle (使 is_speaker_on OR 对话态 → 强制 TTS; ASR final
@@ -6717,30 +6628,41 @@ export default function MultimodalChatPage() {
   //   OFF → ①后端 voice_dialog_toggle(false) ②物理关麦 → 一切恢复各自 _mm_asr_on/
   //           _mm_tts_on 真实态。
   const toggleVoiceDialog = useCallback(() => {
-    setVoiceDialogEnabled((prev) => {
-      const next = !prev;
-      const r = refs.current;
-      // ★ 无 session 保护: 未选中 session 时 startMic 会静默 return, 用户点了没反应
-      //   会以为对话模式坏。开显式提示后仍写下 flag(等选中 session 后交互仍生效)。
-      if (next && (!r.gw || !r.sessionId)) {
-        addMsg({ id: nid(), role: "system",
-          text: "对话模式已打开, 但当前无活动 session (请先在左侧选一个)。选中后再点麦克风即可开始语音对话。" });
+    const recovery = voiceDialogRecoveryRef.current;
+    const next = !recovery.wantsVoiceDialog();
+    if (next && micState !== "idle") {
+      pushTopToast(t.multimodal.toasts.dialogModeMicBlocked, "info");
+      return;
+    }
+
+    const r = refs.current;
+    if (next) {
+      const activation = recovery.enable(r.gw ? r.sessionId : "");
+      setVoiceDialogEnabled(true);
+      if (activation) {
+        runVoiceDialogActivationRef.current(activation);
+      } else if (connected && sessionEstablishedRef.current && !r.sessionId) {
+        // Establishment already settled empty: fail closed instead of leaving
+        // a permanently blue button with no physical/backend owner.
+        failWaitingVoiceDialog();
+      } else {
+        pushTopToast(t.multimodal.toasts.dialogModeNoSession, "info");
       }
-      try {
-        r.gw?.request("multimodal.voice_dialog_toggle",
-          { session_id: r.sessionId, enabled: next }).catch(() => {});
-      } catch { /* noop */ }
-      // 麦克风物理联动 (TTS 由后端 is_speaker_on OR 对话态 强制, 不动 UI atom)。
-      if (next) {
-        if (micState === "idle" && r.gw && r.sessionId) {
-          try { void startMic(); } catch { /* noop */ }
-        }
-      } else if (micState === "recording" || micState === "connecting") {
-        try { void stopMic(); } catch { /* noop */ }
-      }
-      return next;
-    });
-  }, [micState, startMic, stopMic, addMsg]);
+      return;
+    }
+
+    recovery.disable();
+    setVoiceDialogEnabled(false);
+    if (r.gw && r.sessionId) {
+      void r.gw.request("multimodal.voice_dialog_toggle", {
+        session_id: r.sessionId,
+        enabled: false,
+      }).catch(() => undefined);
+    }
+    if (micState !== "idle" || r.asrTransport?.current()?.mode === "continuous") {
+      void stopMic("cancel");
+    }
+  }, [connected, failWaitingVoiceDialog, micState, pushTopToast, stopMic]);
 
   // ▶ 播放 button on assistant bubbles for text-input turns (voice-input turns
   // auto-speak in the backend hook, so no button appears there).
@@ -6797,7 +6719,7 @@ export default function MultimodalChatPage() {
           lookups: (rd.sub_queries || []).map((q) => ({ kind: "search" as const, query: q, done: true })),
         }));
         const label = watchersRef.current.find((w) => w.watcher_id === rid)?.label
-          || res.query || "深度分析";
+          || res.query || t.multimodal.deepAnalysis.title;
         // done 按文件真实 status 判定, 不硬编码 (否则进行中的任务被点开会错显"已完成")。
         const st = String(res.status || "").toLowerCase();
         const isDone = ["completed", "complete", "done", "stopped"].includes(st);
@@ -6837,7 +6759,7 @@ export default function MultimodalChatPage() {
       if (ownedByStreamingTurn) return null;
       return (
         <div className="px-4 pb-3">
-          <BgBlock items={row.items} />
+          <BgBlock items={row.items} seg={row.seg} thinking={row.thinking} />
         </div>
       );
     }
@@ -6903,7 +6825,11 @@ export default function MultimodalChatPage() {
   useEffect(() => {
     setAfterTitle(
       <div className="flex flex-wrap items-center gap-1.5">
-        {sourceType && <Badge tone="secondary">{sourceType === "camera" ? "摄像头" : "屏幕"}</Badge>}
+        {sourceType && (
+          <Badge tone="secondary">
+            {sourceType === "camera" ? t.multimodal.video.camera : t.multimodal.evidence.screen}
+          </Badge>
+        )}
         {ttsPlaying && (
           <Badge tone="outline" className="gap-1 border-violet-400/60 text-violet-300">
             <Volume2 className="h-3 w-3" /> TTS
@@ -6915,41 +6841,55 @@ export default function MultimodalChatPage() {
       <div className="flex items-center gap-2">
         {ttsPlaying && (
           <Button size="sm" outlined prefix={<Square />} onClick={() => stopAllTts(true)}>
-            停说
+            {t.multimodal.voice.stopSpeaking}
           </Button>
         )}
+        <button
+          type="button"
+          onClick={() => setCliDrawerOpen(true)}
+          className="inline-flex h-7 items-center gap-1.5 rounded border border-violet-300/40 bg-background/80 px-2 text-xs text-violet-200 backdrop-blur hover:border-violet-200"
+        >
+          <Terminal className="h-3.5 w-3.5" />
+          CLI
+        </button>
+        <button
+          type="button"
+          onClick={() => setMemoryDebugOpen(true)}
+          className="inline-flex h-7 items-center gap-1.5 rounded border border-emerald-300/40 bg-background/80 px-2 text-xs text-emerald-200 backdrop-blur hover:border-emerald-200"
+        >
+          <Database className="h-3.5 w-3.5" />
+          Memory
+        </button>
         <Badge tone={connected ? "success"
           : connState === "reconnecting" || connState === "connecting" ? "warning"
           : "destructive"}>
-          {connected ? "已连接"
-            : connState === "reconnecting" ? "重连中…"
-            : connState === "connecting" ? "连接中…"
-            : "已断开"}
+          {connected ? t.multimodal.status.connected
+            : connState === "reconnecting" ? t.multimodal.status.reconnecting
+            : connState === "connecting" ? t.multimodal.status.connecting
+            : t.multimodal.status.disconnected}
         </Badge>
       </div>,
     );
     return () => { setAfterTitle(null); setEnd(null); };
-  }, [sourceType, ttsPlaying, connected, connState, stopAllTts, setAfterTitle, setEnd]);
+  }, [sourceType, ttsPlaying, connected, connState, stopAllTts, setAfterTitle, setEnd, setCliDrawerOpen, setMemoryDebugOpen, t]);
 
   // ── Render ───────────────────────────────────────────────────────────────
   return (
     <div className="relative flex h-full min-h-0 flex-col gap-3 p-4">
       <MmReadinessBanner report={mmReadiness} />
-      <button
-        type="button"
-        onClick={() => setMemoryDebugOpen(true)}
-        title="Memory Debug"
-        className="absolute right-4 top-4 z-30 inline-flex h-8 items-center gap-1.5 rounded border border-emerald-300/40 bg-background/80 px-2 text-xs text-emerald-200 backdrop-blur hover:border-emerald-200"
-      >
-        <Bug className="h-3.5 w-3.5" />
-        Memory
-      </button>
-      <MemoryDebugPanel
-        open={memoryDebugOpen}
-        onClose={() => setMemoryDebugOpen(false)}
-        currentSessionId={refs.current.storedSid || refs.current.sessionId}
-        trajectory={trajectory}
-      />
+      {/* Gate on memoryDebugOpen so the lazy chunk is only fetched once the user
+          opens the panel. The panel itself also returns null when !open, so this
+          only changes WHEN the module loads, not the rendered result. */}
+      {memoryDebugOpen && (
+        <Suspense fallback={null}>
+          <MemoryDebugPanel
+            open={memoryDebugOpen}
+            onClose={() => setMemoryDebugOpen(false)}
+            currentSessionId={refs.current.storedSid || refs.current.sessionId}
+            trajectory={trajectory}
+          />
+        </Suspense>
+      )}
       {/* 顶部居中 toast (页面级操作提示, 如未开视频流恢复监控失败), 2s 淡出。
           fixed 贴视口顶部 (不受页面 p-4 内边距下压), 悬浮在最上层。 */}
       {topToasts.length > 0 && (
@@ -6992,7 +6932,10 @@ export default function MultimodalChatPage() {
         />
 
         {/* MIDDLE: 聊天列。messages(rows) 变才重渲染; anchor/ctx/frameCount 变时
-            rows 引用不变 → 此列 memo 命中、跳过。 */}
+            rows 引用不变 → 此列 memo 命中、跳过。
+            ★ Provider 包在外层而不是往下传 props: chatSessionCtx 身份恒定, 所以
+              ChatColumn 的 memo 不会因它失效 (加两个 props 就会)。 */}
+        <ChatSessionContext.Provider value={chatSessionCtx}>
         <ChatColumn
           rows={rows}
           renderRow={renderRow}
@@ -7015,6 +6958,7 @@ export default function MultimodalChatPage() {
           onSend={sendAsk}
           onMicToggle={onMicToggle}
         />
+        </ChatSessionContext.Provider>
 
         {/* RIGHT: 监控/深研注册表 + 深研窗口 + toast。bgItems/visibleDeep/monitors/
             watchers 变才重渲染; 主 agent 纯文本流 (messages 变但不涉 router) 不必然

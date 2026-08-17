@@ -670,7 +670,7 @@ class LLMClientFactory:
     Instead of hardcoding AsyncOpenAI(base_url=cfg.base_url), DualAgent asks the
     factory for (client, model). Hermes' implementation
     (agent.multimodal.hermes_glue.HermesClientFactory) pulls the client from
-    Hermes' provider/model resolution, sharing the `hermes model` selection.
+    Hermes' provider/model resolution, sharing the `argus model` selection.
 
     Each method returns (AsyncOpenAI-compatible client, model_slug); an empty
     model_slug means "keep the value from cfg".

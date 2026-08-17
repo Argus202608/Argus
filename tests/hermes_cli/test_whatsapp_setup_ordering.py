@@ -4,7 +4,7 @@ Before the fix, ``hermes whatsapp`` wrote ``WHATSAPP_ENABLED=true`` at
 step 2 — before npm install (step 4) and before QR pairing (step 6).
 If the user Ctrl+C'd at any later step, ``.env`` claimed WhatsApp was
 ready when the bridge still had no ``creds.json``.  Every subsequent
-``hermes gateway`` then paid a 30s bridge-bootstrap timeout and queued
+``argus gateway`` then paid a 30s bridge-bootstrap timeout and queued
 WhatsApp for indefinite retries — looking like "the gateway is broken."
 
 The fix: only set ``WHATSAPP_ENABLED=true`` once pairing actually
@@ -25,10 +25,10 @@ import pytest
 @pytest.fixture
 def isolated_home(tmp_path, monkeypatch):
     home = tmp_path / "home"
-    hermes = home / ".hermes"
+    hermes = home / ".argus"
     hermes.mkdir(parents=True)
     monkeypatch.setattr(Path, "home", lambda: home)
-    monkeypatch.setenv("HERMES_HOME", str(hermes))
+    monkeypatch.setenv("ARGUS_HOME", str(hermes))
     # Ensure get_env_value cache doesn't carry stale state.
     for key in list(os.environ):
         if key.startswith("WHATSAPP_"):

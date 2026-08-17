@@ -19,7 +19,7 @@ from gateway.session import SessionStore
 
 @pytest.fixture()
 def store(tmp_path, monkeypatch):
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ARGUS_HOME", str(tmp_path))
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     db = SessionDB(db_path=tmp_path / "state.db")
     s = SessionStore(sessions_dir=tmp_path / "sessions", config=GatewayConfig())

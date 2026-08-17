@@ -327,7 +327,7 @@ class TestSetupTelegramAuto:
         from hermes_cli import setup
 
         seen = {}
-        profile_home = tmp_path / ".hermes" / "profiles" / "oracle"
+        profile_home = tmp_path / ".argus" / "profiles" / "oracle"
         profile_home.mkdir(parents=True)
 
         monkeypatch.setattr(setup, "get_hermes_home", lambda: profile_home)

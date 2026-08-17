@@ -178,7 +178,7 @@ interface PostSetupRunnerProps {
 /**
  * Runs a provider's post-setup install hook (npm / pip / binary) via the
  * `/api/tools/toolsets/{name}/post-setup` spawn-action and tails the resulting
- * log inline — the GUI equivalent of the install step `hermes tools` runs
+ * log inline — the GUI equivalent of the install step `argus tools` runs
  * after you pick a backend that needs extra dependencies.
  */
 function PostSetupRunner({ toolset, postSetupKey, onComplete }: PostSetupRunnerProps) {

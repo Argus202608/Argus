@@ -10,7 +10,7 @@ Configuration
 Secret (lives in $HERMES_HOME/.env or the environment):
   MEM0_API_KEY       — Mem0 Platform API key (required for platform mode)
 
-Behavioral settings (live in $HERMES_HOME/mem0.json, set via `hermes memory
+Behavioral settings (live in $HERMES_HOME/mem0.json, set via `argus memory
 setup`):
   mode               — Backend mode: "platform" (default) or "oss"
   user_id            — Canonical user identifier. When set, it is applied

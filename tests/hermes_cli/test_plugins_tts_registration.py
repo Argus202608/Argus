@@ -64,7 +64,7 @@ class TestRegisterTTSProvider:
         from agent import tts_registry
         tts_registry._reset_for_tests()
 
-        hermes_home = Path(os.environ["HERMES_HOME"])
+        hermes_home = Path(os.environ["ARGUS_HOME"])
         _write_plugin(
             hermes_home / "plugins",
             "my-tts-plugin",
@@ -97,7 +97,7 @@ class TestRegisterTTSProvider:
         from agent import tts_registry
         tts_registry._reset_for_tests()
 
-        hermes_home = Path(os.environ["HERMES_HOME"])
+        hermes_home = Path(os.environ["ARGUS_HOME"])
         _write_plugin(
             hermes_home / "plugins",
             "bad-tts-plugin",
@@ -127,7 +127,7 @@ class TestRegisterTTSProvider:
         from agent import tts_registry
         tts_registry._reset_for_tests()
 
-        hermes_home = Path(os.environ["HERMES_HOME"])
+        hermes_home = Path(os.environ["ARGUS_HOME"])
         _write_plugin(
             hermes_home / "plugins",
             "shadow-tts-plugin",

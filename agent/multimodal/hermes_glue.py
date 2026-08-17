@@ -8,7 +8,7 @@ This is the fusion layer:
 
   * :class:`HermesClientFactory` hands the workers an OpenAI-compatible async client
     resolved through Hermes' provider/model machinery (``agent.auxiliary_client``),
-    so the multimodal agent shares the user's ``hermes model`` selection, providers,
+    so the multimodal agent shares the user's ``argus model`` selection, providers,
     credential pool, and fallbacks. Vision-capable resolution is preferred because
     every worker sends video frames.
 
@@ -1575,6 +1575,32 @@ def normalize_thinking_kwargs(kwargs: dict, dialect: str) -> dict:
     translated (a disabled/enabled flag is harmless), except DeepSeek V3 where we
     strip the flag entirely to avoid perturbing its wire format.
     """
+    # ★ Kimi K2.6 MaaS (vLLM 部署, 非标准 chat_template) 特殊情况:
+    #   不认 chat_template_kwargs.enable_thinking, 只认 chat_template_kwargs.thinking (布尔).
+    #   实测: enable_thinking=false → thinking 依然 on; thinking=false → 立即生效, 3s→0.4s.
+    #   dialect 会被判成 "vllm", 但 vllm 分支直接 return 不翻译 → memory writer 一直是
+    #   thinking mode. 这里在 vllm 直返之前手动翻译 kimi-k2* 模型.
+    if dialect == "vllm":
+        _model_l = (kwargs.get("model") or "").strip().lower()
+        if "kimi-k2" in _model_l:
+            eb = kwargs.get("extra_body")
+            if isinstance(eb, dict):
+                ctk = eb.get("chat_template_kwargs")
+                if isinstance(ctk, dict) and "enable_thinking" in ctk:
+                    _think = bool(ctk.pop("enable_thinking"))
+                    ctk["thinking"] = _think
+                    if not ctk:
+                        eb.pop("chat_template_kwargs", None)
+                # 顶层 enable_thinking 也翻译一下
+                if "enable_thinking" in eb:
+                    _think = bool(eb.pop("enable_thinking"))
+                    _ctk = eb.get("chat_template_kwargs") or {}
+                    _ctk.setdefault("thinking", _think)
+                    eb["chat_template_kwargs"] = _ctk
+                eb.pop("top_k", None)
+                if not eb:
+                    kwargs.pop("extra_body", None)
+            return kwargs
     if dialect in ("vllm", "moonshot"):
         return kwargs
     eb = kwargs.get("extra_body")
@@ -1731,6 +1757,28 @@ def _submodule_http_client(provider: str, model: str):
     return httpx.AsyncClient(timeout=httpx.Timeout(float(secs), connect=10.0))
 
 
+def _needs_dual_auth_header(base_url: str) -> bool:
+    """Whether ``base_url`` points at a gateway that wants the credential in BOTH
+    the ``Authorization: Bearer`` header and a separate ``api-key`` header.
+
+    Some enterprise LLM gateways reject Bearer-only requests with 401. Because the
+    hostnames are deployment-specific, the match list is not hardcoded: set
+    ``MM_DUAL_AUTH_URL_PATTERNS`` to a comma-separated list of case-insensitive
+    substrings (e.g. ``gateway.example.com,/tenant-``) to opt those endpoints in.
+    Empty/unset (the default) disables URL-based detection entirely; the monitor
+    submodule can still opt in explicitly via
+    ``multimodal.monitor_send_api_key_header``.
+    """
+    patterns = [p.strip().lower()
+                for p in os.environ.get("MM_DUAL_AUTH_URL_PATTERNS", "").split(",")
+                if p.strip()]
+    if not patterns:
+        return False
+    url_lower = (base_url or "").lower()
+    return any(p in url_lower for p in patterns)
+
+
+
 def build_submodule_client(
     *, provider: str, base_url: str, api_key: str, model: str,
     resolve_main: "Callable[[], Tuple[Any, str]]",
@@ -1798,11 +1846,14 @@ def build_submodule_client(
     }
     if _http_client is not None:
         client_kwargs["http_client"] = _http_client
-    # Some MaaS gateways can require the credential in both auth locations.
-    # This is deliberately gated by the Monitor role and an explicit config
-    # opt-in; no other submodule can change its wire headers.
-    if label == "monitor" and send_api_key_header:
+    # Some enterprise gateways require the credential in both auth locations.
+    # Monitor path is explicit opt-in via config; any other submodule pointed at
+    # an endpoint matching MM_DUAL_AUTH_URL_PATTERNS auto-adds the api-key header.
+    _dual_auth = _needs_dual_auth_header(base_url)
+    if (label == "monitor" and send_api_key_header) or _dual_auth:
         client_kwargs["default_headers"] = {"api-key": resolved_api_key}
+        if _dual_auth and label != "monitor":
+            log.info("[multimodal] %s client: gateway auto-added api-key header", label)
     client = AsyncOpenAI(**client_kwargs)
     dialect = _detect_thinking_provider(provider, base_url, model)
     log.info("[multimodal] %s client: dedicated endpoint=%s model=%s provider=%s dialect=%s",
@@ -1874,7 +1925,7 @@ class HermesClientFactory(LLMClientFactory):
         if client is None:
             raise RuntimeError(
                 "multimodal: no LLM provider could be resolved from Hermes config. "
-                "Configure a model with `hermes model` (a vision-capable model is "
+                "Configure a model with `argus model` (a vision-capable model is "
                 "recommended for the video stream).")
         self._cached = (client, model)
         return self._cached
@@ -2146,15 +2197,22 @@ class HermesClientFactory(LLMClientFactory):
             #   None → SDK default, matching how the main agent builds its client.
             _http_client = _submodule_http_client(
                 provider, mem_model)
+            _mem_key = (api_key or "EMPTY")
+            _client_kwargs: Dict[str, Any] = {
+                "base_url": base_url.strip(),
+                "api_key": _mem_key,
+            }
             if _http_client is not None:
-                mem_oai = AsyncOpenAI(
-                    base_url=base_url.strip(),
-                    api_key=(api_key or "EMPTY"),
-                    http_client=_http_client)
-            else:
-                mem_oai = AsyncOpenAI(
-                    base_url=base_url.strip(),
-                    api_key=(api_key or "EMPTY"))
+                _client_kwargs["http_client"] = _http_client
+            # ★ 部分企业网关要求 Bearer + api-key 双 header 认证.
+            #   build_submodule_client 里的 send_api_key_header 只对
+            #   label='monitor' 生效, memory 段完全被忽略 → 401.
+            #   这里按 URL 自动补 api-key header (匹配列表见
+            #   MM_DUAL_AUTH_URL_PATTERNS, 默认关闭, config 无需 opt-in).
+            if _needs_dual_auth_header(base_url):
+                _client_kwargs["default_headers"] = {"api-key": _mem_key.strip()}
+                log.info("[multimodal] %s backend: dual-auth gateway detected, adding api-key header", role_label)
+            mem_oai = AsyncOpenAI(**_client_kwargs)
             # dialect 检测 + wrap: 跟 build_submodule_client 完全同款 (主 Agent 标准).
             mem_dialect = _detect_thinking_provider(
                 provider, base_url, mem_model)

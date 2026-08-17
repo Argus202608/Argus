@@ -127,7 +127,7 @@ class TestBusySessionAck:
         """Rapid Telegram text follow-ups in queue mode must not merge."""
         from gateway.run import GatewayRunner
 
-        monkeypatch.setenv("HERMES_TELEGRAM_FOLLOWUP_GRACE_SECONDS", "3.0")
+        monkeypatch.setenv("ARGUS_TELEGRAM_FOLLOWUP_GRACE_SECONDS", "3.0")
 
         runner, _sentinel = _make_runner()
         runner._busy_input_mode = "queue"

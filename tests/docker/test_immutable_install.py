@@ -3,7 +3,7 @@
 Build the real image and verify at runtime:
 
   1. /opt/hermes is not writable by the hermes user (immutable install tree)
-  2. PYTHONDONTWRITEBYTECODE and HERMES_DISABLE_LAZY_INSTALLS are set
+  2. PYTHONDONTWRITEBYTECODE and ARGUS_DISABLE_LAZY_INSTALLS are set
   3. /opt/hermes/.install_method contains "docker" (code-scoped stamp)
   4. $HERMES_HOME/.install_method is NOT stamped as "docker" by stage2
   5. A stale "docker" stamp in $HERMES_HOME is healed (removed) on boot
@@ -57,20 +57,20 @@ def test_hermes_disable_lazy_installs_and_dont_write_bytecode(
     built_image: str, container_name: str,
 ) -> None:
     """The container must set PYTHONDONTWRITEBYTECODE and
-    HERMES_DISABLE_LAZY_INSTALLS=1 so no .pyc files are written to the
+    ARGUS_DISABLE_LAZY_INSTALLS=1 so no .pyc files are written to the
     immutable install tree and no lazy installs attempt to modify it."""
     start_container(built_image, container_name)
 
     r = docker_exec_sh(
         container_name,
         'test "$PYTHONDONTWRITEBYTECODE" = "1" && '
-        'test "$HERMES_DISABLE_LAZY_INSTALLS" = "1" && '
+        'test "$ARGUS_DISABLE_LAZY_INSTALLS" = "1" && '
         'echo ENV_OK || echo ENV_MISSING',
         timeout=10,
     )
     assert "ENV_OK" in r.stdout, (
         f"expected PYTHONDONTWRITEBYTECODE=1 and "
-        f"HERMES_DISABLE_LAZY_INSTALLS=1, got: {r.stdout} stderr={r.stderr}"
+        f"ARGUS_DISABLE_LAZY_INSTALLS=1, got: {r.stdout} stderr={r.stderr}"
     )
 
 

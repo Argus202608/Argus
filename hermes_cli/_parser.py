@@ -40,41 +40,41 @@ def _inherited_flag(parser, *args, **kwargs):
 _EPILOGUE = """
 Examples:
     hermes                        Start interactive chat
-    hermes chat -q "Hello"        Single query mode
-    hermes --tui                  Launch the modern TUI (or set display.interface: tui)
-    hermes --cli                  Force the classic REPL (overrides display.interface: tui)
-    hermes -c                     Resume the most recent session
-    hermes -c "my project"        Resume a session by name (latest in lineage)
-    hermes --resume <session_id>  Resume a specific session by ID
-    hermes setup                  Run setup wizard
-    hermes logout                 Clear stored authentication
-    hermes auth add <provider>    Add a pooled credential
-    hermes auth list              List pooled credentials
-    hermes auth remove <p> <t>    Remove pooled credential by index, id, or label
-    hermes auth reset <provider>  Clear exhaustion status for a provider
-    hermes model                  Select default model
-    hermes fallback [list]        Show fallback provider chain
-    hermes fallback add           Add a fallback provider (same picker as `hermes model`)
-    hermes fallback remove        Remove a fallback provider from the chain
-    hermes config                 View configuration
-    hermes config edit            Edit config in $EDITOR
-    hermes config set model gpt-4 Set a config value
-    hermes gateway                Run messaging gateway
-    hermes -s hermes-agent-dev,github-auth
-    hermes -w                     Start in isolated git worktree
-    hermes gateway install        Install gateway background service
-    hermes sessions list          List past sessions
-    hermes sessions browse        Interactive session picker
-    hermes sessions rename ID T   Rename/title a session
-    hermes logs                   View agent.log (last 50 lines)
-    hermes logs -f                Follow agent.log in real time
-    hermes logs errors            View errors.log
-    hermes logs --since 1h        Lines from the last hour
-    hermes debug share             Upload debug report for support
-    hermes update                 Update to latest version
-    hermes dashboard              Start web UI dashboard (port 9119)
-    hermes dashboard --stop       Stop running dashboard processes
-    hermes dashboard --status     List running dashboard processes
+    argus chat -q "Hello"        Single query mode
+    argus --tui                  Launch the modern TUI (or set display.interface: tui)
+    argus --cli                  Force the classic REPL (overrides display.interface: tui)
+    argus -c                     Resume the most recent session
+    argus -c "my project"        Resume a session by name (latest in lineage)
+    argus --resume <session_id>  Resume a specific session by ID
+    argus setup                  Run setup wizard
+    argus logout                 Clear stored authentication
+    argus auth add <provider>    Add a pooled credential
+    argus auth list              List pooled credentials
+    argus auth remove <p> <t>    Remove pooled credential by index, id, or label
+    argus auth reset <provider>  Clear exhaustion status for a provider
+    argus model                  Select default model
+    argus fallback [list]        Show fallback provider chain
+    argus fallback add           Add a fallback provider (same picker as `argus model`)
+    argus fallback remove        Remove a fallback provider from the chain
+    argus config                 View configuration
+    argus config edit            Edit config in $EDITOR
+    argus config set model gpt-4 Set a config value
+    argus gateway                Run messaging gateway
+    argus -s hermes-agent-dev,github-auth
+    argus -w                     Start in isolated git worktree
+    argus gateway install        Install gateway background service
+    argus sessions list          List past sessions
+    argus sessions browse        Interactive session picker
+    argus sessions rename ID T   Rename/title a session
+    argus logs                   View agent.log (last 50 lines)
+    argus logs -f                Follow agent.log in real time
+    argus logs errors            View errors.log
+    argus logs --since 1h        Lines from the last hour
+    argus debug share             Upload debug report for support
+    argus update                 Update to latest version
+    argus dashboard              Start web UI dashboard (port 9119)
+    argus dashboard --stop       Stop running dashboard processes
+    argus dashboard --status     List running dashboard processes
 
 For more help on a command:
     hermes <command> --help
@@ -122,7 +122,7 @@ def build_top_level_parser():
         default=None,
         help=(
             "Model override for this invocation (e.g. anthropic/claude-sonnet-4.6). "
-            "Applies to -z/--oneshot and --tui. Also settable via HERMES_INFERENCE_MODEL env var."
+            "Applies to -z/--oneshot and --tui. Also settable via ARGUS_INFERENCE_MODEL env var."
         ),
     )
     _inherited_flag(
@@ -132,7 +132,7 @@ def build_top_level_parser():
         help=(
             "Provider override for this invocation (e.g. openrouter, anthropic). "
             "Applies to -z/--oneshot and --tui. The persistent provider lives in config.yaml "
-            "under model.provider — use `hermes setup` or edit the file to change it."
+            "under model.provider — use `argus setup` or edit the file to change it."
         ),
     )
     parser.add_argument(
@@ -172,7 +172,7 @@ def build_top_level_parser():
         default=False,
         help=(
             "Auto-approve any unseen shell hooks declared in config.yaml "
-            "without a TTY prompt.  Equivalent to HERMES_ACCEPT_HOOKS=1 or "
+            "without a TTY prompt.  Equivalent to ARGUS_ACCEPT_HOOKS=1 or "
             "hooks_auto_accept: true in config.yaml.  Use on CI / headless "
             "runs that can't prompt."
         ),
@@ -204,7 +204,7 @@ def build_top_level_parser():
         "--ignore-user-config",
         action="store_true",
         default=False,
-        help="Ignore ~/.hermes/config.yaml and fall back to built-in defaults (credentials in .env are still loaded)",
+        help="Ignore ~/.argus/config.yaml and fall back to built-in defaults (credentials in .env are still loaded)",
     )
     _inherited_flag(
         parser,
@@ -328,7 +328,7 @@ def build_top_level_parser():
         default=argparse.SUPPRESS,
         help=(
             "Auto-approve any unseen shell hooks declared in config.yaml "
-            "without a TTY prompt (see also HERMES_ACCEPT_HOOKS env var and "
+            "without a TTY prompt (see also ARGUS_ACCEPT_HOOKS env var and "
             "hooks_auto_accept: in config.yaml)."
         ),
     )
@@ -364,7 +364,7 @@ def build_top_level_parser():
         "--ignore-user-config",
         action="store_true",
         default=argparse.SUPPRESS,
-        help="Ignore ~/.hermes/config.yaml and fall back to built-in defaults (credentials in .env are still loaded). Useful for isolated CI runs, reproduction, and third-party integrations.",
+        help="Ignore ~/.argus/config.yaml and fall back to built-in defaults (credentials in .env are still loaded). Useful for isolated CI runs, reproduction, and third-party integrations.",
     )
     _inherited_flag(
         chat_parser,

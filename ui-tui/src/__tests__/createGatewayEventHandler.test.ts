@@ -107,7 +107,7 @@ describe('createGatewayEventHandler', () => {
 
     const bubble = appended.find(m => m.role === 'system' && m.text.includes('论文核心贡献'))
     expect(bubble).toBeDefined()
-    expect(bubble!.text).toContain('🔬 深度分析')
+    expect(bubble!.text).toContain('🔬 Deep Analysis')
   })
 
   it('ignores the watcher_running placeholder (only the final answer bubbles)', () => {
@@ -571,7 +571,7 @@ describe('createGatewayEventHandler', () => {
         cwd: '/repo',
         python: '/opt/venv/bin/python',
         stderr_tail:
-          '[startup] timed out\nModuleNotFoundError: No module named openai\nFileNotFoundError: ~/.hermes/config.yaml'
+          '[startup] timed out\nModuleNotFoundError: No module named openai\nFileNotFoundError: ~/.argus/config.yaml'
       },
       type: 'gateway.start_timeout'
     } as any)
@@ -775,7 +775,7 @@ describe('createGatewayEventHandler', () => {
     onEvent({
       payload: {
         message:
-          'agent init failed: No LLM provider configured. Run `hermes model` to select a provider, or run `hermes setup` for first-time configuration.'
+          'agent init failed: No LLM provider configured. Run `argus model` to select a provider, or run `argus setup` for first-time configuration.'
       },
       type: 'error'
     } as any)

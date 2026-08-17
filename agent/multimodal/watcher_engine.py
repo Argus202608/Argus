@@ -66,6 +66,11 @@ _QUERY_OCR_DEBUG_MAX_RECORDS = 3
 _QUERY_OCR_DEBUG_RECORD_MAX_CHARS = 1_800
 _QUERY_OCR_DEBUG_TOTAL_MAX_CHARS = 5_500
 
+# Synchronous gateway callers must not wait forever for DashScope's connect +
+# session.updated handshake.  Kept as a constant so lifecycle tests can use a
+# short deterministic bound.
+_ASR_START_TIMEOUT_SEC = 12.0
+
 
 def sanitize_query_ocr_debug_evidence(evidence: Any) -> list[dict]:
     """Return a small, secret-redacted OCR projection for UI trajectories.
@@ -354,7 +359,8 @@ def _scene_label_from(thought: str, max_len: int = 16) -> str:
     if not t:
         return ""
     # 跳过 _workers 在 thought 为空时合成的占位句 (它们不是真实场景描述)。
-    if t in ("可直接解读本段画面", "继续观察本段画面"):
+    from agent.multimodal._sentinels import SYNTH_THOUGHTS
+    if t in SYNTH_THOUGHTS:
         return ""
     # 1) 书名号内容
     m = re.search(r"[《〈]([^》〉]{1,20})[》〉]", t)
@@ -502,6 +508,11 @@ class WatcherAgent:
         # Streaming realtime ASR sessions (DashScope) keyed by client key.
         # Managed on THIS engine's loop; see asr_* methods below.
         self._asr: dict = {}
+        # Pending start ownership tokens linearize a synchronous timeout/stop
+        # against the loop-owned async connect.  A late connect may publish
+        # only while its exact token is still current.
+        self._asr_start_tokens: dict[str, object] = {}
+        self._asr_state_lock = threading.RLock()
         # ★ 在飞重连去抖: 上游 ASR WS 死掉时 asr_audio 会触发 _asr_reconnect, 同一 key
         #   同时只允许一个重连协程 (音频热路径每 200ms 来一片, 不去抖会疯狂并发 connect)。
         self._asr_reconnecting: set = set()
@@ -771,9 +782,14 @@ class WatcherAgent:
                 # and then calling loop.stop() in the same callback would let
                 # run_forever return before close() ever ran → WS/reader leak.
                 closes = []
+                async def _abort_asr(asr):
+                    try:
+                        return await asr.close(graceful=False)
+                    except TypeError:
+                        return await asr.close()
                 for _asr in list(self._asr.values()):
                     try:
-                        closes.append(_asr.close())
+                        closes.append(_abort_asr(_asr))
                     except Exception:
                         pass
                 self._asr.clear()
@@ -1453,22 +1469,68 @@ class WatcherAgent:
         api_key = (getattr(self.cfg, "dashscope_api_key", "") or "").strip()
         if not api_key or not getattr(self.cfg, "realtime_asr_enabled", True):
             return False
+        state_lock = getattr(self, "_asr_state_lock", None)
+        if state_lock is None:
+            state_lock = threading.RLock()
+            self._asr_state_lock = state_lock
+        if not hasattr(self, "_asr_start_tokens"):
+            self._asr_start_tokens = {}
+        start_token = object()
+        with state_lock:
+            self._asr_start_tokens[key] = start_token
         fut = asyncio.run_coroutine_threadsafe(
-            self._asr_start(key, on_partial, on_final, on_speech_started), self._loop)
+            self._asr_start(
+                key,
+                on_partial,
+                on_final,
+                on_speech_started,
+                start_token=start_token,
+            ),
+            self._loop,
+        )
         try:
-            return bool(fut.result(timeout=12.0))
+            return bool(fut.result(timeout=_ASR_START_TIMEOUT_SEC))
+        except FuturesTimeout:
+            # Invalidate before cancellation: even a connect implementation
+            # that delays/suppresses CancelledError will fail the publish CAS.
+            with state_lock:
+                if self._asr_start_tokens.get(key) is start_token:
+                    self._asr_start_tokens.pop(key, None)
+            fut.cancel()
+            log.warning("[watcher] asr_start timed out key=%s", key)
+            return False
         except Exception as exc:
+            with state_lock:
+                if self._asr_start_tokens.get(key) is start_token:
+                    self._asr_start_tokens.pop(key, None)
             log.warning("[watcher] asr_start failed: %s", exc)
             return False
 
     async def _asr_start(self, key, on_partial, on_final,
-                         on_speech_started=None) -> bool:
+                         on_speech_started=None, *, start_token=None) -> bool:
         from .qwen_realtime import QwenRealtimeASR
+        state_lock = getattr(self, "_asr_state_lock", None)
+        if state_lock is None:
+            state_lock = threading.RLock()
+            self._asr_state_lock = state_lock
+        if not hasattr(self, "_asr_start_tokens"):
+            self._asr_start_tokens = {}
+        if start_token is None:
+            start_token = object()
+            with state_lock:
+                self._asr_start_tokens[key] = start_token
+        with state_lock:
+            if self._asr_start_tokens.get(key) is not start_token:
+                return False
         # Replace any stale session for this key.
-        old = self._asr.pop(key, None)
+        with state_lock:
+            old = self._asr.pop(key, None)
         if old is not None:
             try:
-                await old.close()
+                try:
+                    await old.close(graceful=False)
+                except TypeError:
+                    await old.close()
             except Exception:
                 pass
         cfg = self.cfg
@@ -1502,12 +1564,46 @@ class WatcherAgent:
             vad_silence_ms=int(getattr(cfg, "realtime_asr_vad_silence_ms", 1200)),
             on_partial=_p, on_final=_f,
             on_speech_started=(_ss if on_speech_started is not None else None))
-        ok = await asr.connect()
-        if ok:
-            self._asr[key] = asr
-        return ok
+        try:
+            ok = await asr.connect()
+        except asyncio.CancelledError:
+            # run_coroutine_threadsafe.cancel() propagates here on a gateway
+            # timeout.  Abort the candidate before re-raising so its reader and
+            # socket cannot survive outside the ownership map.
+            try:
+                try:
+                    await asr.close(graceful=False)
+                except TypeError:
+                    await asr.close()
+            except Exception:
+                pass
+            with state_lock:
+                if self._asr_start_tokens.get(key) is start_token:
+                    self._asr_start_tokens.pop(key, None)
+            raise
+        except Exception:
+            ok = False
 
-    def asr_audio(self, key: str, pcm: bytes) -> None:
+        with state_lock:
+            owns_start = self._asr_start_tokens.get(key) is start_token
+            if owns_start:
+                self._asr_start_tokens.pop(key, None)
+            if ok and owns_start:
+                self._asr[key] = asr
+                return True
+
+        # Timeout, stop, or a replacement start invalidated this candidate
+        # while connect awaited the network/session-ready acknowledgement.
+        try:
+            try:
+                await asr.close(graceful=False)
+            except TypeError:
+                await asr.close()
+        except Exception:
+            pass
+        return False
+
+    def asr_audio(self, key: str, pcm: bytes) -> bool:
         """Thread-safe: feed a PCM16 chunk into an open ASR session.
 
         ★ 自愈: 上游 DashScope ASR WS 可能在长时会话中静默死掉 (网络抖动/服务端 idle
@@ -1517,7 +1613,7 @@ class WatcherAgent:
         loop = self._loop
         asr = self._asr.get(key)
         if loop is None or asr is None or not pcm:
-            return
+            return False
         # 上游死了 → 触发去抖重连 (同 key 只跑一个), 本片丢弃。
         if not getattr(asr, "is_connected", True):
             if key not in self._asr_reconnecting:
@@ -1527,11 +1623,17 @@ class WatcherAgent:
                 except Exception as exc:
                     self._asr_reconnecting.discard(key)
                     log.debug("[watcher] asr reconnect schedule failed: %s", exc)
-            return
+            return False
         try:
-            asyncio.run_coroutine_threadsafe(asr.append_audio(pcm), loop)
+            future = asyncio.run_coroutine_threadsafe(
+                asr.append_audio(pcm), loop)
+            return bool(future.result(timeout=1.0))
+        except FuturesTimeout:
+            log.warning("[watcher] asr_audio delivery timed out key=%s", key)
+            return False
         except Exception as exc:
             log.debug("[watcher] asr_audio failed: %s", exc)
+            return False
 
     async def _asr_reconnect(self, key: str) -> None:
         """重连一个死掉的上游 ASR 会话 (复用同对象 + 同回调, 重建 WS)。去抖: asr_audio
@@ -1546,23 +1648,95 @@ class WatcherAgent:
             except Exception as exc:
                 log.warning("[watcher] asr reconnect error key=%s: %s", key, exc)
             if ok:
+                # CAS ownership check: asr_stop/replacement may have popped this
+                # exact object while connect() was awaiting the network.  A
+                # late successful connect must not leave an untracked ghost WS
+                # whose callbacks survive the stopped renderer turn.
+                if self._asr.get(key) is not asr:
+                    try:
+                        try:
+                            await asr.close(graceful=False)
+                        except TypeError:
+                            await asr.close()
+                    except Exception:
+                        pass
+                    log.info(
+                        "[watcher] discarded stale ASR reconnect key=%s", key)
+                    return
                 log.info("[watcher] asr reconnected key=%s", key)
             else:
                 log.warning("[watcher] asr reconnect failed key=%s (will retry on next audio)", key)
         finally:
             self._asr_reconnecting.discard(key)
 
-    def asr_stop(self, key: str) -> None:
-        """Thread-safe: finish + close an ASR session."""
+    def asr_stop(
+        self,
+        key: str,
+        *,
+        finish_timeout: float = 5.0,
+        graceful: bool = True,
+    ) -> dict:
+        """Thread-safe: gracefully finish + close an ASR session.
+
+        ``QwenRealtimeASR.close`` waits for the server's final transcription
+        callbacks and ``session.finished``.  Block this synchronous gateway
+        entrypoint only for that bounded grace period so the caller can safely
+        merge the callback-owned segments before committing one manual turn.
+        The ASR is removed from the live key map *before* waiting, preventing
+        late PCM from entering a finishing turn.
+        """
         loop = self._loop
-        asr = self._asr.pop(key, None)
+        state_lock = getattr(self, "_asr_state_lock", None)
+        if state_lock is None:
+            state_lock = threading.RLock()
+            self._asr_state_lock = state_lock
+        with state_lock:
+            if hasattr(self, "_asr_start_tokens"):
+                self._asr_start_tokens.pop(key, None)
+            asr = self._asr.pop(key, None)
         self._asr_reconnecting.discard(key)   # 清在飞重连标记 (会话已停)
         if loop is None or asr is None:
-            return
+            return {
+                "ok": True,
+                "reason": "not_active",
+                "completed": False,
+                "session_finished": False,
+                "timed_out": False,
+            }
         try:
-            asyncio.run_coroutine_threadsafe(asr.close(), loop)
+            async def _close_asr():
+                try:
+                    return await asr.close(
+                        finish_timeout=finish_timeout,
+                        graceful=graceful,
+                    )
+                except TypeError:
+                    return await asr.close()
+
+            fut = asyncio.run_coroutine_threadsafe(
+                _close_asr(), loop)
+            return dict(fut.result(timeout=max(0.1, finish_timeout + 1.0)))
+        except FuturesTimeout:
+            log.warning(
+                "[watcher] asr_stop timed out key=%s after %.1fs",
+                key, finish_timeout + 1.0,
+            )
+            return {
+                "ok": False,
+                "reason": "finish_timeout",
+                "completed": False,
+                "session_finished": False,
+                "timed_out": True,
+            }
         except Exception as exc:
             log.debug("[watcher] asr_stop failed: %s", exc)
+            return {
+                "ok": False,
+                "reason": "finish_failed",
+                "completed": False,
+                "session_finished": False,
+                "timed_out": False,
+            }
 
     def submit_complex_async(self, task_instruction: str,
                              request_id: str = "") -> str:
@@ -2263,7 +2437,8 @@ class WatcherAgent:
         clues = list(getattr(res, "clues", None) or [])
         frame_ids = list(getattr(res, "frame_ids", None) or [])
         # RecallWorker returns a sentinel string when nothing was found.
-        found = bool(findings) and findings != "(记忆里未找到相关线索)"
+        from agent.multimodal._sentinels import RECALL_NO_CLUES
+        found = bool(findings) and findings != RECALL_NO_CLUES
         return {
             "ok": True,
             "found": found,

@@ -19,7 +19,7 @@ from typing import Optional
 log = logging.getLogger("hermes.multimodal.voice_rewrite")
 
 # ── 专用日志: 只记 tts 改写的【完整 LLM 请求 JSON】+【输出结果】, 写到独立文件
-#    ~/.hermes/logs/voice_rewrite.log, 不混进 agent.log。tail -f 该文件即可单独看。 ──
+#    ~/.argus/logs/voice_rewrite.log, 不混进 agent.log。tail -f 该文件即可单独看。 ──
 _io_log = logging.getLogger("hermes.multimodal.voice_rewrite.io")
 _io_log.propagate = False   # 不冒泡到 root → 不进 agent.log
 

@@ -46,6 +46,10 @@ const USER_REPORT_MESSAGE =
   'and you can see its multiline, new session. on a new bb/<xxx> branch investigate'
 
 describe('cursor-drift regression — composer cursorLayout matches Ink rendering', () => {
+  // ~450 prefixes × 7 widths = 3k wrap-ansi calls, which lands just over the
+  // 5s default on a warm machine and well over it on a cold/loaded one. The
+  // exhaustive walk is the point of the test, so widen the budget rather than
+  // thinning the coverage.
   it('agrees with wrap-ansi at every typing-prefix of the user-reported message', () => {
     // Walks the message char-by-char (mirroring what the TUI sees when a
     // user types). At every prefix, cursorLayout must place the cursor
@@ -68,7 +72,7 @@ describe('cursor-drift regression — composer cursorLayout matches Ink renderin
         ).toEqual(expected)
       }
     }
-  })
+  }, 30_000)
 
   it('keeps cursor on the same row when text exactly fills the terminal width', () => {
     // wrap-ansi does NOT push exact-fill text onto a phantom next line.

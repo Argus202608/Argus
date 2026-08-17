@@ -7,7 +7,7 @@ memory, voice, watcher, monitor, live-research) is part of one lifecycle.
 This module runs every check + kicks every preload + tracks every load state
 in one place so the answer never diverges across surfaces:
   * ``hermes mm doctor``          — CLI self-check.
-  * ``hermes setup multimodal``   — onboarding wizard.
+  * ``argus setup multimodal``   — onboarding wizard.
   * the gateway ``mm.readiness`` RPC — web/desktop persistent banner.
 
 Two probe modes:
@@ -205,7 +205,7 @@ def _probe_local_models(cfg: Any, raw_cfg: Any = None) -> Dict[str, Any]:
     unset the runtime falls back to ``$HERMES_HOME/models/bitcpm4-0.5b`` and then
     to the project ``weights/bitcpm4-0.5b`` — we check the same candidates."""
     configured = _voice_intent_local_path(raw_cfg)
-    home = os.environ.get("HERMES_HOME", "")
+    home = os.environ.get("ARGUS_HOME", "")
 
     candidates: List[str] = []
     if configured:
@@ -282,7 +282,7 @@ def probe_mm_readiness(cfg: Any = None, raw_cfg: Any = None,
 
     ``cfg`` may be a Config dataclass, a plain dict of the same flat fields, or
     None (falls back to field defaults). ``raw_cfg`` is the ORIGINAL nested
-    hermes config dict (before flattening) — needed for values that live only in
+    argus config dict (before flattening) — needed for values that live only in
     the nested layout (e.g. ``auxiliary.text.*``, ``auxiliary.vision.base_url``).
 
     ``deep=True`` runs the extended probes: bounded TCP endpoint reachability,
@@ -396,14 +396,14 @@ def _tcp_reachable(url: str, timeout: float) -> Tuple[bool, str]:
 # ── Aux.text local-weight resolution (shared with voice_intent_local) ─────
 
 def _hermes_home() -> str:
-    hh = os.environ.get("HERMES_HOME")
+    hh = os.environ.get("ARGUS_HOME")
     if hh:
         return hh
     try:
         from hermes_constants import get_hermes_home
         return str(get_hermes_home())
     except Exception:
-        return os.path.expanduser("~/.hermes")
+        return os.path.expanduser("~/.argus")
 
 
 def _relative_to_home(path: str) -> str:

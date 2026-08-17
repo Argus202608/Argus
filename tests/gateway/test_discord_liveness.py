@@ -59,8 +59,8 @@ class _LiveBot(FakeBot):
 
 
 def _make_adapter(monkeypatch, *, interval=0.01, threshold=1) -> DiscordAdapter:
-    monkeypatch.setenv("HERMES_DISCORD_LIVENESS_INTERVAL_SECONDS", str(interval))
-    monkeypatch.setenv("HERMES_DISCORD_LIVENESS_FAILURE_THRESHOLD", str(threshold))
+    monkeypatch.setenv("ARGUS_DISCORD_LIVENESS_INTERVAL_SECONDS", str(interval))
+    monkeypatch.setenv("ARGUS_DISCORD_LIVENESS_FAILURE_THRESHOLD", str(threshold))
     return DiscordAdapter(PlatformConfig(enabled=True, token="test-token"))
 
 

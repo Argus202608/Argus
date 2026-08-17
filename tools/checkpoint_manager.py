@@ -13,7 +13,7 @@ controlled by the ``checkpoints`` config flag or ``--checkpoints`` CLI flag.
 Storage layout (single shared store, git objects deduplicated across projects)
 -----------------------------------------------------------------------------
 
-    ~/.hermes/checkpoints/
+    ~/.argus/checkpoints/
         store/                          — single bare-ish git repo
             HEAD, config, objects/      — standard git internals (shared)
             refs/hermes/<hash16>        — per-project branch tip
@@ -141,7 +141,7 @@ DEFAULT_EXCLUDES = [
 ]
 
 # Git subprocess timeout (seconds).
-_GIT_TIMEOUT: int = max(10, min(60, env_int("HERMES_CHECKPOINT_TIMEOUT", 30)))
+_GIT_TIMEOUT: int = max(10, min(60, env_int("ARGUS_CHECKPOINT_TIMEOUT", 30)))
 
 # Max files to snapshot — skip huge directories to avoid slowdowns.
 _MAX_FILES = 50_000
@@ -403,7 +403,7 @@ def _migrate_legacy_store(base: Path) -> Optional[Path]:
     if legacy_root is not None:
         logger.info(
             "Migrated pre-v2 checkpoint repos to %s. "
-            "Clear with `hermes checkpoints clear-legacy` when safe.",
+            "Clear with `argus checkpoints clear-legacy` when safe.",
             legacy_root,
         )
     return legacy_root
@@ -567,7 +567,7 @@ def _dir_size_bytes(path: Path) -> int:
 
 
 # Backwards-compatibility shim — some tests import ``_init_shadow_repo`` and
-# look for ``HEAD``/``info/exclude``/``HERMES_WORKDIR``.  In v2 we also write
+# look for ``HEAD``/``info/exclude``/``ARGUS_WORKDIR``.  In v2 we also write
 # those markers, but inside the shared store + under ``projects/<hash>.json``.
 # The shim initialises the store and registers the project so the old
 # surface keeps roughly the same shape.
@@ -583,10 +583,10 @@ def _init_shadow_repo(shadow_repo: Path, working_dir: str) -> Optional[str]:
     if err:
         return err
     _register_project(shadow_repo, working_dir)
-    # Compat marker for tests that look at HERMES_WORKDIR
+    # Compat marker for tests that look at ARGUS_WORKDIR
     # (write in addition to the JSON metadata).
     try:
-        (shadow_repo / "HERMES_WORKDIR").write_text(
+        (shadow_repo / "ARGUS_WORKDIR").write_text(
             str(_normalize_path(working_dir)) + "\n", encoding="utf-8"
         )
     except OSError:
@@ -1326,7 +1326,7 @@ def prune_checkpoints(
         reason: Optional[str] = None
         if delete_orphans:
             workdir: Optional[str] = None
-            wd_marker = child / "HERMES_WORKDIR"
+            wd_marker = child / "ARGUS_WORKDIR"
             if wd_marker.exists():
                 try:
                     workdir = wd_marker.read_text(encoding="utf-8").strip()

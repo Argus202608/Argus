@@ -13,10 +13,10 @@ import pytest
 def hermes_home(tmp_path, monkeypatch):
     home = tmp_path / "hermes_home"
     home.mkdir()
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("ARGUS_HOME", str(home))
     # No managed dir: point the override at a guaranteed-absent path so a real
     # /etc/hermes on the dev/CI box can't influence the test.
-    monkeypatch.setenv("HERMES_MANAGED_DIR", str(tmp_path / "no_such_managed_dir"))
+    monkeypatch.setenv("ARGUS_MANAGED_DIR", str(tmp_path / "no_such_managed_dir"))
     # Clear caches so each test re-reads from disk.
     import hermes_cli.config as cfg
 

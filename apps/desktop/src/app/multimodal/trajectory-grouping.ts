@@ -1,3 +1,5 @@
+import { translateNow } from '@/i18n'
+
 export interface MmTrajectoryFrame {
   frame_id?: string
   jpeg_b64?: string
@@ -266,7 +268,7 @@ export function groupTrajectoryByQuestion(entries: MmTrajectoryEntry[]): MmTraje
       firstSeq: group.firstSeq,
       firstTs: group.firstTs,
       id: group.id,
-      label: group.label || `问题 ${group.id}`,
+      label: group.label || translateNow('multimodal.misc.question', group.id),
       lastSeq: group.lastSeq,
       lastTs: group.lastTs,
       workers: groupWorkers(group.entries)

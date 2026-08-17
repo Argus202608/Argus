@@ -65,14 +65,14 @@ let
 
   # Import bundled plugins (memory, context_engine, platforms/*).  Keeping
   # them out of the Python site-packages keeps import semantics identical
-  # to a dev checkout — the loader reads them from HERMES_BUNDLED_PLUGINS.
+  # to a dev checkout — the loader reads them from ARGUS_BUNDLED_PLUGINS.
   bundledPlugins = lib.cleanSourceWith {
     src = ../plugins;
     filter = path: _type: !(lib.hasInfix "/__pycache__/" path);
   };
 
   # i18n locale catalogs (locales/*.yaml). Shipped into the store and pointed
-  # at by HERMES_BUNDLED_LOCALES so the wrapped binary always resolves human
+  # at by ARGUS_BUNDLED_LOCALES so the wrapped binary always resolves human
   # strings instead of raw i18n keys (#23943 / #27632 / #35374).
   #
   # Defense-in-depth, not load-bearing: the wheel already declares locales/ as
@@ -174,14 +174,14 @@ stdenv.mkDerivation (finalAttrs: {
       (name: ''
         makeWrapper ${hermesVenv}/bin/${name} $out/bin/${name} \
           --suffix PATH : "${runtimePath}" \
-          --set HERMES_BUNDLED_SKILLS $out/share/hermes-agent/skills \
-          --set HERMES_BUNDLED_PLUGINS $out/share/hermes-agent/plugins \
-          --set HERMES_BUNDLED_LOCALES $out/share/hermes-agent/locales \
-          --set HERMES_WEB_DIST $out/share/hermes-agent/web_dist \
-          --set HERMES_TUI_DIR $out/ui-tui \
-          --set HERMES_PYTHON ${hermesVenv}/bin/python3 \
-          --set HERMES_NODE ${lib.getExe nodejs} \
-          ${lib.optionalString (rev != null) ''--set HERMES_REVISION ${rev} \''}
+          --set ARGUS_BUNDLED_SKILLS $out/share/hermes-agent/skills \
+          --set ARGUS_BUNDLED_PLUGINS $out/share/hermes-agent/plugins \
+          --set ARGUS_BUNDLED_LOCALES $out/share/hermes-agent/locales \
+          --set ARGUS_WEB_DIST $out/share/hermes-agent/web_dist \
+          --set ARGUS_TUI_DIR $out/ui-tui \
+          --set ARGUS_PYTHON ${hermesVenv}/bin/python3 \
+          --set ARGUS_NODE ${lib.getExe nodejs} \
+          ${lib.optionalString (rev != null) ''--set ARGUS_REVISION ${rev} \''}
           ${lib.optionalString (extraPythonPackages != [ ]) ''--suffix PYTHONPATH : "${pythonPath}"''}
       '')
       [
@@ -221,7 +221,7 @@ stdenv.mkDerivation (finalAttrs: {
     };
 
     devShellHook = ''
-      export HERMES_PYTHON=${hermesVenv}/bin/python3
+      export ARGUS_PYTHON=${hermesVenv}/bin/python3
     '';
 
     devDeps = runtimeDeps ++ [ (mkHermesVenv (extraDependencyGroups ++ [ "dev" ])) ];
@@ -229,7 +229,7 @@ stdenv.mkDerivation (finalAttrs: {
 
   meta = with lib; {
     description = "AI agent with advanced tool-calling capabilities";
-    homepage = "https://github.com/NousResearch/hermes-agent";
+    homepage = "https://github.com/MMArgus-Team/Argus";
     mainProgram = "hermes";
     license = licenses.mit;
     platforms = platforms.unix;

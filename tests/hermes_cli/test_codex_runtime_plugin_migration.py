@@ -816,8 +816,8 @@ class TestHermesHomeLeakGuard:
         )
 
     def test_tempdir_detector_accepts_real_hermes_home(self):
-        assert not _looks_like_test_tempdir("/Users/alice/.hermes")
-        assert not _looks_like_test_tempdir("/home/bob/.hermes")
+        assert not _looks_like_test_tempdir("/Users/alice/.argus")
+        assert not _looks_like_test_tempdir("/home/bob/.argus")
         assert not _looks_like_test_tempdir("/opt/hermes")
         assert not _looks_like_test_tempdir("")
 
@@ -825,12 +825,12 @@ class TestHermesHomeLeakGuard:
         """The headline regression: even when HERMES_HOME points at a pytest
         tempdir, _build_hermes_tools_mcp_entry() must NOT propagate it."""
         monkeypatch.setenv(
-            "HERMES_HOME",
+            "ARGUS_HOME",
             "/private/var/folders/xx/pytest-of-user/pytest-99/test_x/hermes_test",
         )
         entry = _build_hermes_tools_mcp_entry()
         env = entry.get("env", {})
-        assert "HERMES_HOME" not in env, (
+        assert "ARGUS_HOME" not in env, (
             f"pytest-tempdir HERMES_HOME leaked into codex MCP entry: "
             f"{env.get('HERMES_HOME')!r}"
         )
@@ -842,11 +842,11 @@ class TestHermesHomeLeakGuard:
         # We can't easily create one in the test, so just use a stable path
         # outside any tempdir-detector needle. The detector checks for tempdir
         # markers, not for path existence.
-        real_path = "/Users/alice/.hermes"
-        monkeypatch.setenv("HERMES_HOME", real_path)
+        real_path = "/Users/alice/.argus"
+        monkeypatch.setenv("ARGUS_HOME", real_path)
         entry = _build_hermes_tools_mcp_entry()
         env = entry.get("env", {})
-        assert env.get("HERMES_HOME") == real_path
+        assert env.get("ARGUS_HOME") == real_path
 
     def test_unset_hermes_home_omits_env_key(self, monkeypatch):
         """When HERMES_HOME is unset in the environment, the MCP entry MUST
@@ -854,10 +854,10 @@ class TestHermesHomeLeakGuard:
         inherit whatever HERMES_HOME its launcher (systemd, gateway, shell)
         sets at runtime, rather than being pinned to migrate-time defaults.
         Regression guard for issue #26250 follow-up review."""
-        monkeypatch.delenv("HERMES_HOME", raising=False)
+        monkeypatch.delenv("ARGUS_HOME", raising=False)
         entry = _build_hermes_tools_mcp_entry()
         env = entry.get("env", {})
-        assert "HERMES_HOME" not in env, (
+        assert "ARGUS_HOME" not in env, (
             f"HERMES_HOME should not be set when env var is unset, got: "
             f"{env.get('HERMES_HOME')!r}"
         )

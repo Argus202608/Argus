@@ -274,7 +274,7 @@ class TestStaleConfigDefaultDoesNotWedgeResolver:
         import yaml
         import importlib
 
-        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        monkeypatch.setenv("ARGUS_HOME", str(tmp_path))
         monkeypatch.setenv("OPENCODE_ZEN_API_KEY", "test-key")
         (tmp_path / "config.yaml").write_text(yaml.safe_dump({
             "model": {"provider": "opencode-zen", "default": "claude-sonnet-4-6"},
@@ -310,7 +310,7 @@ class TestStaleConfigDefaultDoesNotWedgeResolver:
         import yaml
         import importlib
 
-        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        monkeypatch.setenv("ARGUS_HOME", str(tmp_path))
         monkeypatch.setenv("OPENCODE_GO_API_KEY", "test-key")
         monkeypatch.delenv("OPENCODE_ZEN_API_KEY", raising=False)
         (tmp_path / "config.yaml").write_text(yaml.safe_dump({
@@ -347,7 +347,7 @@ class TestStaleConfigDefaultDoesNotWedgeResolver:
         import yaml
         import importlib
 
-        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        monkeypatch.setenv("ARGUS_HOME", str(tmp_path))
         monkeypatch.setenv("OPENCODE_ZEN_API_KEY", "test-key")
         (tmp_path / "config.yaml").write_text(yaml.safe_dump({
             "model": {"provider": "opencode-zen", "default": "kimi-k2.6"},

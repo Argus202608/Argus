@@ -197,7 +197,7 @@ class TestReadFile:
         test_path = Path.home() / ".hermes_test_tilde_9f8a7b"
         try:
             test_path.write_text("TILDE_EXPANSION_OK\n")
-            result = ops.read_file("~/.hermes_test_tilde_9f8a7b")
+            result = ops.read_file("~/.argus_test_tilde_9f8a7b")
             assert result.error is None
             assert "TILDE_EXPANSION_OK" in result.content
             _assert_clean(result.content)

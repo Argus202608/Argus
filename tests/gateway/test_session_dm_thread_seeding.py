@@ -25,7 +25,7 @@ def store(tmp_path, monkeypatch):
     """SessionStore with SQLite — load_transcript reads from DB only.
 
     Pin DEFAULT_DB_PATH to tmp_path so SessionDB() can't write to the real
-    ~/.hermes/state.db. (DEFAULT_DB_PATH is a module-level constant computed
+    ~/.argus/state.db. (DEFAULT_DB_PATH is a module-level constant computed
     at hermes_state import time, before pytest's HERMES_HOME monkeypatch
     fires — the autouse fixture's HERMES_HOME override doesn't help here.)
     """

@@ -51,7 +51,7 @@ def test_dashboard_subcommand_present(built_image: str) -> None:
         capture_output=True, text=True, timeout=60,
     )
     assert r.returncode == 0, (
-        f"hermes dashboard --help failed (exit {r.returncode}): "
+        f"argus dashboard --help failed (exit {r.returncode}): "
         f"stdout={r.stdout[-2000:]!r} stderr={r.stderr[-2000:]!r}"
     )
     combined = (r.stdout + r.stderr).lower()

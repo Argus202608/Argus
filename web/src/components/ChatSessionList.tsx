@@ -139,7 +139,7 @@ export function ChatSessionList({
     (e: MouseEvent, s: SessionInfo) => {
       e.stopPropagation();
       const name = (s.title?.trim() || s.preview?.trim() || s.id).slice(0, 24);
-      if (!window.confirm(`删除会话「${name}」? 此操作不可恢复。`)) return;
+      if (!window.confirm(t.multimodal.sessions.deleteConfirm(name))) return;
       // Optimistic remove; on failure reload to restore truth.
       setSessions((prev) => (prev ? prev.filter((x) => x.id !== s.id) : prev));
       api.deleteSession(s.id, scopeKey).catch(() => reload());
@@ -256,8 +256,8 @@ export function ChatSessionList({
               <button
                 type="button"
                 onClick={(e) => del(e, s)}
-                aria-label={t.common.delete ?? "Delete"}
-                title={t.common.delete ?? "Delete"}
+                aria-label={t.common.delete}
+                title={t.common.delete}
                 className="absolute right-1 top-1 hidden rounded p-0.5 text-text-tertiary hover:bg-destructive/15 hover:text-destructive group-hover:block"
               >
                 <Trash2 className="h-3 w-3" />

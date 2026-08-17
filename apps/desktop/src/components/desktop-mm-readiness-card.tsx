@@ -4,7 +4,7 @@
  *
  * Desktop merges the multimodal capabilities into the main chat, so this does
  * NOT block the app — it surfaces a dismissable card listing missing REQUIRED
- * capabilities and how to fix them (via `hermes setup multimodal` or the printed
+ * capabilities and how to fix them (via `argus setup multimodal` or the printed
  * command).
  *
  * Dismissal is scoped to the SESSION (sessionStorage), matching the web banner:
@@ -19,6 +19,8 @@
  */
 
 import { useEffect, useState } from 'react'
+
+import { useI18n } from '@/i18n'
 
 export type CapStatus = 'ok' | 'missing' | 'broken' | 'unknown'
 
@@ -49,7 +51,7 @@ export function selectMissingRequired(report: ReadinessReport | null): Capabilit
   return report.capabilities.filter(c => c.required && c.status !== 'ok')
 }
 
-const DISMISS_KEY = 'hermes-desktop-mm-readiness-dismissed-session'
+const DISMISS_KEY = 'argus-desktop-mm-readiness-dismissed-session'
 
 function wasDismissed(): boolean {
   try {
@@ -135,6 +137,7 @@ function ReadinessFloating({
   items: Capability[]
   onDismiss: () => void
 }) {
+  const { t } = useI18n()
   const [expanded, setExpanded] = useState(false)
   return (
     <div
@@ -149,7 +152,7 @@ function ReadinessFloating({
         <span aria-hidden className="mt-0.5 select-none" style={{ color: 'var(--ui-yellow)' }}>⚠</span>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <span className="font-medium">多模态未完全就绪</span>
+            <span className="font-medium">{t.multimodal.readiness.notReady}</span>
             <span
               className="rounded-full px-1.5 py-0.5 text-[10px] font-medium"
               style={{
@@ -162,11 +165,11 @@ function ReadinessFloating({
               onClick={() => setExpanded(v => !v)}
               className="ml-auto rounded px-1.5 py-0.5 text-[11px] hover:bg-(--ui-bg-elevated)"
               style={{ color: 'var(--ui-text-tertiary)' }}
-              aria-label={expanded ? '收起' : '展开'}
-            >{expanded ? '收起' : '详情'}</button>
+              aria-label={expanded ? t.multimodal.readiness.collapse : t.multimodal.readiness.expand}
+            >{expanded ? t.multimodal.readiness.collapse : t.multimodal.readiness.details}</button>
             <button
               onClick={onDismiss}
-              aria-label="关闭"
+              aria-label={t.multimodal.readiness.close}
               className="rounded p-0.5 hover:bg-(--ui-bg-elevated)"
               style={{ color: 'var(--ui-text-tertiary)' }}
             >×</button>
@@ -177,15 +180,15 @@ function ReadinessFloating({
               style={{ borderColor: 'var(--ui-stroke-secondary)' }}
             >
               <p style={{ color: 'var(--ui-text-tertiary)' }}>
-                以下能力缺失,相关功能将无法工作。运行{' '}
+                {t.multimodal.readiness.capsMissing}{' '}
                 <code
                   className="rounded px-1 py-0.5 font-mono"
                   style={{
                     background: 'color-mix(in srgb, var(--ui-text-primary) 8%, transparent)',
                     color: 'var(--ui-text-primary)',
                   }}
-                >hermes setup multimodal</code>{' '}
-                补齐。
+                >{t.multimodal.readiness.runSetup}</code>{' '}
+                {t.multimodal.readiness.toFix}
               </p>
               <ul className="space-y-1.5">
                 {items.map(c => (

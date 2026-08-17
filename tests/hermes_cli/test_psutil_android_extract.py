@@ -89,11 +89,11 @@ def test_install_psutil_android_compat_uses_patched_tree(tmp_path):
          patch.object(hermes_main, "_run_install_with_heartbeat", side_effect=fake_run_install):
         hermes_main._install_psutil_android_compat(
             ["uv", "pip"],
-            env={"HERMES_TEST": "1"},
+            env={"ARGUS_TEST": "1"},
         )
 
     assert captured["cmd"][:4] == ["uv", "pip", "install", "--no-build-isolation"]
-    assert captured["env"] == {"HERMES_TEST": "1"}
+    assert captured["env"] == {"ARGUS_TEST": "1"}
     assert REPLACEMENT in str(captured["common_py"])
 
 

@@ -1,7 +1,7 @@
-"""MCP picker — interactive `hermes mcp picker` (also the default `hermes mcp`).
+"""MCP picker — interactive `argus mcp picker` (also the default `argus mcp`).
 
 Lists every catalog entry plus any custom MCP servers the user has added via
-``hermes mcp add``, lets them pick one, and routes to install / enable /
+``argus mcp add``, lets them pick one, and routes to install / enable /
 disable / uninstall / configure-tools flows.
 
 Mirrors the `hermes plugin` picker UX: arrow keys to navigate, ENTER on a row
@@ -230,7 +230,7 @@ def _handle_row(row: _Row) -> None:
 
 def _print_rows_text(rows: List[_Row]) -> None:
     """Plain-text catalog dump used as a fallback when curses can't run, and
-    as the default output of `hermes mcp catalog`."""
+    as the default output of `argus mcp catalog`."""
     if not rows:
         print()
         print(color("  No MCPs in the catalog or configured.", Colors.DIM))
@@ -246,7 +246,7 @@ def _print_rows_text(rows: List[_Row]) -> None:
         print(f"  {_format_row(row)}")
     print()
     print(color(
-        "  Install: hermes mcp install <name>    Picker: hermes mcp",
+        "  Install: argus mcp install <name>    Picker: argus mcp",
         Colors.DIM,
     ))
 
@@ -258,7 +258,7 @@ def _print_rows_text(rows: List[_Row]) -> None:
         print()
         for name, _, msg in future:
             print(color(
-                f"  ⚠ '{name}' requires a newer Hermes — run `hermes update` "
+                f"  ⚠ '{name}' requires a newer Hermes — run `argus update` "
                 "to install this entry.",
                 Colors.YELLOW,
             ))
@@ -267,12 +267,12 @@ def _print_rows_text(rows: List[_Row]) -> None:
 
 
 def show_catalog() -> None:
-    """`hermes mcp catalog` — print the curated list + custom servers, no interaction."""
+    """`argus mcp catalog` — print the curated list + custom servers, no interaction."""
     _print_rows_text(_build_rows())
 
 
 def run_picker() -> None:
-    """`hermes mcp picker` (and default `hermes mcp`) — interactive selector.
+    """`argus mcp picker` (and default `argus mcp`) — interactive selector.
 
     Loops until the user hits ESC/q. After each action the picker re-renders
     so the user can manage several entries in one session.
@@ -299,7 +299,7 @@ def run_picker() -> None:
 
 
 def install_by_name(identifier: str) -> int:
-    """`hermes mcp install <name>` — non-interactive entry-point.
+    """`argus mcp install <name>` — non-interactive entry-point.
 
     Returns 0 on success, non-zero on failure (so the CLI can propagate
     exit codes).
@@ -310,7 +310,7 @@ def install_by_name(identifier: str) -> int:
     if entry is None:
         print(color(
             f"  ✗ '{identifier}' is not in the catalog. "
-            "Run `hermes mcp catalog` to see available entries.",
+            "Run `argus mcp catalog` to see available entries.",
             Colors.RED,
         ))
         return 1

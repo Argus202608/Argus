@@ -409,6 +409,14 @@ class ChatCompletionsTransport(ProviderTransport):
                     ]
 
         # Kimi extra_body.thinking
+        #
+        # NOTE: this is the LEGACY path, reached only for providers with no
+        # registered profile. Vendors WITH a profile (Kimi, Z.AI/GLM, DeepSeek,
+        # …) express their thinking toggle in
+        # ``ProviderProfile.build_api_kwargs_extras`` instead — including when
+        # they are reached through a hand-configured ``custom`` endpoint, which
+        # ``providers.resolve_provider_profile`` now resolves by hostname. Do not
+        # add new ``if is_<vendor>`` branches here; add a profile.
         if is_kimi:
             _kimi_thinking_enabled = True
             if reasoning_config and isinstance(reasoning_config, dict):

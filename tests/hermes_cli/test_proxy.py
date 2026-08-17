@@ -80,13 +80,13 @@ def test_nous_adapter_metadata():
 
 def test_nous_adapter_not_authenticated_when_no_auth_file(tmp_path, monkeypatch):
     # HERMES_HOME is already set by conftest, but make doubly sure
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ARGUS_HOME", str(tmp_path))
     adapter = NousPortalAdapter()
     assert not adapter.is_authenticated()
 
 
 def test_nous_adapter_not_authenticated_when_provider_missing(tmp_path, monkeypatch):
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ARGUS_HOME", str(tmp_path))
     (tmp_path / "auth.json").write_text(json.dumps({
         "version": 1,
         "providers": {},
@@ -95,7 +95,7 @@ def test_nous_adapter_not_authenticated_when_provider_missing(tmp_path, monkeypa
 
 
 def test_nous_adapter_authenticated_with_agent_key(tmp_path, monkeypatch):
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ARGUS_HOME", str(tmp_path))
     _write_auth_store(tmp_path, {
         "agent_key": "ov-test-key",
         "agent_key_expires_at": "2099-01-01T00:00:00Z",
@@ -106,7 +106,7 @@ def test_nous_adapter_authenticated_with_agent_key(tmp_path, monkeypatch):
 
 def test_nous_adapter_authenticated_with_refresh_token_only(tmp_path, monkeypatch):
     """If access_token+refresh_token exist but no agent_key yet, we can still refresh."""
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ARGUS_HOME", str(tmp_path))
     _write_auth_store(tmp_path, {
         "access_token": "access-tok",
         "refresh_token": "refresh-tok",
@@ -115,7 +115,7 @@ def test_nous_adapter_authenticated_with_refresh_token_only(tmp_path, monkeypatc
 
 
 def test_nous_adapter_get_credential_uses_runtime_resolver(tmp_path, monkeypatch):
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ARGUS_HOME", str(tmp_path))
     _write_auth_store(tmp_path, {
         "access_token": "access-tok",
         "refresh_token": "refresh-tok",
@@ -145,7 +145,7 @@ def test_nous_adapter_get_credential_uses_runtime_resolver(tmp_path, monkeypatch
 
 
 def test_nous_adapter_retry_credential_force_refreshes_on_jwt_401(tmp_path, monkeypatch):
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ARGUS_HOME", str(tmp_path))
     _write_auth_store(tmp_path, {
         "access_token": "jwt-access",
         "refresh_token": "refresh-tok",
@@ -179,7 +179,7 @@ def test_nous_adapter_retry_credential_force_refreshes_on_jwt_401(tmp_path, monk
 
 
 def test_nous_adapter_retry_credential_skips_non_401(tmp_path, monkeypatch):
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ARGUS_HOME", str(tmp_path))
     _write_auth_store(tmp_path, {
         "access_token": "jwt-access",
         "refresh_token": "refresh-tok",
@@ -203,14 +203,14 @@ def test_nous_adapter_retry_credential_skips_non_401(tmp_path, monkeypatch):
 
 
 def test_nous_adapter_get_credential_raises_when_not_logged_in(tmp_path, monkeypatch):
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ARGUS_HOME", str(tmp_path))
     adapter = NousPortalAdapter()
-    with pytest.raises(RuntimeError, match="hermes auth add nous"):
+    with pytest.raises(RuntimeError, match="argus auth add nous"):
         adapter.get_credential()
 
 
 def test_nous_adapter_get_credential_raises_on_refresh_failure(tmp_path, monkeypatch):
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ARGUS_HOME", str(tmp_path))
     _write_auth_store(tmp_path, {
         "access_token": "access-tok",
         "refresh_token": "refresh-tok",
@@ -229,7 +229,7 @@ def test_nous_adapter_quarantines_terminal_refresh_failure(tmp_path, monkeypatch
     from hermes_cli.auth import AuthError
     from agent.credential_pool import load_pool
 
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ARGUS_HOME", str(tmp_path))
     _write_auth_store(tmp_path, {
         "access_token": "access-tok",
         "refresh_token": "refresh-tok",
@@ -261,7 +261,7 @@ def test_nous_adapter_quarantines_terminal_refresh_failure(tmp_path, monkeypatch
 
 def test_nous_adapter_get_credential_raises_when_no_jwt_returned(tmp_path, monkeypatch):
     """If the refresh helper succeeds but produces no JWT, we surface a clear error."""
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ARGUS_HOME", str(tmp_path))
     _write_auth_store(tmp_path, {
         "access_token": "access-tok",
         "refresh_token": "refresh-tok",
@@ -278,7 +278,7 @@ def test_nous_adapter_get_credential_raises_when_no_jwt_returned(tmp_path, monke
 
 def test_nous_adapter_concurrent_refresh_serialized(tmp_path, monkeypatch):
     """Two parallel get_credential() calls must serialize through the lock."""
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ARGUS_HOME", str(tmp_path))
     _write_auth_store(tmp_path, {
         "access_token": "a", "refresh_token": "r",
     })
@@ -383,7 +383,7 @@ def test_xai_adapter_metadata():
 
 
 def test_xai_adapter_not_authenticated_when_no_pool_entry(tmp_path, monkeypatch):
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ARGUS_HOME", str(tmp_path))
     (tmp_path / "auth.json").write_text(json.dumps({
         "version": 1,
         "providers": {},
@@ -393,13 +393,13 @@ def test_xai_adapter_not_authenticated_when_no_pool_entry(tmp_path, monkeypatch)
 
 
 def test_xai_adapter_authenticated_with_pool_entry(tmp_path, monkeypatch):
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ARGUS_HOME", str(tmp_path))
     _write_xai_pool_entry(tmp_path)
     assert XAIGrokAdapter().is_authenticated()
 
 
 def test_xai_adapter_get_credential_uses_oauth_pool(tmp_path, monkeypatch):
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ARGUS_HOME", str(tmp_path))
     _write_xai_pool_entry(
         tmp_path,
         access_token="pool-access-token",
@@ -414,7 +414,7 @@ def test_xai_adapter_get_credential_uses_oauth_pool(tmp_path, monkeypatch):
 
 
 def test_xai_adapter_get_credential_defaults_base_url(tmp_path, monkeypatch):
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ARGUS_HOME", str(tmp_path))
     _write_xai_pool_entry(tmp_path, base_url="")
 
     cred = XAIGrokAdapter().get_credential()
@@ -423,7 +423,7 @@ def test_xai_adapter_get_credential_defaults_base_url(tmp_path, monkeypatch):
 
 
 def test_xai_adapter_retry_refreshes_current_pool_entry(tmp_path, monkeypatch):
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ARGUS_HOME", str(tmp_path))
     _write_xai_pool_entry(tmp_path, access_token="old-access-token")
 
     def fake_refresh(access_token, refresh_token, **kwargs):
@@ -461,7 +461,7 @@ def test_xai_adapter_retry_rotates_pool_entry_on_429(tmp_path, monkeypatch):
     via ``EXHAUSTED_TTL_429_SECONDS`` on the offending key, and
     returns the next available credential.
     """
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ARGUS_HOME", str(tmp_path))
 
     # Two pool entries so rotation has somewhere to go.
     auth_path = tmp_path / "auth.json"
@@ -520,7 +520,7 @@ def test_xai_adapter_retry_returns_none_on_429_when_pool_exhausted(tmp_path, mon
     """Single-entry pool: 429 has nowhere to rotate to → return None
     so the 429 flows back to the client unchanged (existing behavior
     preserved)."""
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ARGUS_HOME", str(tmp_path))
     _write_xai_pool_entry(tmp_path)  # single entry
 
     def _refresh_must_not_run(*args, **kwargs):
@@ -544,7 +544,7 @@ def test_xai_adapter_retry_returns_none_on_429_when_pool_exhausted(tmp_path, mon
 def test_xai_adapter_retry_returns_none_for_unrelated_status(tmp_path, monkeypatch):
     """Non-{401, 429} statuses must NOT trigger any retry — pool
     untouched, no refresh attempted, return None immediately."""
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ARGUS_HOME", str(tmp_path))
     _write_xai_pool_entry(tmp_path)
 
     def _refresh_must_not_run(*args, **kwargs):
@@ -851,7 +851,7 @@ def test_server_strips_client_auth_header():
 
 
 def test_cmd_proxy_status_runs(capsys, tmp_path, monkeypatch):
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ARGUS_HOME", str(tmp_path))
     from hermes_cli.proxy.cli import cmd_proxy_status
 
     args = MagicMock()
@@ -888,7 +888,7 @@ def test_cmd_proxy_start_refuses_unknown_provider(capsys):
 
 
 def test_cmd_proxy_start_refuses_when_unauthenticated(capsys, tmp_path, monkeypatch):
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ARGUS_HOME", str(tmp_path))
     from hermes_cli.proxy.cli import cmd_proxy_start
 
     args = MagicMock()
@@ -898,4 +898,4 @@ def test_cmd_proxy_start_refuses_when_unauthenticated(capsys, tmp_path, monkeypa
     rc = cmd_proxy_start(args)
     assert rc == 2
     err = capsys.readouterr().err
-    assert "hermes auth add nous" in err
+    assert "argus auth add nous" in err

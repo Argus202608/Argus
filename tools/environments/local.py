@@ -177,7 +177,7 @@ def _build_provider_env_blocklist() -> frozenset:
         "EMAIL_SMTP_HOST",
         "EMAIL_HOME_ADDRESS",
         "EMAIL_HOME_ADDRESS_NAME",
-        "HERMES_DASHBOARD_SESSION_TOKEN",
+        "ARGUS_DASHBOARD_SESSION_TOKEN",
         "GATEWAY_ALLOWED_USERS",
         "GH_TOKEN",
         "GITHUB_APP_ID",
@@ -212,7 +212,7 @@ def _inject_context_hermes_home(env: dict) -> None:
 
         value = get_hermes_home_override()
         if value:
-            env["HERMES_HOME"] = value
+            env["ARGUS_HOME"] = value
     except Exception:
         pass
 
@@ -275,7 +275,7 @@ _ALWAYS_STRIP_KEYS: frozenset[str] = frozenset({
     "GATEWAY_ALLOW_ALL_USERS",
     "HASS_TOKEN",
     "EMAIL_PASSWORD",
-    "HERMES_DASHBOARD_SESSION_TOKEN",
+    "ARGUS_DASHBOARD_SESSION_TOKEN",
     # Remote-compute / infrastructure secrets
     "MODAL_TOKEN_ID",
     "MODAL_TOKEN_SECRET",
@@ -355,7 +355,7 @@ def _find_bash() -> str:
             or "/bin/sh"
         )
 
-    custom = os.environ.get("HERMES_GIT_BASH_PATH")
+    custom = os.environ.get("ARGUS_GIT_BASH_PATH")
     if custom and os.path.isfile(custom):
         return custom
 
@@ -393,7 +393,7 @@ def _find_bash() -> str:
     raise RuntimeError(
         "Git Bash not found. Hermes Agent requires Git for Windows on Windows.\n"
         "Install it from: https://git-scm.com/download/win\n"
-        "Or set HERMES_GIT_BASH_PATH to your bash.exe location."
+        "Or set ARGUS_GIT_BASH_PATH to your bash.exe location."
     )
 
 
@@ -455,7 +455,7 @@ _SANE_PATH = (
 # Cached directory containing the ``hermes`` console-script.
 # ``_SENTINEL`` distinguishes "not resolved yet" from a resolved ``None``.
 _SENTINEL = object()
-_HERMES_BIN_DIR: "str | None | object" = _SENTINEL
+_ARGUS_BIN_DIR: "str | None | object" = _SENTINEL
 
 
 def _resolve_hermes_bin_dir() -> str | None:
@@ -481,9 +481,9 @@ def _resolve_hermes_bin_dir() -> str | None:
       3. The directory of ``sys.executable`` — the running interpreter's
          venv ``bin``/``Scripts`` is where its console-scripts live.
     """
-    global _HERMES_BIN_DIR
-    if _HERMES_BIN_DIR is not _SENTINEL:
-        return _HERMES_BIN_DIR  # type: ignore[return-value]
+    global _ARGUS_BIN_DIR
+    if _ARGUS_BIN_DIR is not _SENTINEL:
+        return _ARGUS_BIN_DIR  # type: ignore[return-value]
 
     candidate: str | None = None
 
@@ -511,7 +511,7 @@ def _resolve_hermes_bin_dir() -> str | None:
     if candidate and not os.path.isdir(candidate):
         candidate = None
 
-    _HERMES_BIN_DIR = candidate
+    _ARGUS_BIN_DIR = candidate
     return candidate
 
 

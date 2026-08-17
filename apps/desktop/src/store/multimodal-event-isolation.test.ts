@@ -95,6 +95,7 @@ vi.mock('./multimodal-capture', () => ({
 }))
 vi.mock('./multimodal-voice', () => ({
   $mmMicState: micState,
+  cancelManualMicOnDisconnect: vi.fn(),
   hasMicCaptureIntent: () => micState.get() !== 'idle',
   onAsrBuffer: voice.asrBuffer,
   onAsrPartial: voice.asrPartial,
@@ -227,13 +228,14 @@ describe('multimodal gateway event session isolation', () => {
       monitors: [{ monitor_id: 'monitor-B', enabled: true }]
     }, 'runtime-B')
     fakeGateway.emit('multimodal.asr_buffer', {
-      segments: ['current segment']
+      segments: ['current segment'],
+      turn_id: 'turn-current'
     }, 'runtime-B')
 
     expect($mmCtx.get().obs[0]?.text).toBe('current observation')
     expect($mmAnchor.get()[0]?.jpeg_b64).toBe('current-frame')
     expect($mmMonitors.get()[0]?.monitor_id).toBe('monitor-B')
-    expect(voice.asrBuffer).toHaveBeenCalledWith(['current segment'])
+    expect(voice.asrBuffer).toHaveBeenCalledWith(['current segment'], 'turn-current')
   })
 
   it('clears already-accepted A stream buffers at the A to B boundary', async () => {

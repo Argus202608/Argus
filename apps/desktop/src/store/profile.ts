@@ -13,6 +13,7 @@ import {
 } from '@/lib/storage'
 import { $gateway, ensureGatewayForProfile } from '@/store/gateway'
 import { stopCaptureAndNotify } from '@/store/multimodal-capture'
+import { hasMicCaptureIntent, stopMic } from '@/store/multimodal-voice'
 import { setConnection } from '@/store/session'
 import type { ProfileInfo } from '@/types/hermes'
 
@@ -25,7 +26,7 @@ export function normalizeProfileKey(name: string | null | undefined): string {
 }
 
 // The profile the running local backend is actually scoped to (mirrors
-// /api/profiles/active `current`). "default" is the root ~/.hermes. This is the
+// /api/profiles/active `current`). "default" is the root ~/.argus. This is the
 // display source of truth for the statusbar pill; the desktop's *stored*
 // preference (which may be unset) lives in the Electron main process.
 export const $activeProfile = atom<string>('default')
@@ -42,7 +43,7 @@ export function setActiveProfile(name: string): void {
 // User-defined order for the named (non-default) profile squares in the rail.
 // Names absent from the list fall back to alphabetical, appended at the tail —
 // so a freshly created profile lands at the end until the user drags it.
-const PROFILE_ORDER_STORAGE_KEY = 'hermes.desktop.profileOrder'
+const PROFILE_ORDER_STORAGE_KEY = 'argus.desktop.profileOrder'
 
 export const $profileOrder = atom<string[]>(storedStringArray(PROFILE_ORDER_STORAGE_KEY))
 
@@ -74,7 +75,7 @@ export function sortByProfileOrder<T extends { name: string }>(items: T[], order
 // Optional per-profile color override (long-press a rail square to pick). Absent
 // names fall back to the deterministic hue from profileColor(); a local-only
 // cosmetic preference, so single-profile users never touch it.
-const PROFILE_COLORS_STORAGE_KEY = 'hermes.desktop.profileColors'
+const PROFILE_COLORS_STORAGE_KEY = 'argus.desktop.profileColors'
 
 export const $profileColors = atom<Record<string, string>>(storedStringRecord(PROFILE_COLORS_STORAGE_KEY))
 
@@ -157,6 +158,9 @@ export function requestFreshSession(): void {
   // synchronously so an already-resolved microtask cannot attach its old grant
   // to the replacement profile during the useStore -> useEffect gap.
   stopCaptureAndNotify()
+  if (hasMicCaptureIntent()) {
+    void stopMic()
+  }
   $freshSessionRequest.set($freshSessionRequest.get() + 1)
 }
 
@@ -273,7 +277,7 @@ export async function ensureGatewayProfile(profile: string | null | undefined): 
 
 export const ALL_PROFILES = '__all__'
 
-const SHOW_ALL_PROFILES_STORAGE_KEY = 'hermes.desktop.showAllProfiles'
+const SHOW_ALL_PROFILES_STORAGE_KEY = 'argus.desktop.showAllProfiles'
 
 // Opt-in unified view. When false, scope follows the live gateway profile, so
 // single-profile users (who never see the switcher) are completely unaffected.
@@ -347,7 +351,7 @@ function orderedProfileKeys(): string[] {
   return hasDefault ? ['default', ...named] : named
 }
 
-// Switch to the default (root ~/.hermes) profile — bound to ⌘1.
+// Switch to the default (root ~/.argus) profile — bound to ⌘1.
 export function switchToDefaultProfile(): void {
   const def = $profiles.get().find(profile => profile.is_default)
 

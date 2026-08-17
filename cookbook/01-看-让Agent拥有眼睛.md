@@ -187,6 +187,30 @@ Argus 的解法是 **TTL + 帧数双门**（[agent/multimodal/watcher_engine.py:
 
 每轮报告都累积进 watcher 自己的 running report，并每 N 批增量推送给前端（不等结束就先给用户看）；它不会把每批帧或中间观察追加进主 Agent history。最后再做一次带超时兜底的汇总——超时就用累积报告，**绝不返回空**（`watcher_engine.py:1660`）。深研的"想"的部分，我们留到第 3 章细讲；这里你只需记住：watcher 的"看"，是一条**永不停止、随场景呼吸、逐段推进**的走查线。
 
+## 1.7 从像素到文字：OCR reflow 与窗口文字桥
+
+纯视觉模型对小字 / 长文档的 OCR 准确率有限。当用户在桌面端共享一个具体窗口（`Frame.source_id` 形如 `window:12345:0`）时，Argus 有一条更快更准的路径：
+
+1. **window_text_bridge**（[agent/multimodal/window_text_bridge.py](agent/multimodal/window_text_bridge.py)）：利用操作系统的辅助功能 API（macOS AX / Windows UIA）直接抓取窗口的结构化正文——零 OCR 延迟、零识别错误。还能顺带拿到浏览器 URL / 文件路径作为"锚点"，给记忆和 watcher 的上下文更具体的定位。
+2. **失败回退**：如果 AX/UIA 拿不到（权限未授权、或非文本型应用），则回落到 RapidOCR，走 **ocr_reflow** 增强管线。
+
+`ocr_reflow`（[agent/multimodal/ocr_reflow.py](agent/multimodal/ocr_reflow.py)）把"给定一张图就能跑"的 OCR 后处理逻辑抽成共享模块，两个消费者（window_text 和视频流 OCR worker）复用同一份算法，消除重复防漂移：
+
+- **尺寸规整**（`resize_for_ocr`）：小图放大到 1280px 救小字，大图缩到 2048px 省算力——保证 OCR 始终在"字够大、图不爆"的甜区运行。
+- **乱码过滤**（`is_readable_text`）：控制字符 / 私用区占比 >15% 直接丢弃。
+- **版面重排**（`reflow_ocr_lines`）：先检测多栏 → 按 x 坐标分列 → 每列按 y 排序合并行 → 输出自然阅读序段落。这一步把 OCR 引擎返回的碎片坐标变成"人类从左到右从上到下阅读的文本流"。
+- **Top-N 过滤**：只保留面积最大的前 15 个段落块（正文主体），标题栏 / 状态栏等小碎片自动丢弃。
+
+> **设计选择：** window_text_bridge 故意不调用 window_text.py 自身的 OCR 兜底（它会自己截屏 + rapidocr，与视频流 OCR worker 重复）。让 worker 走 ocr_reflow 的增强路径就够了，且它用的是共享帧数据而非额外截屏。**一份感知，多方消费**——这条原则从 FrameBuffer 一直贯穿到 OCR。
+
+## 1.8 追踪的简化：从 DINO+Kalman 到 EMA+线性运动
+
+早期 Argus 曾尝试 DINOv3 视觉特征 + Kalman 滤波的 MOT 方案。在批量评测后发现：Kalman 和两阶段关联（先外观后运动）引入了大量复杂度，但 HOTA 指标仅比简单方案高不到 1 分，且在低帧率（2fps）下频繁失配。
+
+最终方案极度简化：**EMA 外观向量 + 线性运动预测**，删除 Kalman、CMC、两阶段匹配，HOTA 50.90 比复杂方案持平甚至更稳。DINOv3 权重（~88MB）和 YOLO 检测器也从仓库删除（转为按需外部提供），代码体积大幅缩减。
+
+> **教训：在 2fps 的稀疏帧率下，复杂运动模型的边际收益趋近于零。** 简单方案更容易调参、更稳定、更省算力。这与"看"层一以贯之的信念一致：不追求理论最优，追求在实时约束下的稳定最优。
+
 ## 本章小结
 
 "看"这一层的每一个设计，都在回答同一个问题：**在无限的视频流和有限的成本之间，怎么只留下值得看的？**
@@ -197,7 +221,9 @@ Argus 的解法是 **TTL + 帧数双门**（[agent/multimodal/watcher_engine.py:
 - 场景感知让去重阈值和攒帧节奏随内容呼吸；
 - 主 Agent 不被动收帧；一次性当前/历史/mixed 视觉问题由 `query_multimodal` 交给 QueryWorker；
 - `get_current_frame` 只负责显式原始最新帧，持续逐段研究则交给 watcher；
-- watcher 用 TTL + 帧数双门，随场景节奏逐段深研整条流。
+- watcher 用 TTL + 帧数双门，随场景节奏逐段深研整条流；
+- 窗口文字桥优先用 AX/UIA 抓结构化正文，回退到 OCR reflow 增强管线；
+- 追踪从重型 DINO+Kalman 简化到 EMA+线性运动，在 2fps 约束下找到性价比甜区。
 
 下一章，我们给这个会看的 Agent 装上耳朵。
 

@@ -24,7 +24,7 @@ import pytest
 @pytest.fixture(autouse=True)
 def _isolate_channel_aliases(tmp_path_factory):
     """Point the alias overlay at a nonexistent path by default so a real
-    ~/.hermes/channel_aliases.json never leaks into directory tests. Tests
+    ~/.argus/channel_aliases.json never leaks into directory tests. Tests
     that exercise aliases patch CHANNEL_ALIASES_PATH themselves inside the
     test body, which takes precedence over this outer patch."""
     missing = tmp_path_factory.mktemp("aliases") / "none.json"
@@ -220,7 +220,7 @@ class TestBuildFromSessions:
             },
         })
 
-        with patch.dict(os.environ, {"HERMES_HOME": str(tmp_path)}):
+        with patch.dict(os.environ, {"ARGUS_HOME": str(tmp_path)}):
             entries = _build_from_sessions("telegram")
 
         assert len(entries) == 2
@@ -229,7 +229,7 @@ class TestBuildFromSessions:
         assert "Bob" in names
 
     def test_missing_sessions_file(self, tmp_path):
-        with patch.dict(os.environ, {"HERMES_HOME": str(tmp_path)}):
+        with patch.dict(os.environ, {"ARGUS_HOME": str(tmp_path)}):
             entries = _build_from_sessions("telegram")
         assert entries == []
 
@@ -239,7 +239,7 @@ class TestBuildFromSessions:
             "s2": {"origin": {"platform": "telegram", "chat_id": "123", "chat_name": "X"}},
         })
 
-        with patch.dict(os.environ, {"HERMES_HOME": str(tmp_path)}):
+        with patch.dict(os.environ, {"ARGUS_HOME": str(tmp_path)}):
             entries = _build_from_sessions("telegram")
 
         assert len(entries) == 1
@@ -270,7 +270,7 @@ class TestBuildFromSessions:
             },
         })
 
-        with patch.dict(os.environ, {"HERMES_HOME": str(tmp_path)}):
+        with patch.dict(os.environ, {"ARGUS_HOME": str(tmp_path)}):
             entries = _build_from_sessions("telegram")
 
         ids = {entry["id"] for entry in entries}
@@ -387,7 +387,7 @@ class TestBuildSlack:
             "s1": {"origin": {"platform": "slack", "chat_id": "D123", "chat_name": "Alice"}},
         }))
 
-        with patch.dict(os.environ, {"HERMES_HOME": str(tmp_path)}):
+        with patch.dict(os.environ, {"ARGUS_HOME": str(tmp_path)}):
             entries = asyncio.run(_build_slack(_make_slack_adapter({})))
 
         assert len(entries) == 1
@@ -404,7 +404,7 @@ class TestBuildSlack:
                 "response_metadata": {},
             },
         ])
-        with patch.dict(os.environ, {"HERMES_HOME": str(tmp_path)}):
+        with patch.dict(os.environ, {"ARGUS_HOME": str(tmp_path)}):
             entries = asyncio.run(_build_slack(_make_slack_adapter({"T1": client})))
 
         ids = {e["id"] for e in entries}
@@ -427,7 +427,7 @@ class TestBuildSlack:
                 "response_metadata": {"next_cursor": ""},
             },
         ])
-        with patch.dict(os.environ, {"HERMES_HOME": str(tmp_path)}):
+        with patch.dict(os.environ, {"ARGUS_HOME": str(tmp_path)}):
             entries = asyncio.run(_build_slack(_make_slack_adapter({"T1": client})))
 
         assert {e["id"] for e in entries} == {"C001", "C002"}
@@ -443,7 +443,7 @@ class TestBuildSlack:
                 "response_metadata": {},
             },
         ])
-        with patch.dict(os.environ, {"HERMES_HOME": str(tmp_path)}):
+        with patch.dict(os.environ, {"ARGUS_HOME": str(tmp_path)}):
             entries = asyncio.run(_build_slack(_make_slack_adapter({"BAD": bad, "GOOD": good})))
 
         assert {e["id"] for e in entries} == {"C999"}
@@ -462,7 +462,7 @@ class TestBuildSlack:
                 "response_metadata": {},
             },
         ])
-        with patch.dict(os.environ, {"HERMES_HOME": str(tmp_path)}):
+        with patch.dict(os.environ, {"ARGUS_HOME": str(tmp_path)}):
             entries = asyncio.run(_build_slack(_make_slack_adapter({"T1": client})))
 
         ids = {e["id"] for e in entries}
@@ -482,7 +482,7 @@ class TestBuildSlack:
                 "response_metadata": {},
             },
         ])
-        with patch.dict(os.environ, {"HERMES_HOME": str(tmp_path)}):
+        with patch.dict(os.environ, {"ARGUS_HOME": str(tmp_path)}):
             entries = asyncio.run(_build_slack(_make_slack_adapter({"T1": client})))
 
         assert {e["id"] for e in entries} == {"C001"}
@@ -491,7 +491,7 @@ class TestBuildSlack:
         client = _make_slack_client([
             {"ok": False, "error": "missing_scope"},
         ])
-        with patch.dict(os.environ, {"HERMES_HOME": str(tmp_path)}):
+        with patch.dict(os.environ, {"ARGUS_HOME": str(tmp_path)}):
             entries = asyncio.run(_build_slack(_make_slack_adapter({"T1": client})))
 
         assert entries == []

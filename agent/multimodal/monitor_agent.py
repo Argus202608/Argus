@@ -137,7 +137,7 @@ def monitor_dir() -> Path:
         from hermes_constants import get_hermes_home
         base = get_hermes_home()
     except Exception:  # pragma: no cover - hermes_constants always present in app
-        base = Path(os.path.expanduser("~")) / ".hermes"
+        base = Path(os.path.expanduser("~")) / ".argus"
     d = Path(base) / "monitor"
     d.mkdir(parents=True, exist_ok=True)
     return d

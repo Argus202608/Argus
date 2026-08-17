@@ -887,10 +887,10 @@ class MemoryBackend:
                 "elapsed_sec": float(_partial.get("elapsed_sec") or 0.0),
             }
         findings = (getattr(res, "findings", "") or "").strip()
-        _sentinel = "(记忆里未找到相关线索)"
+        from agent.multimodal._sentinels import RECALL_NO_CLUES
         return {
             "ok": True,
-            "found": bool(findings) and _sentinel not in findings,
+            "found": bool(findings) and RECALL_NO_CLUES not in findings,
             "findings": findings,
             "clues": list(getattr(res, "clues", []) or []),
             "frame_ids": list(getattr(res, "frame_ids", []) or []),

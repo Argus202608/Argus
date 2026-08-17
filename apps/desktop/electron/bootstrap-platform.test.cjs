@@ -71,16 +71,16 @@ test('detectRemoteDisplay flags RDP sessions', () => {
   assert.match(String(detectRemoteDisplay({ env: { SESSIONNAME: 'RDP-Tcp#7' }, platform: 'win32' })), /^rdp/)
 })
 
-test('detectRemoteDisplay honors the HERMES_DESKTOP_DISABLE_GPU override both ways', () => {
+test('detectRemoteDisplay honors the ARGUS_DESKTOP_DISABLE_GPU override both ways', () => {
   // Force-on even on a local display.
   assert.match(
-    String(detectRemoteDisplay({ env: { HERMES_DESKTOP_DISABLE_GPU: '1', DISPLAY: ':0' }, platform: 'linux' })),
+    String(detectRemoteDisplay({ env: { ARGUS_DESKTOP_DISABLE_GPU: '1', DISPLAY: ':0' }, platform: 'linux' })),
     /override/
   )
   // Force-off even over SSH (escape hatch when a remote display has working accel).
   assert.equal(
     detectRemoteDisplay({
-      env: { HERMES_DESKTOP_DISABLE_GPU: 'false', SSH_CONNECTION: '1.2.3.4 5 6.7.8.9 22' },
+      env: { ARGUS_DESKTOP_DISABLE_GPU: 'false', SSH_CONNECTION: '1.2.3.4 5 6.7.8.9 22' },
       platform: 'linux'
     }),
     null

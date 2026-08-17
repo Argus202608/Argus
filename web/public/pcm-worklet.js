@@ -33,6 +33,23 @@ class PcmDownsampleProcessor extends AudioWorkletProcessor {
     // carry the sub-sample phase between frames — otherwise the downsampled
     // waveform gets tiny clicks at frame boundaries).
     this._phase = 0.0;
+    // A manual turn may stop between 200ms batches. The renderer queues this
+    // flush and stops the physical track in the same task, then waits for our
+    // acknowledgement before ``asr_stop(disposition=finish)``.
+    this.port.onmessage = (event) => {
+      if (event && event.data && event.data.type === "flush") {
+        this._flushBatch();
+        this.port.postMessage({ type: "flushed" });
+      }
+    };
+  }
+
+  _flushBatch() {
+    if (this._batchFill <= 0) return;
+    const out = new Int16Array(this._batchFill);
+    out.set(this._batch.subarray(0, this._batchFill));
+    this._batchFill = 0;
+    this.port.postMessage(out.buffer, [out.buffer]);
   }
 
   process(inputs) {

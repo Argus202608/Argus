@@ -64,7 +64,7 @@ def test_installed_wheel_renders_i18n_strings(tmp_path):
     )
 
     # 3. Run from a directory that is NOT the source tree, with a clean env
-    #    (no PYTHONPATH leaking the repo, no HERMES_BUNDLED_LOCALES).
+    #    (no PYTHONPATH leaking the repo, no ARGUS_BUNDLED_LOCALES).
     probe = (
         "from agent import i18n;"
         "import sys;"
@@ -74,7 +74,7 @@ def test_installed_wheel_renders_i18n_strings(tmp_path):
         "sys.exit(0 if (r != 'gateway.reset.header_default' "
         "and s != 'gateway.status.header') else 1)"
     )
-    env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "HERMES_BUNDLED_LOCALES")}
+    env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "ARGUS_BUNDLED_LOCALES")}
     env["PATH"] = f"{venv_dir / 'bin'}:{env['PATH']}"
     env["VIRTUAL_ENV"] = str(venv_dir)
     run = subprocess.run(

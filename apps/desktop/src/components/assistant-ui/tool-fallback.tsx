@@ -43,7 +43,6 @@ import {
   isPreviewableTarget,
   looksRedundant,
   type SearchResultRow,
-  selectMessageHasVisibleText,
   selectMessageRunning,
   stripInlineDiffChrome,
   toolCopyPayload,
@@ -269,7 +268,6 @@ export const ToolArgsPanel: FC<{ fields: ToolArgField[] }> = ({ fields }) => {
 
   return (
     <div className="max-w-full text-xs leading-relaxed">
-      <p className={TOOL_SECTION_LABEL_CLASS}>{copy.argsLabel}</p>
       <div className="grid gap-px">
         {fields.map((field, index) =>
           // `elided` is the "+N more" tail, not a field: it has no key, so it
@@ -672,50 +670,27 @@ function ToolEntry({ argsFields, part }: ToolEntryProps) {
 }
 
 /**
- * Flat, Cursor-style tool list. assistant-ui hands us a *range* of
- * consecutive tool-call parts, but how that range is sliced is unstable: a
- * live stream interleaves narration/reasoning between calls (many tiny
- * ranges), while the settled message reconstructs every tool_call back-to-back
- * (one big range). Rendering a "Tool actions · N steps" group off that range
- * therefore reshuffled the whole turn the instant it settled.
+ * ★ Always renders nothing. Tool rows live in exactly ONE place now: the process
+ * block below the answer card (`ToolHistoryPanel` in thread.tsx), which is
+ * mounted for the whole turn — streaming and settled alike.
  *
- * So we never group: each tool is a standalone row, and the wrapper just lays
- * its children out on the tight `--tool-row-gap` rhythm. One range or ten,
- * fragmented or consecutive, the result is pixel-identical — a tight, stable
- * stack. The wrapper stays a single `<div>` of stable identity so children
- * never remount as the range grows mid-stream. `ToolEmbedContext` is false so
- * every row owns its own chrome (timer / preview / copy / inline approval).
+ * This slot used to render the live pile INSIDE the content card and hand off to
+ * the process block once answer text landed. That handoff was the bug: the rows
+ * did not move, they unmounted here and mounted there, so every row replayed its
+ * enter animation and the turn's layout jumped the instant prose arrived. Worse,
+ * `MessagePrimitive.Parts` is not rendered at all before the first part settles,
+ * so during the think-and-call phase there was no renderer for tool rows
+ * anywhere and the entire process was invisible.
+ *
+ * Keeping the component (rather than dropping the `ToolGroup` slot) is
+ * deliberate: assistant-ui would otherwise fall back to its default group
+ * wrapper and render the parts inline again, reintroducing the duplication.
+ *
+ * NB: the approval bar (`PendingToolApproval`) only exists inside a rendered
+ * pending row, so the process block must stay open while a tool is pending —
+ * see the `open` note in `ToolHistoryPanel`.
  */
-export const ToolGroupSlot: FC<PropsWithChildren<{ endIndex: number; startIndex: number }>> = ({
-  children,
-  startIndex
-}) => {
-  const messageId = useAuiState(s => s.message.id)
-  const messageRunning = useAuiState(selectMessageRunning)
-  // Once the assistant's answer text has landed, the tool pile disappears from
-  // the message content card entirely — it re-appears as a collapsed
-  // disclosure BELOW the card via `ToolHistoryPanel` (rendered in thread.tsx).
-  const hasVisibleText = useAuiState(selectMessageHasVisibleText)
-  const enterRef = useEnterAnimation(messageRunning, `tool-group:${messageId}:${startIndex}`)
-
-  // After answer text lands: tools are moved out of the card → render nothing.
-  if (hasVisibleText) {
-    return null
-  }
-
-  return (
-    <ToolEmbedContext.Provider value={false}>
-      <div
-        className="grid min-w-0 max-w-full gap-(--tool-row-gap) overflow-hidden"
-        data-slot="tool-block"
-        data-tool-group=""
-        ref={enterRef}
-      >
-        {children}
-      </div>
-    </ToolEmbedContext.Provider>
-  )
-}
+export const ToolGroupSlot: FC<PropsWithChildren<{ endIndex: number; startIndex: number }>> = () => null
 
 /**
  * Per-tool fallback. Now strictly returns a single ToolEntry — the

@@ -31,7 +31,7 @@ hermes acp / hermes-acp / python -m acp_adapter
   -> acp.run_agent(agent, use_unstable_protocol=True)
 ```
 
-Zed ACP Registry 路径通过 `uvx --from 'hermes-agent[acp]==<version>' hermes-acp` 启动同一适配器，指向 `hermes-agent` PyPI 发布包。
+Zed ACP Registry 路径通过 `uvx --from 'mm-argus[acp]==<version>' hermes-acp` 启动同一适配器，指向 `hermes-agent` PyPI 发布包。
 
 stdout 保留用于 ACP JSON-RPC 传输。人类可读的日志输出至 stderr。
 

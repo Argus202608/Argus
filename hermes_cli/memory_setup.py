@@ -19,7 +19,7 @@ _CANCELLED = -1
 
 
 # ---------------------------------------------------------------------------
-# Curses-based interactive picker (same pattern as hermes tools)
+# Curses-based interactive picker (same pattern as argus tools)
 # ---------------------------------------------------------------------------
 
 def _curses_select(
@@ -133,7 +133,7 @@ def _install_dependencies(provider_name: str) -> None:
         if not pip_cmd:
             print(f"  ⚠ uv not found — cannot install dependencies")
             print(f"  Install uv: curl -LsSf https://astral.sh/uv/install.sh | sh")
-            print(f"  Then re-run: hermes memory setup")
+            print(f"  Then re-run: argus memory setup")
             return
         print(f"  ⚠ uv not found. Falling back to standard pip...")
         install_cmd = [sys.executable, "-m", "pip", "install", "--quiet"] + missing
@@ -226,7 +226,7 @@ def cmd_setup_provider(provider_name: str) -> None:
 
     if not match:
         print(f"\n  Memory provider '{provider_name}' not found.")
-        print("  Run 'hermes memory setup' to see available providers.\n")
+        print("  Run 'argus memory setup' to see available providers.\n")
         return
 
     name, _, provider = match
@@ -259,7 +259,7 @@ def cmd_setup(args) -> None:
 
     if not providers:
         print("\n  No memory provider plugins detected.")
-        print("  Install a plugin to ~/.hermes/plugins/ and try again.\n")
+        print("  Install a plugin to ~/.argus/plugins/ and try again.\n")
         return
 
     # Build picker items
@@ -488,7 +488,7 @@ def cmd_status(args) -> None:
                         print(line)
         else:
             print(f"\n  Plugin:    NOT installed ✗")
-            print(f"  Install the '{provider_name}' memory plugin to ~/.hermes/plugins/")
+            print(f"  Install the '{provider_name}' memory plugin to ~/.argus/plugins/")
 
     if providers:
         print(f"\n  Installed plugins:")

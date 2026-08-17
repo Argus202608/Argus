@@ -113,8 +113,8 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
     return `${p.source}:${id || '_'}`
   }
   const subAgentPrefix = (source: string, label?: string): string => {
-    if (source === 'monitor') return `👁 ${label || '监控'}`
-    return '🔬 深度分析'
+    if (source === 'monitor') return `👁 ${label || 'Monitor'}`
+    return '🔬 Deep Analysis'
   }
 
   let pendingThinkingStatus = ''

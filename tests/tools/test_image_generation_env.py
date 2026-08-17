@@ -70,7 +70,7 @@ def test_no_backend_message_mentions_managed_gateway_when_enabled(monkeypatch):
     msg = image_generation_tool._build_no_backend_setup_message()
 
     assert "managed FAL gateway" in msg
-    assert "Nous account" in msg or "hermes setup" in msg
+    assert "Nous account" in msg or "argus setup" in msg
 
 
 def test_image_generate_tool_returns_actionable_error_when_no_backend(monkeypatch):

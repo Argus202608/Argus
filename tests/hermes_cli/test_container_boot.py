@@ -415,7 +415,7 @@ def test_missing_profiles_root_still_registers_default_slot(
     reconciliation should still register a gateway-default slot for
     the root profile and return without raising. Previously this
     returned an empty list; the default slot is now always present
-    so `hermes gateway start` (no -p) has somewhere to land."""
+    so `argus gateway start` (no -p) has somewhere to land."""
     scandir = tmp_path / "run-service"; scandir.mkdir()
     actions = reconcile_profile_gateways(
         hermes_home=tmp_path, scandir=scandir, dry_run=False,
@@ -540,7 +540,7 @@ def test_default_slot_always_registered_on_empty_home(tmp_path: Path) -> None:
 def test_default_slot_run_script_omits_profile_flag(tmp_path: Path) -> None:
     """The default slot's run script must NOT pass `-p default` —
     that would resolve to $HERMES_HOME/profiles/default/ instead of
-    the root profile. It must call `hermes gateway run` directly."""
+    the root profile. It must call `argus gateway run` directly."""
     scandir = tmp_path / "run-service"; scandir.mkdir()
 
     reconcile_profile_gateways(
@@ -548,7 +548,7 @@ def test_default_slot_run_script_omits_profile_flag(tmp_path: Path) -> None:
     )
 
     run = (scandir / "gateway-default" / "run").read_text()
-    assert "hermes gateway run" in run
+    assert "argus gateway run" in run
     assert "-p default" not in run
     assert "-p 'default'" not in run
 
@@ -636,7 +636,7 @@ def test_legacy_gateway_run_env_no_supervise_does_not_seed_s6_state(
 ) -> None:
     """Env opt-out matches the CLI `--no-supervise` flag."""
     scandir = tmp_path / "run-service"; scandir.mkdir()
-    monkeypatch.setenv("HERMES_GATEWAY_NO_SUPERVISE", "1")
+    monkeypatch.setenv("ARGUS_GATEWAY_NO_SUPERVISE", "1")
 
     actions = reconcile_profile_gateways(
         hermes_home=tmp_path,
@@ -852,7 +852,7 @@ def test_main_skips_reconcile_in_dashboard_container(
 
     scandir = tmp_path / "run-service"; scandir.mkdir()
     _make_profile(tmp_path, "worker", state="running")
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ARGUS_HOME", str(tmp_path))
     monkeypatch.setenv("S6_PROFILE_GATEWAY_SCANDIR", str(scandir))
     monkeypatch.setattr(
         container_boot,
@@ -887,7 +887,7 @@ def test_main_skips_reconcile_in_dashboard_container_s6v3(
 
     scandir = tmp_path / "run-service"; scandir.mkdir()
     _make_profile(tmp_path, "worker", state="running")
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ARGUS_HOME", str(tmp_path))
     monkeypatch.setenv("S6_PROFILE_GATEWAY_SCANDIR", str(scandir))
     monkeypatch.setattr(
         container_boot,
@@ -926,7 +926,7 @@ def test_main_reconciles_in_gateway_container(
 
     scandir = tmp_path / "run-service"; scandir.mkdir()
     _make_profile(tmp_path, "worker", state="running")
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ARGUS_HOME", str(tmp_path))
     monkeypatch.setenv("S6_PROFILE_GATEWAY_SCANDIR", str(scandir))
     monkeypatch.setattr(
         container_boot,
@@ -946,16 +946,16 @@ def test_main_ignores_removed_skip_reconcile_env_var(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The legacy HERMES_SKIP_PROFILE_RECONCILE flag is gone: setting it on a
+    """The legacy ARGUS_SKIP_PROFILE_RECONCILE flag is gone: setting it on a
     gateway container must NOT suppress reconciliation. Role is decided by
     PID 1 argv alone, so a stale flag in someone's manifest is inert."""
     from hermes_cli import container_boot
 
     scandir = tmp_path / "run-service"; scandir.mkdir()
     _make_profile(tmp_path, "worker", state="running")
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ARGUS_HOME", str(tmp_path))
     monkeypatch.setenv("S6_PROFILE_GATEWAY_SCANDIR", str(scandir))
-    monkeypatch.setenv("HERMES_SKIP_PROFILE_RECONCILE", "1")
+    monkeypatch.setenv("ARGUS_SKIP_PROFILE_RECONCILE", "1")
     monkeypatch.setattr(
         container_boot,
         "_read_container_argv",

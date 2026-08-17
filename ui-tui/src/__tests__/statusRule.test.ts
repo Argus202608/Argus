@@ -61,6 +61,9 @@ describe('statusBarSegments', () => {
   it('shows every segment on a wide terminal', () => {
     const s = statusBarSegments(120)
 
+    // No `cost` key: the dev-credits readout has no breakpoint of its own —
+    // it is evaluated last against the leftover tail budget in AppChrome
+    // (`showDevCredits`), so it never appears in StatusBarSegments.
     expect(s).toEqual({
       compactCtx: false,
       bar: true,
@@ -68,8 +71,7 @@ describe('statusBarSegments', () => {
       compressions: true,
       voice: true,
       bg: true,
-      subagents: true,
-      cost: true
+      subagents: true
     })
   })
 
@@ -79,19 +81,17 @@ describe('statusBarSegments', () => {
     expect(s.compactCtx).toBe(true)
     expect(s.bar).toBe(false)
     expect(s.duration).toBe(false)
-    expect(s.cost).toBe(false)
   })
 
   it('sheds tail segments in priority order as the terminal narrows', () => {
-    // cost is the first to go, the context bar the last of the tail.
+    // subagents is the first to go, the context bar the last of the tail.
     const order: (keyof ReturnType<typeof statusBarSegments>)[] = [
       'bar',
       'duration',
       'compressions',
       'voice',
       'bg',
-      'subagents',
-      'cost'
+      'subagents'
     ]
 
     let prevCount = Infinity

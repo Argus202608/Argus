@@ -1,4 +1,4 @@
-"""ACP tool-call helpers for mapping hermes tools to ACP ToolKind and building content."""
+"""ACP tool-call helpers for mapping argus tools to ACP ToolKind and building content."""
 
 from __future__ import annotations
 

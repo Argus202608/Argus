@@ -211,10 +211,10 @@ def test_make_agent_honors_tui_launch_env_flags():
         patch.dict(
             os.environ,
             {
-                "HERMES_TUI_MAX_TURNS": "7",
-                "HERMES_TUI_CHECKPOINTS": "1",
-                "HERMES_TUI_PASS_SESSION_ID": "1",
-                "HERMES_IGNORE_RULES": "1",
+                "ARGUS_TUI_MAX_TURNS": "7",
+                "ARGUS_TUI_CHECKPOINTS": "1",
+                "ARGUS_TUI_PASS_SESSION_ID": "1",
+                "ARGUS_IGNORE_RULES": "1",
             },
         ),
         patch("tui_gateway.server._load_cfg", return_value=fake_cfg),
@@ -265,7 +265,7 @@ def test_probe_config_health_flags_null_personalities_with_active_personality():
 
 
 def test_make_agent_tolerates_null_config_sections():
-    """Bare `agent:` / `display:` keys in ~/.hermes/config.yaml parse as
+    """Bare `agent:` / `display:` keys in ~/.argus/config.yaml parse as
     None. cfg.get("agent", {}) returns None (default only fires on missing
     key), so downstream .get() chains must be guarded. Reported via Twitter
     against the new TUI."""
@@ -381,10 +381,10 @@ def test_make_agent_honors_per_session_model_override():
         patch("run_agent.AIAgent") as mock_agent,
     ):
         for var in (
-            "HERMES_MODEL",
-            "HERMES_INFERENCE_MODEL",
-            "HERMES_TUI_PROVIDER",
-            "HERMES_INFERENCE_PROVIDER",
+            "ARGUS_MODEL",
+            "ARGUS_INFERENCE_MODEL",
+            "ARGUS_TUI_PROVIDER",
+            "ARGUS_INFERENCE_PROVIDER",
         ):
             os.environ.pop(var, None)
 
@@ -432,10 +432,10 @@ def test_apply_model_switch_does_not_leak_process_env():
             self.provider = kw["new_provider"]
 
     env_keys = (
-        "HERMES_MODEL",
-        "HERMES_INFERENCE_MODEL",
-        "HERMES_TUI_PROVIDER",
-        "HERMES_INFERENCE_PROVIDER",
+        "ARGUS_MODEL",
+        "ARGUS_INFERENCE_MODEL",
+        "ARGUS_TUI_PROVIDER",
+        "ARGUS_INFERENCE_PROVIDER",
     )
 
     sess_b = {"agent": _FakeAgent(), "session_key": "k-B", "model_override": None}

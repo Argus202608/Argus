@@ -30,11 +30,11 @@ def make_spawn_fn(home: str):
         log_path = os.path.join(home, f"worker_{task.id}.log")
         env = {
             **os.environ,
-            "HERMES_HOME": home,
+            "ARGUS_HOME": home,
             "HOME": home,
             "PYTHONPATH": WT,
-            "HERMES_KANBAN_TASK": task.id,
-            "HERMES_KANBAN_WORKSPACE": workspace,
+            "ARGUS_KANBAN_TASK": task.id,
+            "ARGUS_KANBAN_WORKSPACE": workspace,
             "PATH": f"{os.path.dirname(PY)}:{os.environ.get('PATH','')}",
         }
         log_f = open(log_path, "ab")
@@ -53,7 +53,7 @@ def make_spawn_fn(home: str):
 
 def main():
     home = tempfile.mkdtemp(prefix="hermes_e2e_")
-    os.environ["HERMES_HOME"] = home
+    os.environ["ARGUS_HOME"] = home
     os.environ["HOME"] = home
     sys.path.insert(0, WT)
     from hermes_cli import kanban_db as kb

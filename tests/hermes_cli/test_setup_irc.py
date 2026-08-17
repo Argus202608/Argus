@@ -1,4 +1,4 @@
-"""Tests for IRC gateway configuration via `hermes setup gateway` UI.
+"""Tests for IRC gateway configuration via `argus setup gateway` UI.
 
 Covers the full plugin-platform discovery → status → configure flow so that
 a fresh Hermes install (no state, no env vars) can set up IRC through the
@@ -169,14 +169,14 @@ class TestIRCInteractiveSetup:
 
 
 class TestIRCGatewaySetupFreshInstall:
-    """Simulate the full `hermes setup gateway` experience with IRC present."""
+    """Simulate the full `argus setup gateway` experience with IRC present."""
 
     def test_setup_gateway_shows_irc_in_platform_menu(self, monkeypatch, capsys, tmp_path):
         """The gateway setup menu lists IRC among the available platforms."""
         import hermes_cli.gateway as gateway_mod
         from hermes_cli import setup as setup_mod
 
-        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        monkeypatch.setenv("ARGUS_HOME", str(tmp_path))
         _register_irc_platform()
         try:
             for key in ("IRC_SERVER", "IRC_CHANNEL", "IRC_NICKNAME"):
@@ -222,7 +222,7 @@ class TestIRCGatewaySetupFreshInstall:
         import hermes_cli.gateway as gateway_mod
         from hermes_cli import setup as setup_mod
 
-        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        monkeypatch.setenv("ARGUS_HOME", str(tmp_path))
         _register_irc_platform()
         try:
             monkeypatch.setenv("IRC_SERVER", "irc.libera.chat")

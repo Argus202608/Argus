@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { translateNow, useI18n } from '@/i18n'
 
 import {
   buildQueryWorkerTimelines,
@@ -135,7 +136,7 @@ function evidenceLabel(segment: QueryWorkerEvidenceSegment): string {
   const end = formatTraceTime(segment.tEnd)
   const range = start && end && start !== end ? `${start}–${end}` : start
 
-  return `${segment.kind || '记忆'}${range ? ` ${range}` : ''}`
+  return `${segment.kind || translateNow('multimodal.trajectory.evidenceMemoryKind')}${range ? ` ${range}` : ''}`
 }
 
 function ToolCallCard({ call, state }: { call: QueryWorkerToolCall; state?: 'called' | 'planned' }) {
@@ -163,6 +164,7 @@ function ToolCallCard({ call, state }: { call: QueryWorkerToolCall; state?: 'cal
 }
 
 function ToolResultCard({ result }: { result: QueryWorkerToolResult }) {
+  const { t } = useI18n()
   const sourceUrls = result.sourceUrls.map(safeSourceUrl).filter(Boolean)
 
   return (
@@ -170,12 +172,12 @@ function ToolResultCard({ result }: { result: QueryWorkerToolResult }) {
       <summary className="cursor-pointer list-none break-words text-(--ui-text-secondary)">
         <span className="font-medium text-emerald-400">{result.name}</span>
         {result.args && <span className="text-(--ui-text-tertiary)"> · {argsPreview(result.args)}</span>}
-        {result.obsLength !== undefined && <span className="text-(--ui-text-tertiary)"> · {result.obsLength} 字</span>}
+        {result.obsLength !== undefined && <span className="text-(--ui-text-tertiary)"> · {t.multimodal.trajectory.chars(result.obsLength)}</span>}
         {result.elapsedSec !== undefined && (
           <span className="text-(--ui-text-tertiary)"> · {result.elapsedSec.toFixed(2)}s</span>
         )}
         {result.frameIds.length > 0 && (
-          <span className="text-(--ui-text-tertiary)"> · {result.frameIds.length} 帧</span>
+          <span className="text-(--ui-text-tertiary)"> · {t.multimodal.trajectory.frames(result.frameIds.length)}</span>
         )}
         {result.cacheHit && <span className="text-amber-300"> · cache hit</span>}
       </summary>
@@ -202,7 +204,7 @@ function ToolResultCard({ result }: { result: QueryWorkerToolResult }) {
               key={`${evidenceLabel(segment)}-${index}`}
               title={segment.preview || evidenceLabel(segment)}
             >
-              {evidenceLabel(segment)}{segment.frameIds.length ? ` · ${segment.frameIds.length}帧` : ''}
+              {evidenceLabel(segment)}{segment.frameIds.length ? ` · ${t.multimodal.trajectory.framesCompact(segment.frameIds.length)}` : ''}
             </span>
           ))}
         </div>
@@ -227,18 +229,20 @@ function ToolResultCard({ result }: { result: QueryWorkerToolResult }) {
 }
 
 function OcrEvidence({ step }: { step: QueryWorkerTimelineStep }) {
+  const { t } = useI18n()
+  const tj = t.multimodal.trajectory
   const emptyMessage = step.ocrState === 'skipped'
-    ? `已跳过 OCR${step.ocrReason ? `：${step.ocrReason}` : ''}。`
+    ? (step.ocrReason ? tj.ocrSkippedReason(step.ocrReason) : tj.ocrSkipped)
     : step.ocrState === 'timeout'
-      ? 'OCR 超时；QueryWorker 已继续使用原始画面。'
+      ? tj.ocrTimeout
       : step.ocrState === 'error'
-        ? `OCR 提取失败${step.ocrReason ? `：${step.ocrReason}` : ''}；QueryWorker 已继续使用原始画面。`
-        : 'OCR 已完成，但没有识别到可用文字。'
+        ? (step.ocrReason ? tj.ocrErrorReason(step.ocrReason) : tj.ocrError)
+        : tj.ocrNoText
 
   return (
     <details className="mt-1.5 rounded border border-sky-300/20 bg-sky-300/5 px-2 py-1.5" open>
       <summary className="cursor-pointer list-none font-medium text-sky-300">
-        OCR 辅助文字 · {step.ocrRecordCount ?? step.ocrRecords.length}
+        {tj.ocrHelperTitle(step.ocrRecordCount ?? step.ocrRecords.length)}
         {step.ocrElapsedSec !== undefined && ` · ${step.ocrElapsedSec.toFixed(2)}s`}
       </summary>
       {step.ocrRecords.length > 0 ? (
@@ -249,13 +253,13 @@ function OcrEvidence({ step }: { step: QueryWorkerTimelineStep }) {
               key={`${record.frameTs ?? 'unknown'}-${record.evidenceSource || 'ocr'}-${index}`}
             >
               <div className="flex flex-wrap gap-1 text-[0.5625rem] text-sky-200">
-                <span>{record.frameTs !== undefined ? formatTraceTime(record.frameTs) : '时间未知'}</span>
+                <span>{record.frameTs !== undefined ? formatTraceTime(record.frameTs) : tj.ocrTimeUnknown}</span>
                 {record.sourceType && <span>· {record.sourceType}</span>}
                 {record.evidenceSource && <span>· {record.evidenceSource}</span>}
                 {(record.app || record.windowTitle) && <span>· {[record.app, record.windowTitle].filter(Boolean).join(' / ')}</span>}
               </div>
               <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded bg-black/20 p-1.5 text-[0.625rem]">
-                {record.rawText || '（该帧未识别到文字）'}
+                {record.rawText || tj.ocrNoTextInFrame}
               </pre>
             </div>
           ))}
@@ -270,20 +274,22 @@ function OcrEvidence({ step }: { step: QueryWorkerTimelineStep }) {
 }
 
 function FrameGrid({ askTime, frames }: { askTime: boolean; frames: MmTrajectoryFrame[] }) {
+  const { t } = useI18n()
+  const tj = t.multimodal.trajectory
   const [selected, setSelected] = useState<{ label: string; src: string } | null>(null)
 
   return (
     <>
       <div className="mt-1.5">
         <div className="mb-1 text-cyan-300">
-          {askTime ? '提问时刻冻结输入帧（QueryWorker 实际看到）' : 'Recall 证据帧'}
+          {askTime ? tj.frozenInputTitle : tj.recallEvidenceTitle}
         </div>
         <div className={askTime ? 'grid grid-cols-1 gap-1 sm:grid-cols-3' : 'grid grid-cols-2 gap-1 sm:grid-cols-4'}>
           {frames.slice(0, 12).map((frame, index) => {
             const b64 = frame.thumb_b64 || frame.jpeg_b64 || ''
             const usable = Boolean(b64) && !b64.startsWith('<omitted')
             const src = usable ? `data:image/jpeg;base64,${b64}` : ''
-            const label = frame.frame_id || `${askTime ? '输入帧' : 'frame'} ${index + 1}`
+            const label = frame.frame_id || (askTime ? tj.inputFrame(index + 1) : `frame ${index + 1}`)
 
             return (
               <figure
@@ -294,7 +300,7 @@ function FrameGrid({ askTime, frames }: { askTime: boolean; frames: MmTrajectory
                   <button
                     className="block w-full cursor-zoom-in"
                     onClick={() => setSelected({ label, src })}
-                    title="点击放大查看"
+                    title={tj.clickToEnlarge}
                     type="button"
                   >
                     <img alt={label} className="h-24 w-full object-contain" src={src} />
@@ -319,7 +325,7 @@ function FrameGrid({ askTime, frames }: { askTime: boolean; frames: MmTrajectory
       <Dialog onOpenChange={open => !open && setSelected(null)} open={Boolean(selected)}>
         <DialogContent className="max-w-[92vw] sm:max-w-[92vw]">
           <DialogHeader>
-            <DialogTitle>{selected?.label || '证据帧'}</DialogTitle>
+            <DialogTitle>{selected?.label || tj.evidenceFrame}</DialogTitle>
           </DialogHeader>
           {selected && <img alt={selected.label} className="max-h-[78vh] w-full object-contain" src={selected.src} />}
         </DialogContent>
@@ -329,6 +335,8 @@ function FrameGrid({ askTime, frames }: { askTime: boolean; frames: MmTrajectory
 }
 
 function TimelineStep({ step }: { step: QueryWorkerTimelineStep }) {
+  const { t } = useI18n()
+  const tj = t.multimodal.trajectory
   const askTimeFrames = step.phase.startsWith('started:')
 
   return (
@@ -360,7 +368,7 @@ function TimelineStep({ step }: { step: QueryWorkerTimelineStep }) {
       )}
       {step.toolCalls.length > 0 && (
         <div className="mt-1.5 space-y-1">
-          <div className="text-cyan-300">{step.callState === 'called' ? '实际调用' : '计划调用'}</div>
+          <div className="text-cyan-300">{step.callState === 'called' ? tj.actualCall : tj.plannedCall}</div>
           {step.toolCalls.map((call, index) => (
             <ToolCallCard call={call} key={`${call.name}-${index}`} state={step.callState} />
           ))}
@@ -368,7 +376,7 @@ function TimelineStep({ step }: { step: QueryWorkerTimelineStep }) {
       )}
       {step.toolResults.length > 0 && (
         <div className="mt-1.5 space-y-1">
-          <div className="text-emerald-400">工具返回</div>
+          <div className="text-emerald-400">{tj.toolReturned}</div>
           {step.toolResults.map((result, index) => (
             <ToolResultCard key={`${result.name}-${index}`} result={result} />
           ))}
@@ -377,7 +385,7 @@ function TimelineStep({ step }: { step: QueryWorkerTimelineStep }) {
       {step.frames.length > 0 && <FrameGrid askTime={askTimeFrames} frames={step.frames} />}
       <details className="mt-1.5 rounded border border-(--ui-stroke-secondary) bg-black/10 px-2 py-1">
         <summary className="cursor-pointer list-none text-[0.625rem] text-(--ui-text-tertiary)">
-          原始事件 · {step.raw.event} / {step.raw.phase}
+          {tj.rawEvent(step.raw.event, step.raw.phase)}
         </summary>
         <pre className="mt-1 max-h-72 overflow-auto whitespace-pre-wrap break-words text-[0.625rem]">
           {debugJson(publicQueryWorkerTracePayload(step.raw.payload))}
@@ -388,6 +396,9 @@ function TimelineStep({ step }: { step: QueryWorkerTimelineStep }) {
 }
 
 function Timeline({ timeline }: { timeline: QueryWorkerTimeline }) {
+  const { t } = useI18n()
+  const tj = t.multimodal.trajectory
+
   return (
     <section
       className="rounded border border-cyan-400/30 bg-cyan-400/5 p-2 text-[0.6875rem]"
@@ -397,14 +408,14 @@ function Timeline({ timeline }: { timeline: QueryWorkerTimeline }) {
         <span className={timeline.status === 'running' ? 'animate-spin' : ''}>
           {timeline.status === 'running' ? '◌' : timeline.status === 'complete' ? '✓' : '!'}
         </span>
-        <span className="font-semibold">QueryWorker 完整轨迹</span>
+        <span className="font-semibold">{tj.title}</span>
         <span className="font-mono text-[0.625rem]">#{timeline.taskId}</span>
         <span className="ml-auto text-[0.625rem] text-(--ui-text-tertiary)">
-          {timeline.status === 'running' ? '工作中' : timeline.status === 'complete' ? '已完成' : timeline.status}
+          {timeline.status === 'running' ? tj.working : timeline.status === 'complete' ? tj.completed : timeline.status}
         </span>
       </div>
       <div className="mt-1 text-[0.625rem] text-(--ui-text-tertiary)">
-        结构化执行记录：冻结画面、OCR、计划/实际工具、证据与结果；不包含模型隐藏思维链。
+        {tj.subtitle}
       </div>
       <div className="mt-2 space-y-1.5 border-l border-cyan-400/25 pl-2">
         {timeline.steps.map(step => (

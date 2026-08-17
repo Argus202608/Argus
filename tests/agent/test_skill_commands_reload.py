@@ -44,7 +44,7 @@ def hermes_home(monkeypatch):
     constants in place so the isolation is local to this fixture's scope.
     """
     td = tempfile.mkdtemp(prefix="hermes-reload-skills-")
-    monkeypatch.setenv("HERMES_HOME", td)
+    monkeypatch.setenv("ARGUS_HOME", td)
     home = Path(td)
     (home / "skills").mkdir(parents=True, exist_ok=True)
 
@@ -53,7 +53,7 @@ def hermes_home(monkeypatch):
     import tools.skills_tool as _st
     import agent.skill_commands as _sc
 
-    monkeypatch.setattr(_st, "HERMES_HOME", home, raising=False)
+    monkeypatch.setattr(_st, "ARGUS_HOME", home, raising=False)
     monkeypatch.setattr(_st, "SKILLS_DIR", home / "skills", raising=False)
     # Reset the in-process slash-command cache so each test starts from zero.
     monkeypatch.setattr(_sc, "_skill_commands", {}, raising=False)

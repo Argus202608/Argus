@@ -2,14 +2,17 @@ import { useStore } from '@nanostores/react'
 import { useState } from 'react'
 
 import { Button } from '@/components/ui/button'
+import { useI18n } from '@/i18n'
 import { Loader2, MessageSquareText, Mic, Volume2 } from '@/lib/icons'
 import { pushMmToast } from '@/store/multimodal-deep'
 import {
   $mmAsrBuffer,
   $mmAsrPartial,
+  $mmMicError,
   $mmMicState,
   $mmTtsEnabled,
   $mmVoiceDialogEnabled,
+  finishMicTurn,
   startMic,
   stopMic,
   toggleMultimodalTts,
@@ -22,19 +25,23 @@ import {
  * 自动开麦 → micState='recording', 所以对话模式下同样会显示识别预览。
  */
 export function MultimodalAsrBar() {
+  const { t } = useI18n()
+  const c = t.multimodal.composer
   const micState = useStore($mmMicState)
   const partial = useStore($mmAsrPartial)
   const buffer = useStore($mmAsrBuffer)
   const recording = micState === 'recording'
+  const finalizing = micState === 'finalizing'
   const buffered = buffer.join(' ').trim()
 
-  if (!recording && !partial && !buffered) {
+  if (!recording && !finalizing && !partial && !buffered) {
     return null
   }
 
   return (
     <div className="flex items-center gap-2 px-1 pb-1 text-xs text-muted-foreground">
       {recording && <span className="size-1.5 shrink-0 animate-pulse rounded-full bg-red-500" />}
+      {finalizing && <Loader2 className="size-3 shrink-0 animate-spin" />}
       <span className="truncate">
         {buffered ? (
           <>
@@ -42,7 +49,7 @@ export function MultimodalAsrBar() {
             {partial ? <span className="ml-1">{partial}</span> : null}
           </>
         ) : (
-          partial || '正在聆听…'
+          partial || (finalizing ? c.finalizingRecognition : c.listening)
         )}
       </span>
     </div>
@@ -59,36 +66,69 @@ export function MultimodalAsrBar() {
  * These are additive; add-context / model / send stay ChatBar-native.
  */
 export function MultimodalComposerControls() {
+  const { t } = useI18n()
+  const c = t.multimodal.composer
   const ttsEnabled = useStore($mmTtsEnabled)
   const voiceDialogEnabled = useStore($mmVoiceDialogEnabled)
   const micState = useStore($mmMicState)
+  const asyncMicError = useStore($mmMicError)
   const [micError, setMicError] = useState('')
 
   const recording = micState === 'recording'
   const connecting = micState === 'connecting'
+  const finalizing = micState === 'finalizing'
+
+  const micLabel = recording
+    ? c.micLabelEndSend
+    : finalizing
+      ? c.micLabelFinalizing
+      : connecting
+        ? c.micLabelConnecting
+        : c.micLabelStart
 
   const toggleMic = () => {
     // ★ 对话模式开时麦由对话托管, 单独点无效 → 拦截 + 小提示 (按钮态不变)。
     if (voiceDialogEnabled) {
-      pushMmToast({ level: 'info', text: '对话模式下麦克风已由对话接管, 请先关闭对话模式再单独控制' })
+      pushMmToast({ level: 'info', text: c.dialogToastMicBlocked })
 
       return
     }
 
-    if (recording || connecting) {
+    if (finalizing) {
+      return
+    }
+
+    if (connecting) {
       void stopMic()
 
       return
     }
 
+    if (recording) {
+      setMicError('')
+      void finishMicTurn().catch(error => {
+        const message = error instanceof Error ? error.message : String(error)
+
+        setMicError(message)
+        pushMmToast({ level: 'error', text: c.asrFailed(message) })
+      })
+
+      return
+    }
+
     setMicError('')
-    void startMic().catch(e => setMicError(e instanceof Error ? e.message : String(e)))
+    void startMic().catch(error => {
+      const message = error instanceof Error ? error.message : String(error)
+
+      setMicError(message)
+      pushMmToast({ level: 'error', text: c.micError(message) })
+    })
   }
 
   // ★ 对话模式开时喇叭由对话托管 (后端强制 TTS), 单独点无效 → 拦截 + 小提示。
   const toggleTtsGuarded = () => {
     if (voiceDialogEnabled) {
-      pushMmToast({ level: 'info', text: '对话模式下语音播报已自动生效, 请先关闭对话模式再单独控制' })
+      pushMmToast({ level: 'info', text: c.dialogToastTtsBlocked })
 
       return
     }
@@ -96,36 +136,41 @@ export function MultimodalComposerControls() {
     toggleMultimodalTts()
   }
 
+  const toggleVoiceDialogGuarded = () => {
+    if (!toggleMultimodalVoiceDialog()) {
+      pushMmToast({ level: 'error', text: c.dialogNeedFinishMic })
+    }
+  }
+
   return (
     <div className="flex items-center gap-1">
       <Button
+        aria-label={micLabel}
         aria-pressed={recording}
         className="size-7 shrink-0"
+        disabled={finalizing}
         // ★ 对话模式开时麦由对话托管, 单独点无效 —— 拦截+提示在 toggleMic 里 (按钮态不变)。
         onClick={toggleMic}
         size="icon-sm"
         title={
-          micError
-            ? `麦克风启动失败：${micError}`
-            : recording
-              ? '点击结束录音'
-              : connecting
-                ? '麦克风已就绪，等待语音…点击取消'
-                : '语音（流式识别）'
+          micError || asyncMicError
+            ? c.micFailedTitle(micError || asyncMicError)
+            : `${micLabel}${finalizing ? '…' : ''}`
         }
         type="button"
         variant={recording ? 'destructive' : 'outline'}
       >
-        {connecting ? <Loader2 className="size-4 animate-spin" /> : <Mic className="size-4" />}
+        {connecting || finalizing ? <Loader2 className="size-4 animate-spin" /> : <Mic className="size-4" />}
       </Button>
       <Button
+        aria-label={ttsEnabled ? c.ttsAriaOn : c.ttsAriaOff}
         aria-pressed={ttsEnabled}
         className="size-7 shrink-0"
         // ★ 对话模式开时喇叭由对话托管 (后端强制 TTS), 单独点无效 —— 拦截+提示在
         //   toggleTtsGuarded 里 (按钮态不变)。
         onClick={toggleTtsGuarded}
         size="icon-sm"
-        title={ttsEnabled ? '语音播报：开（自动朗读分析）— 点击关闭' : '语音播报：关 — 点击开启'}
+        title={ttsEnabled ? c.ttsOnTitle : c.ttsOffTitle}
         type="button"
         variant={ttsEnabled ? 'default' : 'outline'}
       >
@@ -142,12 +187,12 @@ export function MultimodalComposerControls() {
             ? 'size-7 shrink-0 bg-amber-400 text-neutral-900 hover:bg-amber-500'
             : 'size-7 shrink-0 hover:text-amber-300'
         }
-        onClick={toggleMultimodalVoiceDialog}
+        onClick={toggleVoiceDialogGuarded}
         size="icon-sm"
         title={
           voiceDialogEnabled
-            ? '对话模式：开（语音自然交互，智能分诊+秒回+可打断）— 点击关闭'
-            : '对话模式：关 — 点击进入语音对话交互（自动开麦）'
+            ? c.dialogOnTitle
+            : c.dialogOffTitle
         }
         type="button"
         variant={voiceDialogEnabled ? 'default' : 'outline'}

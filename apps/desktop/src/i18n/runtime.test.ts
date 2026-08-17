@@ -28,22 +28,17 @@ describe('desktop i18n runtime translator', () => {
     expect(translateNow('notifications.updateReadyMessage', 2)).toBe('2 new changes available.')
   })
 
-  it('translates migrated overlap keys for newly supported locales', () => {
-    setRuntimeI18nLocale('ja')
+  it('translates migrated overlap keys', () => {
+    setRuntimeI18nLocale('zh')
     expect(translateNow('common.save')).toBe('保存')
-
-    setRuntimeI18nLocale('zh-hant')
-    expect(translateNow('cron.promptPlaceholder')).toBe('代理每次執行時應做什麼？')
+    expect(translateNow('cron.promptPlaceholder')).toBe('总结我未读的 Slack 话题，并把前 5 条邮件发给我…')
   })
 
-  it('translates settings copy for newly supported locales', () => {
-    setRuntimeI18nLocale('ja')
-    expect(translateNow('settings.appearance.title')).toBe('外観')
-    expect(translateNow('settings.nav.providers')).toBe('プロバイダー')
-
-    setRuntimeI18nLocale('zh-hant')
-    expect(translateNow('settings.appearance.title')).toBe('外觀')
-    expect(translateNow('settings.nav.providerApiKeys')).toBe('API 金鑰')
+  it('translates settings copy', () => {
+    setRuntimeI18nLocale('zh')
+    expect(translateNow('settings.appearance.title')).toBe('外观')
+    expect(translateNow('settings.nav.providers')).toBe('提供方')
+    expect(translateNow('settings.nav.providerApiKeys')).toBe('API 密钥')
   })
 
   it('keeps translated settings field copy addressable from schema keys', () => {
@@ -54,12 +49,12 @@ describe('desktop i18n runtime translator', () => {
   })
 
   it('falls back to English when the active locale cannot resolve a key', () => {
-    const boot = TRANSLATIONS.ja.boot as { ready?: string }
+    const boot = TRANSLATIONS.zh.boot as { ready?: string }
     const originalReady = boot.ready
 
     try {
       boot.ready = undefined
-      setRuntimeI18nLocale('ja')
+      setRuntimeI18nLocale('zh')
 
       expect(translateNow('boot.ready')).toBe('Argus Desktop is ready')
     } finally {

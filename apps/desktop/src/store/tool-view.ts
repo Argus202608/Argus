@@ -6,8 +6,8 @@ export type ToolViewMode = 'product' | 'technical'
 
 type ToolDisclosureStates = Record<string, boolean>
 
-const TOOL_VIEW_TECHNICAL_STORAGE_KEY = 'hermes.desktop.toolView.technical'
-const TOOL_DISCLOSURE_STORAGE_KEY = 'hermes.desktop.toolDisclosure.v1'
+const TOOL_VIEW_TECHNICAL_STORAGE_KEY = 'argus.desktop.toolView.technical'
+const TOOL_DISCLOSURE_STORAGE_KEY = 'argus.desktop.toolDisclosure.v1'
 const MAX_DISCLOSURE_STATES = 240
 
 export const $toolViewMode = atom<ToolViewMode>(
@@ -88,4 +88,23 @@ export function setToolDisclosureOpen(id: string, open: boolean) {
   }
 
   $toolDisclosureStates.set({ ...current, [id]: open })
+}
+
+export function setToolDisclosureOpenBatch(ids: string[], open: boolean) {
+  const current = $toolDisclosureStates.get()
+  let changed = false
+  const next = { ...current }
+
+  for (const id of ids) {
+    if (!id || next[id] === open) {
+      continue
+    }
+
+    next[id] = open
+    changed = true
+  }
+
+  if (changed) {
+    $toolDisclosureStates.set(next)
+  }
 }

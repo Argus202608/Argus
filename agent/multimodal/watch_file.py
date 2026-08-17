@@ -77,7 +77,7 @@ def watch_dir() -> Path:
         from hermes_constants import get_hermes_home
         base = get_hermes_home()
     except Exception:  # pragma: no cover - hermes_constants present in the app
-        base = Path(os.path.expanduser("~")) / ".hermes"
+        base = Path(os.path.expanduser("~")) / ".argus"
     d = Path(base) / "analyse"
     d.mkdir(parents=True, exist_ok=True)
     return d

@@ -17,6 +17,7 @@
  */
 
 import { useState } from "react";
+import { useI18n } from "@/i18n";
 
 export type MmCapStatus = "ok" | "missing" | "broken" | "unknown";
 
@@ -34,7 +35,7 @@ export interface MmReadinessReport {
   capabilities: MmCapability[];
 }
 
-const DISMISS_KEY = "hermes-mm-readiness-dismissed-session";
+const DISMISS_KEY = "argus-mm-readiness-dismissed-session";
 
 /**
  * Pure decision logic (view-independent, unit-tested): given a readiness report,
@@ -60,6 +61,7 @@ function wasDismissed(): boolean {
 }
 
 export function MmReadinessBanner({ report }: { report: MmReadinessReport | null }) {
+  const { t } = useI18n();
   const [dismissed, setDismissed] = useState<boolean>(wasDismissed);
   const [expanded, setExpanded] = useState(false);
 
@@ -90,20 +92,20 @@ export function MmReadinessBanner({ report }: { report: MmReadinessReport | null
         <span aria-hidden className="mt-0.5 select-none text-amber-400">⚠</span>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <span className="font-medium">多模态未完全就绪</span>
+            <span className="font-medium">{t.multimodal.readiness.notReady}</span>
             <span className="rounded-full bg-amber-400/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-500 ring-1 ring-amber-400/40">
               {missingRequired.length}
             </span>
             <button
               onClick={() => setExpanded((v) => !v)}
               className="ml-auto rounded px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-muted/50 hover:text-foreground"
-              aria-label={expanded ? "收起" : "展开"}
+              aria-label={expanded ? t.common.collapse : t.common.expand}
             >
-              {expanded ? "收起" : "详情"}
+              {expanded ? t.common.collapse : t.common.expand}
             </button>
             <button
               onClick={dismiss}
-              aria-label="关闭"
+              aria-label={t.common.close}
               className="rounded p-0.5 text-muted-foreground hover:bg-muted/50 hover:text-foreground"
             >
               ×
@@ -112,11 +114,11 @@ export function MmReadinessBanner({ report }: { report: MmReadinessReport | null
           {expanded && (
             <div className="mt-2 space-y-2 border-t border-border/60 pt-2 text-[12px] leading-relaxed">
               <p className="text-muted-foreground">
-                以下能力缺失,相关功能将无法工作。运行{" "}
+                {t.multimodal.readiness.capsMissing}{" "}
                 <code className="rounded bg-muted/60 px-1 py-0.5 font-mono text-foreground">
-                  hermes setup multimodal
+                  argus setup multimodal
                 </code>{" "}
-                补齐。
+                {t.multimodal.readiness.toFix}
               </p>
               <ul className="space-y-1.5">
                 {missingRequired.map((c) => (

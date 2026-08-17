@@ -74,7 +74,7 @@ def test_detect_service_manager_s6_keys_off_s6_running_not_is_container(
 ) -> None:
     """Regression: Fly runs s6-overlay as PID 1 in a Firecracker microVM, which
     is not a Docker/Podman container. Gating s6 detection on is_container() made
-    the dispatch path inert on Fly, so `hermes gateway restart` spawned a
+    the dispatch path inert on Fly, so `argus gateway restart` spawned a
     foreground gateway that fought the supervised one. Detection must key off
     s6 being PID 1 (`_s6_running`) alone."""
     monkeypatch.setattr(
@@ -559,7 +559,7 @@ def test_s6_register_creates_service_dir_and_triggers_scan(
     # it, the supervised `gateway run` would re-enter the s6 redirect
     # in `_gateway_command_inner` and recurse. See the matching guard
     # in hermes_cli/gateway.py::_gateway_command_inner.
-    assert "export HERMES_S6_SUPERVISED_CHILD=1" in run_text
+    assert "export ARGUS_S6_SUPERVISED_CHILD=1" in run_text
 
     log_run = svc_dir / "log" / "run"
     assert log_run.is_file()
@@ -643,7 +643,7 @@ def test_render_run_script_uses_replace_to_take_over_stale_holder() -> None:
     """NS-505: the supervised gateway must exec ``gateway run --replace``.
 
     Without ``--replace`` a gateway started OUTSIDE s6 (a stray shell
-    ``hermes gateway run``, an agent action, the Open WebUI helper) holds
+    ``argus gateway run``, an agent action, the Open WebUI helper) holds
     the per-HERMES_HOME PID lock; the supervised slot then execs a bare
     ``gateway run``, hits the "Another gateway instance is already
     running" guard, exits non-zero, and s6 restarts it — a restart loop
@@ -654,8 +654,8 @@ def test_render_run_script_uses_replace_to_take_over_stale_holder() -> None:
     render paths.
     """
     default_text = S6ServiceManager._render_run_script("default", {})
-    # Root profile: bare `hermes gateway run --replace` (no -p flag).
-    assert "hermes gateway run --replace" in default_text
+    # Root profile: bare `argus gateway run --replace` (no -p flag).
+    assert "argus gateway run --replace" in default_text
     assert "hermes -p default" not in default_text
     # Every exec line that launches the gateway must carry --replace, so
     # neither the non-root nor the privilege-drop branch can spin.
@@ -806,7 +806,7 @@ def test_s6_lifecycle_persists_named_profile_desired_state(
     profile_dir = hermes_home / "profiles" / "coder"
     profile_dir.mkdir(parents=True)
     (s6_scandir / "gateway-coder").mkdir()
-    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+    monkeypatch.setenv("ARGUS_HOME", str(hermes_home))
 
     mgr = S6ServiceManager(scandir=s6_scandir)
     mgr.start("gateway-coder")
@@ -828,7 +828,7 @@ def test_s6_lifecycle_persists_default_profile_desired_state(
     hermes_home = tmp_path / "hermes-home"
     hermes_home.mkdir()
     (s6_scandir / "gateway-default").mkdir()
-    monkeypatch.setenv("HERMES_HOME", str(hermes_home / "profiles" / "coder"))
+    monkeypatch.setenv("ARGUS_HOME", str(hermes_home / "profiles" / "coder"))
 
     mgr = S6ServiceManager(scandir=s6_scandir)
     mgr.start("gateway-default")
@@ -957,7 +957,7 @@ def test_s6_is_running_parses_svstat(
 # ---------------------------------------------------------------------------
 # S6 stop writes a planned-stop marker (issue #42675)
 #
-# `hermes gateway stop` inside a container dispatches through
+# `argus gateway stop` inside a container dispatches through
 # S6ServiceManager.stop() -> `s6-svc -d`, which SIGTERMs the gateway.
 # That SIGTERM is indistinguishable from the one s6/Docker sends on a
 # container restart unless we mark the intentional stop first. Without

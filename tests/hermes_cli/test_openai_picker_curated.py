@@ -10,7 +10,7 @@ Bug 1 — OpenAI picker dumped the raw ``/v1/models`` catalog
     verbatim so discovery still works.
 
 Bug 2 — OpenRouter appeared authenticated whenever OPENAI_API_KEY was set
-    OpenRouter's HermesOverlay carried ``extra_env_vars=("OPENAI_API_KEY",)``.
+    OpenRouter's ArgusOverlay carried ``extra_env_vars=("OPENAI_API_KEY",)``.
     ``list_authenticated_providers`` reads ``extra_env_vars`` to decide whether
     a provider has credentials, so any OpenAI user saw a phantom OpenRouter
     row. The overlay entry is removed; runtime credential resolution still
@@ -24,13 +24,13 @@ from unittest.mock import patch
 import pytest
 
 from hermes_cli import models as M
-from hermes_cli.providers import HERMES_OVERLAYS
+from hermes_cli.providers import ARGUS_OVERLAYS
 
 
 # --- Bug 2: overlay no longer lists OPENAI_API_KEY --------------------------
 
 def test_openrouter_overlay_does_not_list_openai_api_key():
-    overlay = HERMES_OVERLAYS["openrouter"]
+    overlay = ARGUS_OVERLAYS["openrouter"]
     assert "OPENAI_API_KEY" not in overlay.extra_env_vars
 
 

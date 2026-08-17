@@ -196,7 +196,7 @@ def _flatten_content(content: Any) -> str:
 # ══════════════════════════════════════════════════════════════════
 
 # system prompt 来自 .plans/voice_agent_proactive_upgrade.md §5 (决策层 + 主线程分诊)
-_DECIDE_SPEAK_SYSTEM = """You are the decision layer of the Wall-E voice assistant in a face-to-face voice conversation. A new item has arrived. Decide only whether it should be spoken now; a downstream speech editor will handle wording.
+_DECIDE_SPEAK_SYSTEM = """You are the decision layer of the Argus voice assistant in a face-to-face voice conversation. A new item has arrived. Decide only whether it should be spoken now; a downstream speech editor will handle wording.
 
 Input fields:
 - recent_dialogue: recent exchanges between the main agent and the user.
@@ -228,7 +228,7 @@ Output JSON only, with no explanation outside the object:
 #   声学 VAD 只按静音时长切句, 用户"帮我查一下……(停顿思考)……北京明天"中间的停顿
 #   会被误判成说完。这个判定补上语义层: 明显没说完 (半截话/悬而未决) → done=false,
 #   上游可再等一会儿把后续合并进来, 减少误切。
-_DECIDE_ROUTE_SYSTEM = """You are the front line of the Wall-E voice assistant and must respond immediately to the user's utterance.
+_DECIDE_ROUTE_SYSTEM = """You are the front line of the Argus voice assistant and must respond immediately to the user's utterance.
 
 Speaking style:
 Sound like a familiar friend: natural, warm, empathetic, concise, and conversational. Avoid stiff customer-service acknowledgements. Write the answer in the same language as the user's utterance unless the user requests another language.
@@ -250,7 +250,7 @@ Choose route=main_agent when:
 
 The answer field must never be empty:
 - For route=self, provide the direct first-person spoken answer. Keep it natural and warm, with no preamble, and within 60 CJK characters or equivalently brief in other languages.
-- For route=main_agent, provide a natural handoff sentence saying that Wall-E is handling the request in the background and the result will follow shortly. Keep it warm and within 40 CJK characters or equivalently brief. This is only an immediate bridge; the main agent's result will be spoken later.
+- For route=main_agent, provide a natural handoff sentence saying that Argus is handling the request in the background and the result will follow shortly. Keep it warm and within 40 CJK characters or equivalently brief. This is only an immediate bridge; the main agent's result will be spoken later.
 
 Output JSON only:
 {"route": "self", "answer": "non-empty spoken answer"}
@@ -514,7 +514,7 @@ async def decide_route(
 # 无效打断 + 无效 LLM 调用。目标延迟 <500ms, 输出 <30 tokens.
 _INTENT_ADDRESSED_SYSTEM = """Determine whether the transcribed utterance is addressed to the voice assistant. The utterance may be in any language.
 
-Return addressed=true when it is a command, request, question, greeting, explicit address to Wall-E or an assistant, or a clear continuation of the user's conversation with the assistant.
+Return addressed=true when it is a command, request, question, greeting, explicit address to Argus or an assistant, or a clear continuation of the user's conversation with the assistant.
 
 Return addressed=false when it is self-talk, an exclamation not directed at the assistant, television or video dialogue, background conversation between other people, meaningless filler or isolated sounds, or speech clearly addressed to someone else.
 

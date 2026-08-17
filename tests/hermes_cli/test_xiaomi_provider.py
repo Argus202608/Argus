@@ -298,9 +298,9 @@ class TestXiaomiProvidersModule:
     """Test Xiaomi in the unified providers module."""
 
     def test_overlay_exists(self):
-        from hermes_cli.providers import HERMES_OVERLAYS
-        assert "xiaomi" in HERMES_OVERLAYS
-        overlay = HERMES_OVERLAYS["xiaomi"]
+        from hermes_cli.providers import ARGUS_OVERLAYS
+        assert "xiaomi" in ARGUS_OVERLAYS
+        overlay = ARGUS_OVERLAYS["xiaomi"]
         assert overlay.transport == "openai_chat"
         assert overlay.base_url_env_var == "XIAOMI_BASE_URL"
         assert not overlay.is_aggregator
@@ -352,7 +352,7 @@ class TestXiaomiAuxiliary:
 
 
 class TestXiaomiDoctor:
-    """Verify hermes doctor recognizes Xiaomi env vars."""
+    """Verify argus doctor recognizes Xiaomi env vars."""
 
     def test_provider_env_hints(self):
         from hermes_cli.doctor import _PROVIDER_ENV_HINTS
@@ -368,7 +368,7 @@ class TestXiaomiAgentInit:
         importlib.import_module("run_agent")
 
     def test_api_mode_is_chat_completions(self):
-        from hermes_cli.providers import HERMES_OVERLAYS, TRANSPORT_TO_API_MODE
-        overlay = HERMES_OVERLAYS["xiaomi"]
+        from hermes_cli.providers import ARGUS_OVERLAYS, TRANSPORT_TO_API_MODE
+        overlay = ARGUS_OVERLAYS["xiaomi"]
         api_mode = TRANSPORT_TO_API_MODE[overlay.transport]
         assert api_mode == "chat_completions"

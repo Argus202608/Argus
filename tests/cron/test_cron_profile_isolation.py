@@ -4,7 +4,7 @@ Design intent (Teknium, June 2026): a profile's cron jobs both LIVE in that
 profile's HERMES_HOME and EXECUTE under it.
 
 - Storage: a job created under profile ``coder`` writes to
-  ``~/.hermes/profiles/coder/cron/jobs.json`` — NOT the shared default root.
+  ``~/.argus/profiles/coder/cron/jobs.json`` — NOT the shared default root.
 - Execution: the profile-scoped gateway's in-process ticker resolves the
   active HERMES_HOME (profile home) at call time, so jobs run with that
   profile's ``.env`` / ``config.yaml`` / scripts / skills.
@@ -28,7 +28,7 @@ def _set_profile_env(monkeypatch, root: Path, profile_home: Path) -> None:
     monkeypatch.setattr(
         hermes_constants, "_get_platform_default_hermes_home", lambda: root
     )
-    monkeypatch.setenv("HERMES_HOME", str(profile_home))
+    monkeypatch.setenv("ARGUS_HOME", str(profile_home))
 
 
 def test_cron_storage_anchors_at_profile_home(tmp_path, monkeypatch):
@@ -46,13 +46,13 @@ def test_cron_storage_anchors_at_profile_home(tmp_path, monkeypatch):
     assert hermes_constants.get_hermes_home().resolve() == profile_home.resolve()
     assert hermes_constants.get_default_hermes_root().resolve() == root.resolve()
 
-    # cron/jobs.py computes HERMES_DIR from get_hermes_home() at import, so a
+    # cron/jobs.py computes ARGUS_DIR from get_hermes_home() at import, so a
     # fresh import under this env anchors the store at <profile>/cron.
     import cron.jobs as jobs
 
     importlib.reload(jobs)
     try:
-        assert jobs.HERMES_DIR.resolve() == profile_home.resolve()
+        assert jobs.ARGUS_DIR.resolve() == profile_home.resolve()
         assert (
             jobs.JOBS_FILE.resolve()
             == (profile_home / "cron" / "jobs.json").resolve()
@@ -113,13 +113,13 @@ def test_cron_storage_unaffected_when_no_profile(tmp_path, monkeypatch):
     monkeypatch.setattr(
         hermes_constants, "_get_platform_default_hermes_home", lambda: root
     )
-    monkeypatch.setenv("HERMES_HOME", str(root))
+    monkeypatch.setenv("ARGUS_HOME", str(root))
 
     import cron.jobs as jobs
 
     importlib.reload(jobs)
     try:
-        assert jobs.HERMES_DIR.resolve() == root.resolve()
+        assert jobs.ARGUS_DIR.resolve() == root.resolve()
         assert jobs.JOBS_FILE.resolve() == (root / "cron" / "jobs.json").resolve()
     finally:
         monkeypatch.undo()

@@ -1,11 +1,15 @@
 // Desktop i18n type contract.
 //
 // `Translations` is the single source of truth for every translatable string
-// surface. Fully translated locale files may satisfy this interface directly;
-// partial locales should use `defineLocale()` so missing desktop-only strings
-// fall back to English while new keys remain type-checked.
+// surface. Both shipped locales satisfy this interface directly (`: Translations`),
+// so tsc catches a key added to en but forgotten in zh. The old defineLocale()
+// deep-merge helper was removed with the partial ja / zh-hant catalogs — it let
+// missing keys fall back to English silently, which is exactly the failure mode
+// we no longer want.
 
-export type Locale = 'en' | 'zh' | 'zh-hant' | 'ja'
+// English and Simplified Chinese only — see catalog.ts for why ja / zh-hant
+// were removed rather than kept partially translated.
+export type Locale = 'en' | 'zh'
 
 export type ToolTitleKey =
   | 'browser_click'
@@ -1638,7 +1642,21 @@ export interface Translations {
       loadingResponse: string
       resumeWhenBackgroundDone: (count: number) => string
       thinking: string
+      // Shown while the model is still writing a tool call's arguments, before
+      // the authoritative tool row exists (gateway `tool.generating`).
+      preparingTool: (name: string) => string
       toolHistory: (count: number) => string
+      // Tool-batch summary verbs (see summarizeToolSteps).
+      stepRead: (n: number) => string
+      stepEdit: (n: number) => string
+      stepRun: (n: number) => string
+      stepSearch: (n: number) => string
+      stepBrowse: (n: number) => string
+      stepLook: (n: number) => string
+      stepCall: (n: number) => string
+      stepFailed: (n: number) => string
+      expandAllTools: string
+      collapseAllTools: string
       today: (time: string) => string
       yesterday: (time: string) => string
       copy: string
@@ -1806,6 +1824,10 @@ export interface Translations {
     cwdStagedTitle: string
     cwdStagedMessage: string
     modelSwitchFailed: string
+    modelSwitchConfirmAction: string
+    modelSwitchConfirmMessage: string
+    modelSwitchConfirmTitle: string
+    modelSwitchWarningTitle: string
     sessionExported: string
     sessionExportFailed: string
     imageSaved: string
@@ -1840,6 +1862,7 @@ export interface Translations {
     boundaryDesc: string
     reloadWindow: string
     openLogs: string
+    turnFailed: string
   }
 
   ui: {
@@ -1857,6 +1880,357 @@ export interface Translations {
       title: string
       description: string
       toggle: string
+    }
+  }
+
+  // ── Multimodal ──
+  multimodal: {
+    heading: string
+    welcome: {
+      title: string
+      body: string
+    }
+    composer: {
+      listening: string
+      micError: (err: string) => string
+      micStopRecording: string
+      micReady: string
+      micLabel: string
+      ttsOnTitle: string
+      ttsOffTitle: string
+      dialogOnTitle: string
+      dialogOffTitle: string
+      dialogToastMicBlocked: string
+      dialogToastTtsBlocked: string
+      finalizingRecognition: string
+      micLabelEndSend: string
+      micLabelFinalizing: string
+      micLabelConnecting: string
+      micLabelStart: string
+      asrFailed: (msg: string) => string
+      micFailedTitle: (msg: string) => string
+      ttsAriaOn: string
+      ttsAriaOff: string
+      dialogNeedFinishMic: string
+      askPlaceholder: string
+      askWithVideoPlaceholder: string
+      stopGenerating: string
+      stopShort: string
+      send: string
+      recordingHint: string
+      thinkingProcess: string
+      needConfirm: string
+      answerPlaceholder: string
+      answerPlaceholderEnter: string
+      submit: string
+      readAloud: string
+      noMoreInfo: string
+      voiceInput: string
+      monitorTag: string
+      selectedLabel: (answer: string) => string
+      emptyChoice: string
+    }
+    video: {
+      camera: string
+      screenShare: string
+      notStarted: string
+      startingRecord: string
+      connectionPaused: string
+      recLabel: (source: string, frames: number) => string
+      recDropped: (n: number) => string
+      previewLabel: (source: string, phase: string) => string
+      startCamera: string
+      startScreen: string
+      stopCapture: (source: string) => string
+      cameraError: (msg: string) => string
+      screenError: (msg: string) => string
+      resuming: string
+      captureDiag: (detail: string) => string
+    }
+    screenPicker: {
+      title: string
+      loading: string
+      noSources: string
+      macPermission: string
+      tabScreen: string
+      tabWindow: string
+      shareAudioEnabled: string
+      shareAudioDisabled: string
+      shareAudioLabel: string
+      shareAudioNote: string
+      cancel: string
+      startShare: string
+      noPreview: string
+      noTitle: string
+    }
+    observations: {
+      injectedFrames: string
+      injectedFramesHint: string
+      videoObs: string
+      audioObs: string
+      audioObsHint: string
+      searchFacts: string
+      empty: string
+      noneYet: string
+      clickToEnlarge: string
+    }
+    deepAnalysis: {
+      title: string
+      titleWithLabel: (label: string) => string
+      completed: string
+      inProgress: string
+      stopping: string
+      interrupted: string
+      analyzing: string
+      finalReport: string
+      segment: (n: number) => string
+      thinking: string
+      thinkingInProgress: string
+      toolCall: (name: string, arg?: string) => string
+      toolFailed: (name: string, error: string) => string
+      searchLookup: (query: string) => string
+      memoryLookup: (query: string) => string
+      lookupLine: (kind: string, query: string, result?: string) => string
+      noInterpretation: string
+      waitingFrames: string
+      waitingFramesSeg: (seg: number) => string
+      accumulatingSeg: (seg: number, have: number, need: number) => string
+      accumulating: (have: number, need: number) => string
+      ttlRemaining: (sec: number) => string
+      completedHint: string
+      previewWaiting: (seg?: number) => string
+      previewAccumulating: (have: number, need: number, seg?: number) => string
+      previewSaw: (desc: string) => string
+      previewSegAnalyzing: (seg: number) => string
+    }
+    monitor: {
+      title: string
+      count: (n: number) => string
+      once: string
+      continuous: string
+      completed: string
+      inProgress: string
+      interrupted: string
+      completedOnceHint: string
+      fallbackLabel: string
+      alertsTitle: string
+      expandMore: (n: number) => string
+      collapse: string
+    }
+    watcher: {
+      title: string
+      count: (n: number) => string
+      fallbackLabel: string
+      completedHint: string
+      stoppingHint: string
+      inProgress: string
+      completed: string
+      stopping: string
+      interrupted: string
+      switchLabel: (label: string, state: string) => string
+    }
+    trajectory: {
+      title: string
+      working: string
+      completed: string
+      waitingFirstEntry: string
+      subtitle: string
+      actualCall: string
+      plannedCall: string
+      toolReturned: string
+      chars: (n: number) => string
+      frames: (n: number) => string
+      frozenInputTitle: string
+      recallEvidenceTitle: string
+      inputFrame: (n: number) => string
+      clickToEnlarge: string
+      evidenceFrame: string
+      ocrHelperTitle: (n: number) => string
+      ocrSkipped: string
+      ocrSkippedReason: (reason: string) => string
+      ocrTimeout: string
+      ocrError: string
+      ocrErrorReason: (reason: string) => string
+      ocrNoText: string
+      ocrTimeUnknown: string
+      ocrNoTextInFrame: string
+      evidenceLabel: (kind: string, range?: string) => string
+      evidenceMemoryKind: string
+      framesCompact: (n: number) => string
+      rawEvent: (event: string, phase: string) => string
+    }
+    ocr: {
+      helperAvailable: (n: number) => string
+      helperSkipped: string
+      helperTimeout: string
+      helperError: string
+      helperEmpty: string
+    }
+    recall: {
+      traceTitle: (steps: number, tools: number) => string
+      traceSubtitle: string
+      decisionSummary: (summary: string) => string
+      started: (n: number) => string
+      analysisStart: string
+      recallCall: (toolName: string, round?: number) => string
+      startRecall: string
+      roundRead: (round: number | string, count: number) => string
+      roundDistill: (round: number | string) => string
+      roundDecisionContinue: (round: number) => string
+      roundDecisionStop: (round: number) => string
+      roundSkipDuplicate: (round: number | string) => string
+      visualReview: (kept: number, total: number) => string
+      quickTool: (toolName: string, len: number) => string
+      failed: (stage?: string) => string
+      completeFound: (n: number) => string
+      completeNotFound: string
+      returnFound: (n: number, frames: number) => string
+      returnNotFound: (frames: number) => string
+      searchReturn: (len: number) => string
+      composingAnswer: string
+      answerComplete: string
+      answerCompleteBackfill: string
+      subtaskFailed: (channel: string, target: string) => string
+      phase: (phase: string, round?: number) => string
+      planRound: (recallCount: number, searchCount: number) => string
+      planRoundNoTools: string
+      retryLimitStop: string
+      skipDuplicate: string
+      roundDecision: (round: number | string, verdict: string) => string
+      decisionEnough: string
+      decisionContinueTools: (n: number) => string
+      decisionNoTools: string
+      evidenceSummary: (text: string) => string
+      noVisualConflict: string
+      searchCall: (toolName: string) => string
+      searchStart: string
+      searchPhase: (phase: string) => string
+      taskCancelled: string
+      taskFailed: string
+      outerRound: (round: number) => string
+      innerRounds: (n: number) => string
+      evidenceChars: (n: number) => string
+      parallelRead: (seconds: string) => string
+      newEvidenceFrames: (n: number) => string
+      cluesSoFar: (n: number) => string
+    }
+    readiness: {
+      notReady: string
+      details: string
+      collapse: string
+      close: string
+      expand: string
+      capsMissing: string
+      runSetup: string
+      toFix: string
+    }
+    capture: {
+      notStarted: string
+      waitingSession: string
+      initBackend: string
+      staleRejected: string
+      sessionChanged: string
+      gatewayUnavailable: string
+      gatewayState: (state: string) => string
+      firstFrameTimeout: string
+      streamStopped: string
+      streamReplaced: string
+      authorized: string
+      creatingSession: string
+      cancelled: string
+      noSessionId: string
+      videoNotReady: string
+      encodeFailed: string
+      notifyRejected: string
+      creatorNotReady: string
+    }
+    voiceErrors: {
+      streamingNotEnabled: string
+      sharedAudioSliceFailed: (reason: string) => string
+      sharedAudioNotReceived: (reason: string) => string
+      sharedAudioAsrFailed: (reason: string) => string
+      sharedAudioNoSamples: string
+      sharedAudioStartFailed: (detail: string) => string
+      micPermissionDenied: string
+      turnMismatch: string
+      sessionCreateFailed: string
+      connectionUnavailable: string
+      asrEmpty: string
+      asrFinishTimeout: string
+      asrDispatchFailed: string
+      asrServiceUnavailable: string
+      asrTurnStale: string
+      submitFailedWithReason: (reason: string) => string
+      submitFailedGeneric: string
+      recordingFinalizeFailed: string
+      audioUploadInterrupted: string
+    }
+    chat: {
+      showVideo: string
+      hideVideo: string
+      stopReading: string
+    }
+    misc: {
+      errorPrefix: string
+      pleaseSelect: string
+      question: (id: string) => string
+      callFailed: string
+      foundChars: (chars: number, clues: string) => string
+      clues: (n: number) => string
+      cannotEnableMonitor: string
+      cannotEnableResearch: string
+      cannotPauseResearch: string
+    }
+    memoryDebug: {
+      panelTitle: string
+      panelSubtitle: string
+      refreshLabel: string
+      dbSelectLabel: string
+      noDbOption: string
+      tabMemory: string
+      tabFrame: string
+      tabSearch: string
+      tabDebug: string
+      otherSessionNotice: string
+      noMemoryYet: string
+      statFrames: string
+      statEntities: string
+      statEvents: string
+      statEvolution: string
+      inDbTotal: (total: number | string) => string
+      section1Title: string
+      section1Hint: string
+      viewAllAndOcr: string
+      noFramesYet: string
+      section2Title: string
+      section2Hint: string
+      noEntities: string
+      seenCount: (n: number) => string
+      aliases: (list: string) => string
+      section3Title: string
+      section3Hint: string
+      noEvents: string
+      section4Title: string
+      section4Hint: string
+      noEvolution: string
+      searchLabel: string
+      searchPlaceholder: string
+      scopeAll: string
+      scopeToday: string
+      scopeLatest: string
+      searchButton: string
+      searchEmpty: string
+      trajectoryGroupTitle: string
+      trajectoryGroupHint: string
+      trajectoryOtherSession: string
+      trajectoryEmpty: string
+      noRecallMessages: string
+      backgroundTrajectory: string
+      showEarlier: string
+      showAllEvents: (n: number) => string
+      noFrameImage: string
+      noDescription: string
+      noExplanation: string
     }
   }
 }

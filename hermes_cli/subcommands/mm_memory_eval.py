@@ -60,7 +60,7 @@ def build_mm_memory_eval_parser(subparsers, *, cmd_mm_memory_eval: Callable) -> 
     p.add_argument(
         "--log-dir", default=None,
         help=("本次评测的独立日志目录; 默认自动写到 "
-              "~/.hermes/logs/mm-memory-eval/<run_id>/eval.log。并发跑多个评测时建议保持默认"))
+              "~/.argus/logs/mm-memory-eval/<run_id>/eval.log。并发跑多个评测时建议保持默认"))
     p.add_argument("--capture-fps", type=float, default=None,
                    help="解码采样帧率 (默认取 config 的 buffer_capture_fps=2.0, 即屏幕共享帧率)")
     p.add_argument("--max-side", type=int, default=None,

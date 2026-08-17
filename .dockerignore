@@ -33,6 +33,15 @@ node_modules
 # that now depends on the full ui-tui/packages/hermes-ink/ tree being present.
 ui-tui/dist/
 ui-tui/packages/hermes-ink/dist/
+# The image builds its own web/TUI bundles in the frontend-build layer
+# (`cd web && npm run build`, whose vite outDir is ../hermes_cli/web_dist).
+# Without these exclusions the later `COPY --link . .` overwrites that fresh
+# build with whatever is in the build context, silently shipping a stale
+# dashboard and wasting the build layer entirely.  Both paths are gitignored,
+# so in a clean clone the context has nothing here anyway — the risk is a
+# developer's local build output leaking in and clobbering the image's.
+hermes_cli/web_dist/
+hermes_cli/tui_dist/
 
 # CI/CD
 .github

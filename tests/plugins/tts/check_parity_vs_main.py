@@ -76,7 +76,7 @@ sys.path.insert(0, sys.argv[1])
 
 # Isolated HERMES_HOME so the config write is hermetic.
 home = tempfile.mkdtemp()
-os.environ["HERMES_HOME"] = home
+os.environ["ARGUS_HOME"] = home
 
 # Clear TTS-related env so dispatch decisions are config-driven.
 for k in (

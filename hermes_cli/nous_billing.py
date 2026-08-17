@@ -15,10 +15,10 @@ Design rules:
   decide how to degrade. A raw network/HTTP error here surfaces as
   :class:`BillingError` (or a subclass) carrying the parsed server ``error`` code,
   HTTP status, ``portalUrl`` deep-link, and ``retry_after``.
-- **Auth** = the OAuth bearer JWT Hermes already holds for inference
+- **Auth** = the OAuth bearer JWT Argus already holds for inference
   (``get_provider_auth_state("nous")["access_token"]``). No API-key auth on these.
 - **Portal base URL** resolves with the same precedence as the device-flow login
-  (``auth.py``): ``HERMES_PORTAL_BASE_URL`` → ``NOUS_PORTAL_BASE_URL`` → the
+  (``auth.py``): ``ARGUS_PORTAL_BASE_URL`` → ``NOUS_PORTAL_BASE_URL`` → the
   stored auth-state ``portal_base_url`` → the registry default. This is how the
   E2E run points the client at a preview deployment with zero code change.
 """
@@ -107,10 +107,10 @@ class BillingAuthError(BillingError):
 def resolve_portal_base_url(state: Optional[dict[str, Any]] = None) -> str:
     """Resolve the portal base URL with login-time precedence.
 
-    ``HERMES_PORTAL_BASE_URL`` → ``NOUS_PORTAL_BASE_URL`` → stored auth-state
+    ``ARGUS_PORTAL_BASE_URL`` → ``NOUS_PORTAL_BASE_URL`` → stored auth-state
     ``portal_base_url`` → registry default. Trailing slash stripped.
     """
-    env = os.getenv("HERMES_PORTAL_BASE_URL") or os.getenv("NOUS_PORTAL_BASE_URL")
+    env = os.getenv("ARGUS_PORTAL_BASE_URL") or os.getenv("NOUS_PORTAL_BASE_URL")
     if env and env.strip():
         return env.strip().rstrip("/")
     if state:
@@ -151,7 +151,7 @@ _token_cache: tuple[float, str, str] | None = None  # (cached_at, token, base)
 def _billing_not_logged_in(exc: Optional[BaseException] = None) -> "BillingAuthError":
     """Build the canonical 'not logged in' BillingAuthError (single source)."""
     err = BillingAuthError(
-        "Not logged into Nous Portal — run `hermes portal` to log in.",
+        "Not logged into Nous Portal — run `argus portal` to log in.",
         status=401,
         error="invalid_token",
     )

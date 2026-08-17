@@ -1,4 +1,4 @@
-"""Unit tests for the extracted ``hermes cron`` parser builder.
+"""Unit tests for the extracted ``argus cron`` parser builder.
 
 Confirms ``build_cron_parser`` wires up the same subactions, aliases, options,
 and ``func=cmd_cron`` dispatch that lived inline in ``main()`` before the

@@ -54,7 +54,7 @@ export default function Success() {
         <p className="m-0 text-center text-base leading-normal tracking-tight text-muted-foreground">
           You can launch from here, or any time from your terminal with{' '}
           <code className="rounded bg-muted/60 px-1 py-0.5 font-mono text-sm">
-            hermes desktop
+            argus desktop
           </code>
           .
         </p>

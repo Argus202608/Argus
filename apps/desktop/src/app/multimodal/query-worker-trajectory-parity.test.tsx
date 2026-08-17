@@ -38,7 +38,7 @@ describe('Desktop QueryWorker Web parity', () => {
     const started = trajectory('started', {}, { ask_ts: 21.5, frames: [], n_frames: 0 })
     const step = queryWorkerStepFromTrajectory(started)
 
-    expect(step?.title).toContain('冻结输入帧 0')
+    expect(step?.title).toContain('frozen input frames 0')
     expect(step?.frames).toEqual([])
 
     render(<QueryWorkerTrajectoryPanel entries={[started]} />)
@@ -111,7 +111,7 @@ describe('Desktop QueryWorker Web parity', () => {
       { args: { brief: '金发男子的攀岩鞋品牌' }, name: 'recall_memory' }
     ])
     expect(planned?.metrics).toContain('source 142.0–148.0s · 12 frames')
-    expect(noTools?.title).toContain('本轮未调用 Recall / Search')
+    expect(noTools?.title).toContain('no Recall / Search this round')
     expect(noTools?.toolCalls).toEqual([])
   })
 
@@ -288,8 +288,8 @@ describe('Desktop QueryWorker Web parity', () => {
       detail: 'HTTP 400 Unknown parameter: top_k',
       status: 'error'
     })
-    expect(step?.title).toContain('Recall 请求失败')
-    expect(step?.title).not.toContain('未找到')
+    expect(step?.title).toContain('Recall request failed')
+    expect(step?.title).not.toContain('no reliable clues')
     expect(step?.metrics).toEqual(expect.arrayContaining(['model GPT-5.6 Luna', '4.20s']))
 
     render(<QueryWorkerTrajectoryPanel entries={[failed]} />)
@@ -326,8 +326,8 @@ describe('Desktop QueryWorker Web parity', () => {
       reason: 'retry_limit_after_two_failures'
     }, {}, 2))
 
-    expect(duplicate?.title).toContain('跳过重复 Recall')
-    expect(exhausted?.title).toContain('连续失败 2 次')
+    expect(duplicate?.title).toContain('Skipped duplicate Recall')
+    expect(exhausted?.title).toContain('failed twice in a row')
     expect(exhausted?.title).not.toBe(duplicate?.title)
   })
 

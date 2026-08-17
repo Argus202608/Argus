@@ -4129,7 +4129,7 @@ def interactive_setup() -> None:
                 "reinstall if scopes or slash commands changed."
             )
             print_info(
-                "   Re-run `hermes slack manifest --write` anytime to refresh after "
+                "   Re-run `argus slack manifest --write` anytime to refresh after "
                 "Hermes adds new commands."
             )
         except Exception as e:
@@ -4144,7 +4144,7 @@ def interactive_setup() -> None:
             # new commands (e.g. /btw, /stop, ...) get registered in Slack.
             if prompt_yes_no(
                 "Regenerate the Slack app manifest with the latest command "
-                "list? (recommended after `hermes update`)",
+                "list? (recommended after `argus update`)",
                 True,
             ):
                 _write_slack_manifest_and_instruct()

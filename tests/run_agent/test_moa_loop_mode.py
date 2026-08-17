@@ -11,7 +11,7 @@ def _response(content="done", *, tool_calls=None):
 
 
 def test_moa_virtual_provider_aggregator_is_actor(monkeypatch, tmp_path):
-    home = tmp_path / ".hermes"
+    home = tmp_path / ".argus"
     home.mkdir()
     (home / "config.yaml").write_text(
         """
@@ -28,7 +28,7 @@ moa:
 """.strip(),
         encoding="utf-8",
     )
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("ARGUS_HOME", str(home))
     calls = []
 
     def fake_call_llm(**kwargs):
@@ -87,7 +87,7 @@ def test_moa_does_not_cap_output_tokens(monkeypatch, tmp_path):
     omits the parameter and each model uses its real maximum. Regression for
     the "no limit on MoA models" fix.
     """
-    home = tmp_path / ".hermes"
+    home = tmp_path / ".argus"
     home.mkdir()
     (home / "config.yaml").write_text(
         """
@@ -105,7 +105,7 @@ moa:
 """.strip(),
         encoding="utf-8",
     )
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("ARGUS_HOME", str(home))
     calls = []
 
     def fake_call_llm(**kwargs):
@@ -243,7 +243,7 @@ def test_reference_messages_strips_system_and_tool_history():
 
 
 def test_moa_facade_references_get_trimmed_messages(monkeypatch, tmp_path):
-    home = tmp_path / ".hermes"
+    home = tmp_path / ".argus"
     home.mkdir()
     (home / "config.yaml").write_text(
         """
@@ -260,7 +260,7 @@ moa:
 """.strip(),
         encoding="utf-8",
     )
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("ARGUS_HOME", str(home))
     calls = []
 
     def fake_call_llm(**kwargs):
@@ -291,7 +291,7 @@ moa:
 
 
 def test_moa_disabled_preset_skips_references(monkeypatch, tmp_path):
-    home = tmp_path / ".hermes"
+    home = tmp_path / ".argus"
     home.mkdir()
     (home / "config.yaml").write_text(
         """
@@ -309,7 +309,7 @@ moa:
 """.strip(),
         encoding="utf-8",
     )
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("ARGUS_HOME", str(home))
     calls = []
 
     def fake_call_llm(**kwargs):
@@ -402,9 +402,9 @@ moa:
 def test_moa_facade_emits_reference_then_aggregating(monkeypatch, tmp_path):
     """The facade reports each reference's output, then an aggregating signal,
     so frontends can render reference blocks before the aggregator acts."""
-    home = tmp_path / ".hermes"
+    home = tmp_path / ".argus"
     _ref_config(home)
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("ARGUS_HOME", str(home))
 
     def fake_call_llm(**kwargs):
         if kwargs["task"] == "moa_reference":
@@ -439,9 +439,9 @@ def test_moa_facade_caches_references_within_a_turn(monkeypatch, tmp_path):
     view is identical across iterations (tool/tool_call turns are stripped),
     so re-running references would multiply their cost and re-spam the display.
     """
-    home = tmp_path / ".hermes"
+    home = tmp_path / ".argus"
     _ref_config(home)
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("ARGUS_HOME", str(home))
 
     ref_runs = []
 
@@ -481,9 +481,9 @@ def test_moa_facade_caches_references_within_a_turn(monkeypatch, tmp_path):
 
 def test_moa_facade_reruns_references_on_new_turn(monkeypatch, tmp_path):
     """A genuinely new user message invalidates the cache and re-runs refs."""
-    home = tmp_path / ".hermes"
+    home = tmp_path / ".argus"
     _ref_config(home)
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("ARGUS_HOME", str(home))
 
     ref_runs = []
 

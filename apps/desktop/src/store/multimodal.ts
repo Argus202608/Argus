@@ -1,5 +1,6 @@
 import { atom, computed } from 'nanostores'
 
+import { translateNow } from '@/i18n'
 import { compactQueryWorkerTrajectoryImages } from '@/lib/query-worker-trajectory-cache'
 
 import { $gateway } from './gateway'
@@ -12,7 +13,7 @@ import {
   stopCaptureAndNotify
 } from './multimodal-capture'
 import {
-  $mmMicState,
+  cancelManualMicOnDisconnect,
   hasMicCaptureIntent,
   rearmMicAfterReconnect,
   rearmMicForSessionRebind,
@@ -101,13 +102,15 @@ const MAX_MESSAGES = 5000
 // session history (never sent through pushMsg → prompt.submit / history export),
 // so it doesn't enter the agent's context on any turn.
 const MM_WELCOME_ID = '__mm_welcome__'
-const MM_WELCOME_TEXT =
-  '开启摄像头或共享屏幕后直接提问。一次性视觉问题会交给 QueryWorker；它读取提问时刻画面，并按需召回历史或检索资料。'
+// Welcome text is resolved at call-time via translateNow so it respects the active locale.
+function getMmWelcomeText(): string {
+  return translateNow('multimodal.welcome.body')
+}
 function makeMmWelcome(): MmMessage {
   return {
     id: MM_WELCOME_ID,
     role: 'system',
-    text: MM_WELCOME_TEXT,
+    text: getMmWelcomeText(),
     createdAt: Date.now(),
   }
 }
@@ -787,6 +790,7 @@ export function attachMultimodalGateway(): Off {
         // we stop encoding into a dead socket without losing the camera grant.
         // In main-chat mode $mmSessionId mirrors $activeSessionId (owned by the
         // desktop runtime) — don't clear it; the runtime handles resume.
+        cancelManualMicOnDisconnect()
         if (!_boundToMain) $mmSessionId.set('')
         $mmConnected.set(false)
         $mmConnState.set(state === 'connecting' && !_everOpen ? 'connecting' : 'reconnecting')
@@ -901,7 +905,7 @@ export function attachMultimodalGateway(): Off {
       $mmMessages.set(
         cap([
           ...$mmMessages.get().map(m => (m.streaming ? { ...m, streaming: false } : m)),
-          { id: mmId(), role: 'system', text: `错误: ${ev.payload?.message || '未知错误'}`, isError: true }
+          { id: mmId(), role: 'system', text: `${translateNow('multimodal.misc.errorPrefix')}: ${ev.payload?.message || 'unknown'}`, isError: true }
         ])
       )
     })
@@ -924,7 +928,7 @@ export function attachMultimodalGateway(): Off {
         text: '',
         kind: 'clarify',
         clarifyReqId: reqId,
-        clarifyQuestion: p.question || '请选择',
+        clarifyQuestion: p.question || translateNow('multimodal.misc.pleaseSelect'),
         clarifyChoices: choices
       })
     })
@@ -1062,19 +1066,19 @@ export function attachMultimodalGateway(): Off {
   offs.push(gw.on<{ text?: string }>('thinking.delta', ev => { if (mine(ev)) appendReasoning(ev.payload?.text || '') }))
 
   // ── Voice: streaming ASR preview/final + TTS PCM chunks ───────────────────
-  offs.push(gw.on<{ text?: string }>('multimodal.asr_partial', ev => {
+  offs.push(gw.on<{ text?: string; turn_id?: string }>('multimodal.asr_partial', ev => {
     if (mine(ev)) {
-      onAsrPartial(ev.payload?.text || '')
+      onAsrPartial(ev.payload?.text || '', ev.payload?.turn_id)
     }
   }))
-  offs.push(gw.on<{ segments?: string[] }>('multimodal.asr_buffer', ev => {
+  offs.push(gw.on<{ segments?: string[]; turn_id?: string }>('multimodal.asr_buffer', ev => {
     if (mine(ev)) {
-      onAsrBuffer(ev.payload?.segments || [])
+      onAsrBuffer(ev.payload?.segments || [], ev.payload?.turn_id)
     }
   }))
-  offs.push(gw.on<{ text?: string }>('multimodal.asr_final', ev => {
+  offs.push(gw.on<{ text?: string; turn_id?: string }>('multimodal.asr_final', ev => {
     if (mine(ev)) {
-      onAsrFinal(ev.payload?.text || '')
+      onAsrFinal(ev.payload?.text || '', ev.payload?.turn_id)
     }
   }))
   offs.push(gw.on<TtsChunk>('multimodal.tts', ev => {
@@ -1165,7 +1169,7 @@ export async function sendMultimodalPrompt(rawText: string): Promise<void> {
     pushMsg({
       id: mmId(),
       role: 'system',
-      text: `发送失败: ${e instanceof Error ? e.message : String(e)}`,
+      text: `${translateNow('multimodal.misc.errorPrefix')}: ${e instanceof Error ? e.message : String(e)}`,
       isError: true
     })
   }
@@ -1239,7 +1243,7 @@ export function toggleMultimodalDeepThinking(): void {
  *   - nothing active     → full teardown as before.
  */
 export function resetMultimodalUi(): void {
-  const backgroundActive = isCapturing() || $mmMicState.get() === 'recording'
+  const backgroundActive = isCapturing() || hasMicCaptureIntent()
   if (backgroundActive) {
     // Leave gateway handlers + session + capture/mic running for the tray-hidden
     // background session. Nothing to reset — the page just unmounted.

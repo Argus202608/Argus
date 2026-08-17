@@ -15,6 +15,7 @@ const {
   sanitizeWindowState,
   onScreen,
   computeWindowOptions,
+  shouldStartMaximized,
   debounce
 } = require('./window-state.cjs')
 
@@ -46,7 +47,8 @@ test('sanitizeWindowState keeps a valid full state and rounds HiDPI fractions', 
     y: 50,
     width: 1400,
     height: 901,
-    isMaximized: true
+    isMaximized: true,
+    wasTooNarrow: false
   })
 })
 
@@ -60,7 +62,8 @@ test('sanitizeWindowState drops a partial position but keeps the size', () => {
   assert.deepEqual(sanitizeWindowState({ x: 100, width: 1400, height: 900 }), {
     width: 1400,
     height: 900,
-    isMaximized: false
+    isMaximized: false,
+    wasTooNarrow: false
   })
 })
 
@@ -147,4 +150,71 @@ test('debounce.flush runs now and cancels the pending timer', t => {
   assert.equal(calls, 1)
   t.mock.timers.tick(1000)
   assert.equal(calls, 1)
+})
+
+// ── shouldStartMaximized ────────────────────────────────────────────
+// A fresh install opens maximized so the two-column shell (preview rail + chat)
+// gets the full work area; a saved state is respected verbatim so an explicit
+// un-maximize survives relaunch.
+
+test('shouldStartMaximized maximizes a fresh install (no saved state)', () => {
+  assert.equal(shouldStartMaximized(null), true)
+  assert.equal(shouldStartMaximized(undefined), true)
+})
+
+test('shouldStartMaximized respects an explicit un-maximize', () => {
+  // Regression: the user dragged the window to a custom size; relaunching must
+  // not blow it back up to full screen.
+  assert.equal(shouldStartMaximized({ width: 1000, height: 700, isMaximized: false }), false)
+})
+
+test('shouldStartMaximized restores a saved maximized window', () => {
+  assert.equal(shouldStartMaximized({ width: 1220, height: 800, isMaximized: true }), true)
+})
+
+test('shouldStartMaximized treats a missing flag as not maximized', () => {
+  // sanitizeWindowState always emits a strict boolean, so a flag-less object can
+  // only come from a hand-edited file — bias to the user's saved geometry.
+  assert.equal(shouldStartMaximized({ width: 1000, height: 700 }), false)
+})
+
+test('a narrow saved width is floored to MIN_WIDTH', () => {
+  // Regression: DEFAULT_WIDTH was briefly 600, which is too narrow for the
+  // two-column shell — the chat column collapsed to ~200px. Existing 600-wide
+  // saved states must be lifted to a usable width on load.
+  const state = sanitizeWindowState({ x: 456, y: 38, width: 600, height: 912, isMaximized: false })
+  assert.equal(state.width, MIN_WIDTH)
+  assert.ok(state.width >= 900)
+})
+
+test('a state saved while DEFAULT_WIDTH was too narrow re-maximizes', () => {
+  // Self-heal: 600x912 with isMaximized:false could never be a deliberate drag
+  // (the window can't go below MIN_WIDTH), so it must not pin users to a broken
+  // layout forever. Real-world state from the regression, verbatim.
+  const state = sanitizeWindowState({ x: 456, y: 38, width: 600, height: 912, isMaximized: false })
+  assert.equal(state.wasTooNarrow, true)
+  assert.equal(shouldStartMaximized(state), true)
+})
+
+test('a legitimately-sized un-maximized state is still respected', () => {
+  // The self-heal must not swallow real user choices at usable widths.
+  const state = sanitizeWindowState({ x: 100, y: 50, width: 1100, height: 780, isMaximized: false })
+  assert.equal(state.wasTooNarrow, false)
+  assert.equal(shouldStartMaximized(state), false)
+})
+
+test('wasTooNarrow is derived, never persisted', () => {
+  // persistWindowState() writes an explicit field list; assert the derived flag
+  // isn't part of the geometry contract so it can't leak into window-state.json.
+  const state = sanitizeWindowState({ x: 1, y: 2, width: 600, height: 700, isMaximized: false })
+  const persisted = JSON.parse(
+    JSON.stringify({
+      x: state.x,
+      y: state.y,
+      width: state.width,
+      height: state.height,
+      isMaximized: state.isMaximized
+    })
+  )
+  assert.equal('wasTooNarrow' in persisted, false)
 })

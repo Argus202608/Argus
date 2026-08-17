@@ -656,8 +656,19 @@ class TestValidateApiFallback:
         # Unreachable /models on a custom endpoint no longer hard-rejects —
         # the model is persisted with a warning so Cloudflare-protected /
         # proxy endpoints that don't expose /models still work. See #12950.
-        assert result["accepted"] is False
+        #
+        # ``accepted`` used to be ``api_mode == "anthropic_messages"`` here,
+        # which contradicted the comment above for every other api_mode: a
+        # custom provider with no explicit api_mode (just base_url + model in
+        # config.yaml) could not be switched to at all whenever the optional
+        # /models listing was unreachable. Since the virtual ``moa`` provider
+        # never probes, switching into MoA became a one-way door. An endpoint
+        # not implementing the Models API is not evidence the model is wrong,
+        # and ``recognized: False`` + the warning already convey "unverified" —
+        # matching test_unknown_provider_soft_accepted_when_api_down above.
+        assert result["accepted"] is True
         assert result["persist"] is True
+        assert result["recognized"] is False
         assert "http://localhost:8000/v1/models" in result["message"]
         assert "http://localhost:8000/v1" in result["message"]
 
@@ -830,8 +841,11 @@ class TestProbeApiModelsUserAgent:
         req = mock_urlopen.call_args[0][0]
         ua = req.get_header("User-agent")  # urllib title-cases header names
         assert ua, "probe_api_models must send a User-Agent header"
-        assert ua.startswith("hermes-cli/"), (
-            f"User-Agent must advertise hermes-cli, got {ua!r}"
+        # Renamed hermes-cli → argus-cli with the project; the assertion is that
+        # we advertise OUR client (see models.py::_HERMES_USER_AGENT), not the
+        # specific historical name.
+        assert ua.startswith("argus-cli/"), (
+            f"User-Agent must advertise argus-cli, got {ua!r}"
         )
         # Must not fall back to urllib's default — that's what Cloudflare 1010 blocks.
         assert not ua.startswith("Python-urllib")
@@ -849,6 +863,74 @@ class TestProbeApiModelsUserAgent:
 
         req = mock_urlopen.call_args[0][0]
         ua = req.get_header("User-agent")
-        assert ua and ua.startswith("hermes-cli/")
+        assert ua and ua.startswith("argus-cli/")
         # No Authorization was set, but UA must still be present.
         assert req.get_header("Authorization") is None
+
+
+class TestConfiguredCustomModelIsNotVetoedByProbe:
+    """A model you wrote into config.yaml must be switchable to.
+
+    Regression for the "can't switch back to my own model" report: the custom
+    branch returned ``accepted: api_mode == "anthropic_messages"`` when the
+    optional ``/models`` listing was unreachable. Most custom entries carry no
+    explicit ``api_mode`` (you just write base_url + model), so those were
+    rejected — and because the virtual ``moa`` provider never probes at all,
+    switching into a MoA preset became a one-way door with no route back to the
+    configured model.
+
+    An endpoint that doesn't implement the Models API says nothing about whether
+    the model is valid. ``recognized: False`` plus the warning already carry
+    "unverified"; a wrong name then surfaces at first use.
+    """
+
+    UNREACHABLE = {
+        "models": None,
+        "probed_url": "https://open.bigmodel.cn/api/paas/v4/models",
+        "resolved_base_url": "https://open.bigmodel.cn/api/paas/v4/",
+        "suggested_base_url": None,
+        "used_fallback": False,
+    }
+
+    def _validate_unreachable(self, **kw):
+        with patch("hermes_cli.models.probe_api_models", return_value=self.UNREACHABLE):
+            return validate_requested_model(
+                "glm-5v-turbo",
+                "custom:open.bigmodel.cn",
+                api_key="k",
+                base_url="https://open.bigmodel.cn/api/paas/v4/",
+                **kw,
+            )
+
+    def test_accepted_without_explicit_api_mode(self):
+        """The common config shape: base_url + model, no api_mode."""
+        result = self._validate_unreachable()
+
+        assert result["accepted"] is True
+        assert result["persist"] is True
+        assert result["recognized"] is False
+
+    def test_accepted_for_chat_completions(self):
+        result = self._validate_unreachable(api_mode="chat_completions")
+
+        assert result["accepted"] is True
+
+    def test_still_accepted_for_anthropic_messages(self):
+        """The one mode that already worked must keep working."""
+        result = self._validate_unreachable(api_mode="anthropic_messages")
+
+        assert result["accepted"] is True
+
+    def test_reachable_listing_still_recognizes_a_listed_model(self):
+        """Soft-accepting an unreachable probe must not weaken the happy path."""
+        reachable = {**self.UNREACHABLE, "models": ["glm-5v-turbo", "glm-4.5-air"]}
+        with patch("hermes_cli.models.probe_api_models", return_value=reachable):
+            result = validate_requested_model(
+                "glm-5v-turbo",
+                "custom:open.bigmodel.cn",
+                api_key="k",
+                base_url="https://open.bigmodel.cn/api/paas/v4/",
+            )
+
+        assert result["accepted"] is True
+        assert result["recognized"] is True

@@ -3,8 +3,8 @@ Feishu document comment access-control rules.
 
 3-tier rule resolution: exact doc > wildcard "*" > top-level > code defaults.
 Each field (enabled/policy/allow_from) falls back independently.
-Config: ~/.hermes/feishu_comment_rules.json (mtime-cached, hot-reload).
-Pairing store: ~/.hermes/feishu_comment_pairing.json.
+Config: ~/.argus/feishu_comment_rules.json (mtime-cached, hot-reload).
+Pairing store: ~/.argus/feishu_comment_pairing.json.
 """
 
 from __future__ import annotations

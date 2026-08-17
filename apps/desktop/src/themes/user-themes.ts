@@ -15,7 +15,7 @@ import { atom } from 'nanostores'
 import { BUILTIN_THEMES } from './presets'
 import type { DesktopTheme, DesktopThemeColors } from './types'
 
-const USER_THEMES_KEY = 'hermes-desktop-user-themes-v1'
+const USER_THEMES_KEY = 'argus-desktop-user-themes-v1'
 
 // The minimal set of color keys a stored theme must carry to be usable. We keep
 // this loose — `applyTheme` tolerates missing optionals via fallbacks — but a

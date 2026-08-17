@@ -14,7 +14,7 @@ Linux is the most recent runtime (X11 today, Wayland via XWayland; pure-
 Wayland progress tracked upstream). It is enabled in
 `check_computer_use_requirements` alongside macOS and Windows. The plumbing
 in this file is OS-agnostic; per-host gaps (no DISPLAY, missing AT-SPI,
-etc.) surface as specific blocked checks via `hermes computer-use doctor`
+etc.) surface as specific blocked checks via `argus computer-use doctor`
 rather than failing silently.
 
 Install:
@@ -69,11 +69,11 @@ logger = logging.getLogger(__name__)
 # hardcoded version floor, which would rot and can't know what "latest" is.
 #
 # There is intentionally no version *pin* knob: the upstream installer always
-# fetches the latest release, so a `HERMES_CUA_DRIVER_VERSION` env var would
+# fetches the latest release, so a `ARGUS_CUA_DRIVER_VERSION` env var would
 # only have *looked* like it pinned. For a reproducible version, point
-# `HERMES_CUA_DRIVER_CMD` at a specific binary instead.
+# `ARGUS_CUA_DRIVER_CMD` at a specific binary instead.
 
-_CUA_DRIVER_CMD = os.environ.get("HERMES_CUA_DRIVER_CMD", "cua-driver")
+_CUA_DRIVER_CMD = os.environ.get("ARGUS_CUA_DRIVER_CMD", "cua-driver")
 _CUA_DRIVER_ARGS = ["mcp"]  # stdio MCP transport (fallback when the
                             # driver doesn't expose `manifest` — see
                             # `_resolve_mcp_invocation` below)
@@ -342,6 +342,147 @@ def _is_cua_driver_own_window(w: Dict[str, Any]) -> bool:
     return False
 
 
+def _window_bounds(w: Dict[str, Any]) -> Tuple[float, float, float, float]:
+    """Extract (x, y, width, height) from a list_windows entry.
+
+    cua-driver surfaces bounds under `bounds` (dict with x/y/width/height) when
+    the underlying window server exposes them. Missing / malformed → zeros, so
+    downstream scoring falls to size 0 (naturally deprioritized).
+    """
+    b = w.get("bounds") or {}
+    if not isinstance(b, dict):
+        return 0.0, 0.0, 0.0, 0.0
+    try:
+        return (
+            float(b.get("x", 0) or 0),
+            float(b.get("y", 0) or 0),
+            float(b.get("width", 0) or 0),
+            float(b.get("height", 0) or 0),
+        )
+    except (TypeError, ValueError):
+        return 0.0, 0.0, 0.0, 0.0
+
+
+def _is_chrome_strip(w: Dict[str, Any]) -> bool:
+    """Hard-exclude "chrome" windows that can never be a main content window.
+
+    macOS Electron/Qt apps commonly expose thin full-width auxiliary windows —
+    menu bars, floating HUDs, custom title strips, popover backdrops. They
+    show up in ``list_windows`` alongside the real content window and, since
+    the OS reports many of them off-screen with an empty title, they trip the
+    "windows[0]" fallback (see the 腾讯会议 incident: 1512×37 at y=0 was
+    picked over a 1280×720 main window).
+
+    Signature: thin (height ≤ 50pt) AND wide-relative-to-height (width ≥ 4x
+    height) AND anchored to the top of the screen (y ≤ 5) AND empty title.
+    All four required — anything with a real title (e.g. a chat message
+    preview HUD carrying its own title) is left alone, so the score-based
+    ranking can decide.
+    """
+    _x, y, width, height = _window_bounds(w)
+    title = str(w.get("title", "") or "").strip()
+    if title:
+        return False
+    if height <= 0 or width <= 0:
+        # No bounds reported → don't hard-exclude; let scoring handle it.
+        return False
+    return height <= 50 and width >= 4 * height and y <= 5
+
+
+def _score_main_window(w: Dict[str, Any], candidates: List[Dict[str, Any]],
+                       app_query: Optional[str]) -> float:
+    """Score how likely `w` is the app's main content window.
+
+    Higher is better. Independent of capture mode — the caller decides how
+    to react when the winner still looks bogus (sanity check downstream).
+
+    Composition:
+      * **area**, normalized to the largest candidate's area. Denominator is
+        candidate-relative, NOT screen-relative — QuickTime mini-player and
+        Xcode both have valid main windows at wildly different sizes; asking
+        "which of THESE looks biggest" is the right question.
+      * **on-screen bonus**: visible windows are more likely main, but this is
+        a bonus not a gate (off-screen main-windows in another Space are still
+        capturable via get_window_state).
+      * **standard-window layer**: cua-driver's `layer` field mirrors macOS
+        NSWindowLevel — 0 is the normal application layer, non-zero indicates
+        floating/status/popover chrome. Penalize non-zero.
+      * **title informativeness**: non-empty title, and especially a title that
+        contains the app name / query, is a strong main-window signal.
+      * **z_index tiebreaker**: earliest wins, kept only to break ties.
+
+    Note: no shape/aspect penalty here — _is_chrome_strip already removes
+    thin strips at the top of the screen, area_ratio naturally deprioritizes
+    small candidates when a larger one exists, and _capture_looks_empty
+    catches the "only chrome survived" edge case after capture. A shape
+    penalty in the middle wouldn't change any decision the other three make.
+    """
+    _x, y, width, height = _window_bounds(w)
+    area = width * height
+
+    max_area = 0.0
+    for c in candidates:
+        _cx, _cy, cw, ch = _window_bounds(c)
+        ca = cw * ch
+        if ca > max_area:
+            max_area = ca
+    area_ratio = (area / max_area) if max_area > 0 else 0.0
+
+    on_screen_bonus = 0.3 if not w.get("off_screen", False) else 0.0
+
+    layer = w.get("layer", 0) or 0
+    try:
+        layer_int = int(layer)
+    except (TypeError, ValueError):
+        layer_int = 0
+    layer_penalty = -0.5 if layer_int != 0 else 0.0
+
+    title = str(w.get("title", "") or "").strip()
+    app_name = str(w.get("app_name", "") or "").strip()
+    title_bonus = 0.0
+    if title:
+        title_bonus += 0.15
+        title_lc = title.lower()
+        if app_name and app_name.lower() in title_lc:
+            title_bonus += 0.10
+        if app_query and app_query.lower() in title_lc:
+            title_bonus += 0.10
+
+    z_index = w.get("z_index", 0) or 0
+    try:
+        z_tiebreak = -float(z_index) * 1e-6
+    except (TypeError, ValueError):
+        z_tiebreak = 0.0
+
+    return (
+        area_ratio
+        + on_screen_bonus
+        + layer_penalty
+        + title_bonus
+        + z_tiebreak
+    )
+
+
+def _capture_looks_empty(width: int, height: int, png_bytes_len: int) -> bool:
+    """Cheap post-capture sanity check on decoded PNG dimensions.
+
+    A captured window whose dimensions are absurdly small — width < 100 or
+    height < 50 — is almost certainly chrome (menu bar / HUD / floating
+    strip) that survived scoring, or a driver-side capture-of-nothing.
+
+    Zero dims are handled separately (no PNG at all); the caller already
+    knows to fail in that case.
+
+    A stronger "all-transparent frame" heuristic (compare min/max pixel
+    values) would need to decode the PNG, which is not worth the cost for a
+    sanity check — the dim signal catches the actual incident (1553x38 chrome
+    strip returned instead of the 1280x720 main window).
+    """
+    if width and height and (width < 100 or height < 50):
+        return True
+    return False
+
+
 def resolve_exe_from_start_menu(name: str) -> Optional[str]:
     """Windows: resolve an app's real .exe path from its Start-menu shortcut.
 
@@ -410,7 +551,7 @@ def resolve_exe_from_start_menu(name: str) -> Optional[str]:
 
 
 def cua_driver_binary_available() -> bool:
-    """True if `cua-driver` is on $PATH or HERMES_CUA_DRIVER_CMD resolves."""
+    """True if `cua-driver` is on $PATH or ARGUS_CUA_DRIVER_CMD resolves."""
     return bool(shutil.which(_CUA_DRIVER_CMD))
 
 
@@ -466,7 +607,7 @@ def cua_driver_update_nudge() -> Optional[str]:
     current = state.get("current_version") or "?"
     return (
         f"cua-driver {latest} is available (you have {current}); "
-        f"update with `hermes computer-use install --upgrade`."
+        f"update with `argus computer-use install --upgrade`."
     )
 
 
@@ -508,10 +649,10 @@ def cua_driver_install_hint() -> str:
         )
     return (
         "cua-driver is not installed. Install with one of:\n"
-        "  hermes computer-use install\n"
+        "  argus computer-use install\n"
         "Or run the upstream installer directly:\n"
         f"{installer}\n"
-        "Or run `hermes tools` and enable the Computer Use toolset to install it automatically."
+        "Or run `argus tools` and enable the Computer Use toolset to install it automatically."
     )
 
 
@@ -1366,16 +1507,19 @@ class CuaDriverBackend(ComputerUseBackend):
             {"on_screen_only": False, "session": self._session_id},
         )
         raw_windows = (lw_out.get("structuredContent") or {}).get("windows") or []
-        windows = [
-            {
-                "app_name": w.get("app_name", ""),
-                "pid": int(w["pid"]),
-                "window_id": int(w["window_id"]),
-                "off_screen": not w.get("is_on_screen", True),
-                "title": w.get("title", ""),
-                "z_index": w.get("z_index", 0),
-            }
-            for w in raw_windows
+        # Two-stage filter:
+        #   1. Hard-exclude cua-driver's own overlay/auth windows (see below).
+        #   2. Hard-exclude "chrome strips" — thin full-width empty-title
+        #      windows anchored to y=0. Electron/Qt apps expose menu bars and
+        #      custom title chrome as full-fledged NSWindow entries; these can
+        #      never be main content windows. Filtering them here (as opposed
+        #      to just penalizing via score) means logs show them as
+        #      "excluded" rather than "chose the wrong one".
+        # The remaining windows carry the fields we score on: bounds/layer
+        # come straight through so _score_main_window can read them.
+        windows: List[Dict[str, Any]] = []
+        excluded_chrome: List[Dict[str, Any]] = []
+        for w in raw_windows:
             # Never target cua-driver's OWN windows: its agent-cursor overlay
             # (title "Cua.AgentCursorOverlay") and authorization process reject
             # get_window_state with "Permission denied: refuses operations that
@@ -1384,10 +1528,21 @@ class CuaDriverBackend(ComputerUseBackend):
             # hijack a capture(app="Cursor") — selecting the overlay instead of
             # the real Cursor editor and returning an empty/denied frame (the
             # classic "blank capture" failure mode, new variant).
-            if not _is_cua_driver_own_window(w)
-        ]
-        # Sort by z_index descending (lowest z_index = frontmost on macOS).
-        windows.sort(key=lambda w: w["z_index"])
+            if _is_cua_driver_own_window(w):
+                continue
+            if _is_chrome_strip(w):
+                excluded_chrome.append(w)
+                continue
+            windows.append({
+                "app_name": w.get("app_name", ""),
+                "pid": int(w["pid"]),
+                "window_id": int(w["window_id"]),
+                "off_screen": not w.get("is_on_screen", True),
+                "title": w.get("title", ""),
+                "z_index": w.get("z_index", 0),
+                "layer": w.get("layer", 0),
+                "bounds": w.get("bounds") or {},
+            })
 
         if not windows:
             return CaptureResult(mode=mode, width=0, height=0, png_b64=None,
@@ -1471,8 +1626,38 @@ class CuaDriverBackend(ComputerUseBackend):
                 )
             windows = filtered
 
-        # Pick first on-screen window (sorted by z_index / z-order above).
-        target = next((w for w in windows if not w["off_screen"]), windows[0])
+        # Pick the highest-scoring candidate — see _score_main_window for
+        # composition. Score is app-query-aware so title matches boost the
+        # right window; on-screen adds a bonus but is not a gate (off-screen
+        # main windows in another Space are still capturable via
+        # get_window_state).
+        scored = [(w, _score_main_window(w, windows, app)) for w in windows]
+        scored.sort(key=lambda ws: ws[1], reverse=True)
+        target, target_score = scored[0]
+        try:
+            logger.info(
+                "[cu-window] pick app=%r target=%s score=%.3f "
+                "excluded_chrome=%d ranking=%s",
+                app,
+                {k: target.get(k) for k in (
+                    "app_name", "window_id", "title", "z_index",
+                    "off_screen", "layer", "bounds",
+                )},
+                target_score,
+                len(excluded_chrome),
+                [
+                    {
+                        "window_id": w.get("window_id"),
+                        "title": (str(w.get("title") or ""))[:40],
+                        "bounds": w.get("bounds"),
+                        "off_screen": w.get("off_screen"),
+                        "score": round(s, 3),
+                    }
+                    for w, s in scored[:5]
+                ],
+            )
+        except Exception:
+            pass
         self._active_pid = target["pid"]
         self._active_window_id = target["window_id"]
         app_name = target["app_name"]
@@ -1590,15 +1775,25 @@ class CuaDriverBackend(ComputerUseBackend):
             if wt:
                 window_title = wt.group(1)
 
-        # Off-screen fallback: a fully-occluded / off-screen window returns a
-        # readable AX tree but NO screenshot (Windows can't composite a bitmap
-        # for a window that isn't on-screen). For a vision/som capture the model
-        # needs the pixels, so if we resolved a target but got no image AND that
-        # window was off-screen, bring it to the front once and re-capture. This
-        # is the minimal focus escalation — only when there's literally no image
-        # to show — and is what makes "operate the backgrounded Claude Code /
-        # Cursor window" work (the recurring "capture returns empty" symptom).
-        if (not png_b64 and target.get("off_screen")
+        # Empty-capture fallback: bring_to_front + retry once.
+        #
+        # A hidden / minimized / occluded / just-launched-still-painting window
+        # returns EITHER no screenshot OR an empty AX tree (or both). The
+        # symptom in agent logs is width=0, height=0, elements=[] — which
+        # looks like "this app has no UI" and sent agents into loops of
+        # capture → wait → capture → try-random-coord-click.
+        #
+        # Original condition only fired on `target["off_screen"]`, but many
+        # apps (Electron / Qt / recently-launched native) come back
+        # is_on_screen=True from list_windows yet still return an empty
+        # AX tree until they're composited to the front. Broaden the trigger
+        # to fire whenever the capture is empty (no image AND no elements),
+        # regardless of the off_screen flag. Vision mode has no elements by
+        # design — for that path only the missing-image half counts.
+        looks_empty = (not png_b64) and (
+            mode == "vision" or not elements
+        )
+        if (looks_empty
                 and self._active_pid is not None
                 and self._active_window_id is not None):
             try:
@@ -1615,8 +1810,30 @@ class CuaDriverBackend(ComputerUseBackend):
                 _png2, _mime2 = _image_from_tool_result(gws_retry)
                 if _png2:
                     png_b64, image_mime_type = _png2, _mime2
+                # Also refresh the AX tree — the pre-raise walk may have
+                # returned zero elements because the window hadn't been
+                # composited yet. In som/ax modes the caller needs the
+                # element list, not just the image.
+                if mode != "vision":
+                    text_retry = gws_retry["data"] if isinstance(gws_retry["data"], str) else ""
+                    _summary_retry, tree_retry = _split_tree_text(text_retry)
+                    sc_elements_retry = (gws_retry.get("structuredContent") or {}).get("elements")
+                    if isinstance(sc_elements_retry, list) and sc_elements_retry:
+                        elements_retry = _parse_elements_from_structured(sc_elements_retry)
+                    else:
+                        elements_retry = _parse_elements_from_tree(tree_retry) if tree_retry else []
+                    if elements_retry:
+                        elements = elements_retry
+                        self._snapshot_tokens = {
+                            e.index: e.element_token
+                            for e in elements
+                            if e.element_token
+                        }
+                        wt_retry = re.search(r'AXWindow\s+"([^"]+)"', tree_retry)
+                        if wt_retry:
+                            window_title = wt_retry.group(1)
             except Exception as e:
-                logger.debug("off-screen bring_to_front re-capture failed: %s", e)
+                logger.debug("empty-capture bring_to_front re-capture failed: %s", e)
 
         png_bytes_len = 0
         if png_b64:
@@ -1629,6 +1846,62 @@ class CuaDriverBackend(ComputerUseBackend):
                     height = detected_height
             except Exception:
                 png_bytes_len = len(png_b64) * 3 // 4
+
+        # Sanity check: after scoring + chrome exclusion, we should have picked
+        # a real content window. If the resulting capture still looks like a
+        # thin strip or a uniform-color frame, don't silently return garbage —
+        # tell the caller what happened so it can retry with focus / another
+        # Space, or surface the situation to the user. This is the last line
+        # of defense against off_screen backing-stores returning empty pixels.
+        if png_b64 and _capture_looks_empty(width, height, png_bytes_len):
+            _bx, _by, _bw, _bh = _window_bounds(target)
+            diagnostic = (
+                f"<captured window looks empty: app={app_name!r} "
+                f"window_id={self._active_window_id} "
+                f"size={width}x{height} png_bytes={png_bytes_len} "
+                f"bounds={_bw:.0f}x{_bh:.0f}@({_bx:.0f},{_by:.0f}) "
+                f"off_screen={target.get('off_screen')}. "
+                f"Main window is likely on another Space or minimized — "
+                f"cua-driver's backing store is empty for those. "
+                f"Ask the user to switch to it, or call list_apps + a "
+                f"focus/activate action first.>"
+            )
+            logger.info(
+                "[cu-window] sanity-check failed size=%dx%d bytes=%d target=%s",
+                width, height, png_bytes_len,
+                {k: target.get(k) for k in ("app_name", "window_id",
+                                             "title", "off_screen")},
+            )
+            return CaptureResult(
+                mode=mode, width=0, height=0, png_b64=None,
+                elements=[], app=app_name,
+                window_title=diagnostic,
+                png_bytes_len=0,
+            )
+
+        # Empty-after-retry: even after auto-raise, both the image and the
+        # AX tree came back empty. Do NOT return a bare 0x0 result — the
+        # model can't distinguish that from "target has no UI" and will
+        # loop the same capture. Surface a diagnostic explaining what to
+        # try instead (raise/focus the window, wait for the first paint,
+        # or ask the user to un-minimize).
+        if not png_b64 and not elements and mode != "vision":
+            return CaptureResult(
+                mode=mode, width=0, height=0, png_b64=None,
+                elements=[], app=app_name,
+                window_title=(
+                    f"<capture of app={app_name!r} returned no image and no "
+                    f"AX elements even after auto-raise. The window is "
+                    f"probably minimized, on another Space, or still painting "
+                    f"its first frame. Try: (1) call focus_app(app='{app_name}', "
+                    f"raise_window=true) then wait ~1s and re-capture; (2) if "
+                    f"the app was just launched, wait 2-3s for the first paint; "
+                    f"(3) if it stays empty, ask the user to bring the window "
+                    f"onto the current Space / un-minimize it. Do NOT retry "
+                    f"an identical capture — the state won't change on its own.>"
+                ),
+                png_bytes_len=0,
+            )
 
         return CaptureResult(
             mode=mode,
@@ -1824,21 +2097,25 @@ class CuaDriverBackend(ComputerUseBackend):
             return apps
         return []
 
-    def focus_app(self, app: str, raise_window: bool = False) -> ActionResult:
+    def focus_app(self, app: str, raise_window: bool = True) -> ActionResult:
         """Target an app for subsequent actions.
 
         Enumerates windows (incl. off-screen), finds the best match for *app*,
         and stores its pid/window_id so subsequent click/type calls hit the
         right process.
 
-        raise_window=True ALSO brings the matched window to the front (via
-        cua-driver bring_to_front). This is required for tasks that must
-        actually switch to a window and type into it — e.g. focusing an app
-        that lives on another Space / behind other windows. Cross-Space raise
-        can still fail on macOS (OS limitation), in which case the message says
-        so; the window is still targeted for input either way.
-        raise_window=False keeps the old pure-selector behavior (route input
-        without stealing the user's focus).
+        raise_window=True (the DEFAULT) also brings the matched window to the
+        front via cua-driver bring_to_front. This is what agents almost always
+        want: after a launch/switch, capture and click need the window to be
+        visible on the current Space or they'll see a blank 0x0 frame. The
+        raise can still fail on macOS for a cross-Space / minimized window
+        (OS limitation), in which case the message says so; the window is
+        still targeted for input either way.
+
+        raise_window=False is the rare background-input mode: route input
+        without stealing the user's focus. Only useful when you already
+        know the window is visible and you deliberately don't want to
+        disturb its z-order.
         """
         # Include off-screen windows: focus_app targets background windows too
         # (that's the point of background automation — route input to an app
@@ -2269,5 +2546,30 @@ class CuaDriverBackend(ComputerUseBackend):
             message = str(data.get("message", ""))
         elif isinstance(data, str):
             message = data
+        # ── Rewrite cua-driver's "scope violation" message into an actionable one.
+        # cua-driver 0.12 gates window-scope tools (click/scroll/type/drag/key/
+        # set_value) behind capture_scope="window" and returns messages of the
+        # shape:  window-scope tool 'click' is disabled while session '<id>'
+        #         is in desktop scope
+        # The raw text reads like "this specific attempt failed, try again",
+        # which sent agents into loops of retrying the same call with different
+        # coordinates. Rewrite it into a structured, prescriptive form so the
+        # model switches strategy (focus_app → capture(app=...) → click) on the
+        # first hit instead of after N failed retries.
+        if not ok and (
+            "is in desktop scope" in message
+            or "window-scope tool" in message
+        ):
+            hinted_app = self._last_app or "<AppName>"
+            message = (
+                f"TOOL_DISABLED_IN_SCOPE: '{name}' is a window-scope action "
+                f"but the current capture is in desktop scope (no window "
+                f"target). Do NOT retry with different coordinates — that "
+                f"cannot succeed. Fix the scope first: call "
+                f"focus_app(app='{hinted_app}') AND/OR "
+                f"capture(mode='som', app='{hinted_app}') to enter window "
+                f"scope on the intended app, then re-issue this action. "
+                f"(cua-driver raw: {message})"
+            )
         return ActionResult(ok=ok, action=name, message=message,
                             meta=data if isinstance(data, dict) else {})

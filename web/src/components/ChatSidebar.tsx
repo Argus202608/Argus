@@ -27,14 +27,12 @@ import { Button } from "@nous-research/ui/ui/components/button";
 import { Badge } from "@nous-research/ui/ui/components/badge";
 import { Card } from "@nous-research/ui/ui/components/card";
 
-import { ModelPickerDialog } from "@/components/ModelPickerDialog";
-import { ModelReloadConfirm } from "@/components/ModelReloadConfirm";
 import { GatewayClient, type ConnectionState } from "@/lib/gatewayClient";
 import { api, HERMES_BASE_PATH, buildWsAuthParam } from "@/lib/api";
 import { titleFromSessionInfoPayload } from "@/lib/chat-title";
 
 import { cn } from "@/lib/utils";
-import { AlertCircle, ChevronDown, RefreshCw } from "lucide-react";
+import { AlertCircle, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 interface SessionInfo {
@@ -97,7 +95,6 @@ export function ChatSidebar({
 
   const [state, setState] = useState<ConnectionState>("idle");
   const [info, setInfo] = useState<SessionInfo>({});
-  const [modelOpen, setModelOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // The badge shows config.yaml's main model (`model.default`) via
   // `/api/model/info` — the same value the Models page writes and a new chat
@@ -107,14 +104,6 @@ export function ChatSidebar({
   // elsewhere, so the badge would go stale. `/api/model/info` is profile-scoped
   // by `fetchJSON`, so it reads the same profile this sidebar is scoped to.
   const [effectiveModel, setEffectiveModel] = useState("");
-  // Set after the picker saves a model and the user declines the reload: config
-  // is updated but the running session keeps its model until rebuilt.
-  const [modelNotice, setModelNotice] = useState<string | null>(null);
-  // Short name of a just-saved model awaiting confirm to reload (a fresh chat
-  // session is how the running chat adopts it; we confirm before discarding it).
-  const [pendingReloadModel, setPendingReloadModel] = useState<string | null>(
-    null,
-  );
 
   const refreshEffectiveModel = useCallback(() => {
     void api
@@ -286,13 +275,9 @@ export function ChatSidebar({
 
   const reconnect = useCallback(() => {
     setError(null);
-    setModelNotice(null);
-    setPendingReloadModel(null);
     setVersion((v) => v + 1);
   }, []);
 
-  // The picker writes config.yaml over REST and reloads — it doesn't ride the
-  // sidecar gateway session, so it's available whenever the sidebar is mounted.
   const modelName = effectiveModel || info.model || "—";
   const modelLabel = modelName.split("/").slice(-1)[0] ?? "—";
   const banner = error ?? info.credential_warning ?? null;
@@ -310,39 +295,23 @@ export function ChatSidebar({
             model
           </div>
 
-          <Button
-            ghost
-            size="sm"
-            onClick={() => setModelOpen(true)}
-            className={cn(
-              "max-w-full min-w-0 px-0 py-0",
-              "self-start normal-case tracking-normal text-sm font-medium",
-              "hover:underline disabled:no-underline",
-            )}
-            title={modelName === "—" ? "switch model" : modelName}
+          {/* Read-only. Switching lives in the composer's model pill, which
+              hot-swaps the LIVE session (config.set → agent.switch_model).
+              This used to open a picker that wrote config.yaml over REST — which
+              could not affect the running agent, hence the "reload to apply"
+              confirm that used to follow it. Both are gone. */}
+          <div
+            className="max-w-full min-w-0 truncate text-sm font-medium"
+            title={modelName === "—" ? "no model" : modelName}
           >
-            <span className="flex min-w-0 max-w-full items-center gap-1">
-              <span className="truncate">{modelLabel}</span>
-
-              <ChevronDown className="size-3.5 shrink-0 text-text-secondary" />
-            </span>
-          </Button>
+            {modelLabel}
+          </div>
         </div>
 
         <Badge tone={STATE_TONE[state]} className="shrink-0">
           {STATE_LABEL[state]}
         </Badge>
       </Card>
-
-      {modelNotice && (
-        <Card className="flex items-start gap-2 border-warning/40 bg-warning/5 px-3 py-2 text-xs">
-          <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
-
-          <div className="wrap-break-word min-w-0 flex-1 text-text-secondary">
-            {modelNotice}
-          </div>
-        </Card>
-      )}
 
       {banner && (
         <Card className="flex items-start gap-2 border-destructive/40 bg-destructive/5 px-3 py-2 text-xs">
@@ -366,48 +335,6 @@ export function ChatSidebar({
         </Card>
       )}
 
-      {modelOpen && (
-        <ModelPickerDialog
-          // Same path the Models page uses (REST /api/model/set), not the
-          // sidecar config.set RPC, which didn't reliably land in the
-          // config.yaml the agent boots from. Always persisted (alwaysGlobal).
-          loader={api.getModelOptions}
-          alwaysGlobal
-          onApply={async ({ provider, model, confirmExpensiveModel }) => {
-            setModelNotice(null);
-            setPendingReloadModel(null);
-            const result = await api.setModelAssignment({
-              confirm_expensive_model: confirmExpensiveModel,
-              scope: "main",
-              provider,
-              model,
-            });
-            // confirm_required => the dialog shows the expensive-model prompt
-            // and calls back; don't announce until the user confirms.
-            if (!result.confirm_required) {
-              refreshEffectiveModel();
-              // Ask before reloading: applying the model starts a fresh chat.
-              setPendingReloadModel(model.split("/").slice(-1)[0]);
-            }
-            return result;
-          }}
-          onClose={() => {
-            setModelOpen(false);
-            refreshEffectiveModel();
-          }}
-        />
-      )}
-
-      <ModelReloadConfirm
-        model={pendingReloadModel}
-        onCancel={() => {
-          const m = pendingReloadModel;
-          setPendingReloadModel(null);
-          setModelNotice(
-            `Model set to ${m}. Run /new or refresh the page to apply it to this chat.`,
-          );
-        }}
-      />
     </aside>
   );
 }

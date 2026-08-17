@@ -1,5 +1,7 @@
 import { atom } from 'nanostores'
 
+import { translateNow } from '@/i18n'
+
 import { $gateway } from './gateway'
 import { $mmSessionId } from './multimodal'
 import { notifyError } from './notifications'
@@ -363,7 +365,7 @@ export function applyBgEvent(p: BgPayload): string {
     // A tool call failed (req ③: surface, don't swallow).
     const s = segFor()
     s.toolErrors = s.toolErrors || []
-    s.toolErrors.push({ name: String(p.target || p.brief || 'tool'), error: clipStr(p.findings || p.obs_summary || '调用失败', 120) })
+    s.toolErrors.push({ name: String(p.target || p.brief || 'tool'), error: clipStr(p.findings || p.obs_summary || translateNow('multimodal.misc.callFailed'), 120) })
   } else if (t === 'bg_progress') {
     // A search/recall dispatched — show it "in flight" (query, no result yet).
     const s = segFor()
@@ -376,8 +378,8 @@ export function applyBgEvent(p: BgPayload): string {
     const s = segFor()
     const kind = t === 'recall_done' ? 'recall' : 'search'
     const query = clipStr(p.brief, 80)
-    const clues = t === 'recall_done' && p.n_clues ? ` · ${p.n_clues} 条线索` : ''
-    const result = `找到 ${p.findings_len || 0} 字${clues}` + fmtElapsed(p.elapsed_sec)
+    const clues = t === 'recall_done' && p.n_clues ? translateNow('multimodal.misc.clues', p.n_clues) : ''
+    const result = translateNow('multimodal.misc.foundChars', p.findings_len || 0, clues) + fmtElapsed(p.elapsed_sec)
     const existing = s.lookups.find(l => l.kind === kind && l.query === query && !l.done)
     if (existing) { existing.result = result; existing.done = true }
     else s.lookups.push({ kind, query, result, done: true })
@@ -475,7 +477,7 @@ export async function toggleMonitor(monitorId: string, enabled: boolean): Promis
     )
     // ★ 顶部提示失败原因 (而不是开关静默弹回, 用户不知为何); 2s 后自动淡出消失
     //   —— 恢复监控但没开视频流是常见的临时状态, 不该常驻顶栏要手动关。
-    if (enabled) notifyError(err, '无法开启监控', { durationMs: 2_000 })
+    if (enabled) notifyError(err, translateNow('multimodal.misc.cannotEnableMonitor'), { durationMs: 2_000 })
   }
 }
 
@@ -525,7 +527,7 @@ export async function toggleWatcher(watcherId: string, enabled: boolean): Promis
     $mmWatchers.set(
       $mmWatchers.get().map(r => (r === optimistic ? current : r))
     )
-    notifyError(err, enabled ? '无法开启深度研究' : '无法暂停深度研究', { durationMs: 2_000 })
+    notifyError(err, enabled ? translateNow('multimodal.misc.cannotEnableResearch') : translateNow('multimodal.misc.cannotPauseResearch'), { durationMs: 2_000 })
   }
 }
 

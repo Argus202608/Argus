@@ -5,7 +5,7 @@ import { persistString, storedString } from '@/lib/storage'
 import { notifyError } from './notifications'
 import { setCurrentFastMode, setCurrentReasoningEffort } from './session'
 
-const STORAGE_KEY = 'hermes.desktop.model-presets'
+const STORAGE_KEY = 'argus.desktop.model-presets'
 
 /** Per-model reasoning/fast preset, remembered globally across sessions and
  *  re-applied to the session whenever that model is selected. Unset dimensions
@@ -74,7 +74,15 @@ export async function applyModelPreset(
 
   try {
     if (effort !== undefined) {
-      await ctx.request('config.set', { key: 'reasoning', session_id: ctx.sessionId, value: effort })
+      // scope:"session" — see the note in ModelEditSubmenu.patchReasoning. A
+      // global write here would both miss the already-built agent and be erased
+      // on the next start by sync_project_config.
+      await ctx.request('config.set', {
+        key: 'reasoning',
+        scope: 'session',
+        session_id: ctx.sessionId,
+        value: effort
+      })
     }
 
     if (fast !== undefined) {

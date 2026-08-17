@@ -20,7 +20,7 @@ vi.mock('./multimodal', () => ({
 }))
 vi.mock('./multimodal-deep', () => ({ pushMmToast }))
 
-import { startEnvAudio, stopEnvAudio } from './multimodal-voice'
+import { startEnvAudio, startMic, stopEnvAudio, stopMic } from './multimodal-voice'
 
 interface FakeTrack {
   clone: ReturnType<typeof vi.fn>
@@ -202,6 +202,49 @@ describe('screen-share environment audio ownership', () => {
     expect(original.stop).not.toHaveBeenCalled()
   })
 
+  it('keeps loopback env audio alive while an ordinary mic turn starts and cancels', async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === 'multimodal.asr_start') {
+        return { enabled: true }
+      }
+
+      return { ok: true, ingested: true }
+    })
+
+    const { clone, original, stream } = audioSource()
+    const micTrack = { stop: vi.fn() }
+
+    const micStream = {
+      getTracks: vi.fn(() => [micTrack])
+    } as unknown as MediaStream
+
+    gatewayAtom.set({ request })
+    sessionIdAtom.set('runtime-audio')
+    vi.stubGlobal('navigator', {
+      mediaDevices: {
+        getUserMedia: vi.fn(async () => micStream)
+      }
+    })
+
+    startEnvAudio(stream)
+    const envRecorder = FakeMediaRecorder.instances[0]
+
+    await startMic()
+    await stopMic()
+
+    expect(micTrack.stop).toHaveBeenCalledTimes(1)
+    expect(envRecorder.state).toBe('recording')
+    expect(clone.stop).not.toHaveBeenCalled()
+    expect(original.stop).not.toHaveBeenCalled()
+
+    await finishCurrentChunk()
+
+    expect(request).toHaveBeenCalledWith(
+      'multimodal.env_audio',
+      expect.objectContaining({ session_id: 'runtime-audio' })
+    )
+  })
+
   it('retries with the browser default when an explicit MIME fails at start', () => {
     FakeMediaRecorder.startErrors = [new Error('explicit encoder failed'), null]
 
@@ -261,7 +304,7 @@ describe('screen-share environment audio ownership', () => {
     expect(pushMmToast).toHaveBeenCalledTimes(1)
     expect(pushMmToast).toHaveBeenCalledWith({
       level: 'error',
-      text: '共享音频没有收到有效采样，请检查 macOS“屏幕与系统音频录制”权限，然后停止并重新共享屏幕。'
+      text: 'Shared audio received no valid samples. Check macOS "Screen & System Audio Recording" permission, then stop and re-share the screen.'
     })
   })
 
@@ -332,7 +375,7 @@ describe('screen-share environment audio ownership', () => {
     expect(pushMmToast).toHaveBeenCalledTimes(1)
     expect(pushMmToast).toHaveBeenCalledWith({
       level: 'error',
-      text: '共享音频 ASR 未接收: decoder_failed'
+      text: 'Shared audio ASR not received: decoder_failed'
     })
   })
 
@@ -348,7 +391,7 @@ describe('screen-share environment audio ownership', () => {
     expect(pushMmToast).toHaveBeenCalledTimes(1)
     expect(pushMmToast).toHaveBeenCalledWith({
       level: 'error',
-      text: '共享音频 ASR 请求失败: backend offline'
+      text: 'Shared audio ASR request failed: backend offline'
     })
   })
 

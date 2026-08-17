@@ -128,7 +128,7 @@ def _isolated_home(monkeypatch):
     """Redirect the analyse/ dir to a throwaway temp home so no real files are
     written (watch_file.watch_dir reads HERMES_HOME)."""
     with tempfile.TemporaryDirectory() as d:
-        monkeypatch.setenv("HERMES_HOME", d)
+        monkeypatch.setenv("ARGUS_HOME", d)
         yield d
 
 

@@ -2,7 +2,7 @@
 
 Regression coverage for the partial-install bug where uv's incremental
 resolver silently failed to land ``pathspec`` (and similar newly-added
-base deps) during ``hermes update``, leaving the venv in a broken state
+base deps) during ``argus update``, leaving the venv in a broken state
 that only surfaced hours later when a downstream subprocess imported the
 missing module.
 
@@ -243,7 +243,7 @@ class TestVerifyCoreDependencies:
 class TestResolveInstallTargetPython:
     def test_uses_virtual_env_from_environment(self, tmp_path):
         """When VIRTUAL_ENV is set, the verification step must probe THAT
-        venv's interpreter — not the outer Python that drove `hermes update`.
+        venv's interpreter — not the outer Python that drove `argus update`.
         If we probed sys.executable instead, we'd false-positive every dep
         the outer interpreter happens to lack."""
         venv_root = tmp_path / "newvenv"

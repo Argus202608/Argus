@@ -119,7 +119,7 @@ describe("QueryWorker Recall progress mapping", () => {
       ],
     }));
 
-    expect(mapped?.step.title).toContain("冻结输入帧 3");
+    expect(mapped?.step.title).toContain("frozen input frames 3");
     expect(mapped?.step.frames).toHaveLength(3);
     expect(mapped?.step.frames?.map((frame) => frame.ts)).toEqual([19.5, 20.5, 21.5]);
 
@@ -129,11 +129,11 @@ describe("QueryWorker Recall progress mapping", () => {
       steps: [mapped!.step],
     }));
 
-    expect(html).toContain("提问时刻冻结输入帧（QueryWorker 实际输入的同源缩略图）");
+    expect(html).toContain("Frozen input frames at ask-time (actual thumbnails seen by QueryWorker)");
     expect(html.match(/<img/g)).toHaveLength(3);
     expect(html.match(/target="_blank"/g)).toHaveLength(3);
     expect(html).toContain("data:image/jpeg;base64,frame-one");
-    expect(html).toContain("输入帧 3");
+    expect(html).toContain("Input frame 3");
     expect(html).toContain("screen");
   });
 
@@ -144,7 +144,7 @@ describe("QueryWorker Recall progress mapping", () => {
       frames: [],
     }));
 
-    expect(mapped?.step.title).toContain("冻结输入帧 0");
+    expect(mapped?.step.title).toContain("frozen input frames 0");
     expect(mapped?.step.frames).toBeUndefined();
   });
 
@@ -191,13 +191,12 @@ describe("QueryWorker Recall progress mapping", () => {
       status: "running",
       steps: [live!.step],
     }));
-    expect(html).toContain("OCR 辅助文字");
-    expect(html).toContain("摄像头");
-    expect(html).toContain("屏幕共享");
-    expect(html).toContain("摄像头即时 OCR");
-    expect(html).toContain("后台 OCR 缓存");
-    expect(html).toContain("屏幕即时 OCR");
+    expect(html).toContain("OCR helper text");
+    expect(html).toContain("Camera live OCR");
+    expect(html).toContain("Screen live OCR");
+    expect(html).toContain("Background OCR cache");
     expect(html).toContain("00:19.5");
+    // Backend OCR text stays verbatim — it is captured content, not UI copy.
     expect(html).toContain("东方树叶");
     expect(html).toContain("500 mL");
     expect(html).toContain("售价 5 元");
@@ -229,9 +228,9 @@ describe("QueryWorker Recall progress mapping", () => {
   });
 
   it.each([
-    ["empty", "", "OCR 已完成，但没有识别到可用文字。"],
-    ["skipped", "ocr_unavailable", "已跳过 OCR：OCR 服务当前不可用。"],
-    ["error", "deadline_exceeded", "OCR 超时；QueryWorker 已继续使用原始画面"],
+    ["empty", "", "OCR completed but no usable text was recognized."],
+    ["skipped", "ocr_unavailable", "OCR skipped: OCR service currently unavailable."],
+    ["error", "deadline_exceeded", "OCR timed out; QueryWorker continued with the original frame"],
   ])("renders a clear %s OCR state", (evidenceState, reason, expected) => {
     const mapped = queryWorkerProgressFromTrajectory(trajectory("ocr_evidence", {}, {
       evidence_state: evidenceState,
@@ -268,7 +267,8 @@ describe("QueryWorker Recall progress mapping", () => {
     }));
 
     expect(mapped?.step.worker).toBe("RecallWorker");
-    expect(mapped?.step.title).toContain("继续检索 1 个工具");
+    expect(mapped?.step.title).toContain("continue with 1 more tool");
+    // detail is backend-authored (decision_summary / useful_info) — stays verbatim.
     expect(mapped?.step.detail).toContain("证据不足");
     expect(mapped?.step.detail).toContain("已找到探店话题");
     expect(mapped?.step.detail).not.toContain("hidden raw reasoning");
@@ -276,8 +276,8 @@ describe("QueryWorker Recall progress mapping", () => {
       name: "search_audio",
       args: { query: "探店", top_k: 8 },
     }]);
-    expect(mapped?.step.title).toContain("Recall 第1轮决策");
-    expect(mapped?.step.metrics).toContain("已有线索 2");
+    expect(mapped?.step.title).toContain("Recall round 1 decision");
+    expect(mapped?.step.metrics).toContain("clues so far 2");
   });
 
   it("renders bounded tool observations and ignores legacy full observations", () => {
@@ -345,7 +345,7 @@ describe("QueryWorker Recall progress mapping", () => {
         args: { brief: "金发男子的攀岩鞋品牌" },
       },
     ]);
-    expect(mapped?.step.metrics).toContain("触发片段 02:22–02:28 · 12 帧");
+    expect(mapped?.step.metrics).toContain("Trigger clip 02:22–02:28 · 12 frames");
     expect(JSON.stringify(mapped)).not.toContain("hidden raw reasoning");
   });
 
@@ -358,7 +358,7 @@ describe("QueryWorker Recall progress mapping", () => {
       thought: "hidden raw reasoning",
     }));
 
-    expect(mapped?.step.title).toContain("本轮未调用 Recall / Search");
+    expect(mapped?.step.title).toContain("no Recall / Search this round");
     expect(mapped?.step.plannedTools).toBeUndefined();
     expect(JSON.stringify(mapped)).not.toContain("hidden raw reasoning");
   });
@@ -376,7 +376,7 @@ describe("QueryWorker Recall progress mapping", () => {
 
     expect(mapped?.step.callState).toBe("called");
     expect(mapped?.step.taskRef).toBe("r0_s1");
-    expect(mapped?.step.title).toContain("Search 调用 · text_search");
+    expect(mapped?.step.title).toContain("Search call · text_search");
   });
 
   it("shows Search parameters, result preview, source URLs and cache state", () => {
@@ -409,7 +409,7 @@ describe("QueryWorker Recall progress mapping", () => {
       anchor_ts: 148,
     }]);
     expect(mapped?.step.metrics).toContain("cache hit");
-    expect(mapped?.step.metrics).toContain("触发片段 02:22–02:28 · 12 帧");
+    expect(mapped?.step.metrics).toContain("Trigger clip 02:22–02:28 · 12 frames");
   });
 
   it("formats Recall evidence timestamps for display", () => {
@@ -462,7 +462,7 @@ describe("QueryWorker Recall progress mapping", () => {
     }));
 
     expect(mapped?.step.status).toBe("error");
-    expect(mapped?.step.title).toContain("Recall 请求失败");
+    expect(mapped?.step.title).toContain("Recall request failed");
     expect(mapped?.step.detail).toBe("HTTP 400 Unknown parameter: top_k");
     expect(mapped?.step.metrics).toContain("model GPT-5.6 Luna");
     expect(mapped?.step.terminal).toBeUndefined();
@@ -519,8 +519,8 @@ describe("QueryWorker Recall progress mapping", () => {
       brief: "店主找谁探店",
     }));
 
-    expect(duplicate?.step.title).toContain("跳过重复 Recall");
-    expect(exhausted?.step.title).toContain("连续失败 2 次");
+    expect(duplicate?.step.title).toContain("Skipped duplicate Recall");
+    expect(exhausted?.step.title).toContain("failed twice in a row");
   });
 
   it("keeps a long out-of-order trace sorted, deduplicated, and bounded", () => {
@@ -572,8 +572,8 @@ describe("QueryWorker Recall progress mapping", () => {
       steps: [dispatch!.step, result!.step],
     }));
 
-    expect(html).toContain("实际调用");
-    expect(html).toContain("工具返回");
+    expect(html).toContain("Actual call");
+    expect(html).toContain("Tool returned");
     expect(html).toContain("r0_s0");
     expect(html).toContain("SCARPA 是意大利户外鞋品牌。");
     expect(html).toContain("https://example.test/scarpa");
@@ -745,7 +745,6 @@ describe("tool call argument visibility", () => {
     }]);
 
     expect(markup).toContain("<details");
-    expect(markup).toContain("入参");
     expect(markup).toContain("action");
     expect(markup).toContain("capture");
     expect(markup).toContain("Google Chrome");
@@ -764,7 +763,7 @@ describe("tool call argument visibility", () => {
     }]);
 
     expect(markup).toContain("G9");
-    expect(markup).toContain("22 字符");
+    expect(markup).toContain("22 chars (not shown)");
     expect(markup).not.toContain("hunter2");
   });
 
@@ -781,10 +780,10 @@ describe("tool call argument visibility", () => {
     }]);
 
     expect(markup).toContain("password");
-    expect(markup).toContain("已隐去");
+    expect(markup).toContain("Redacted (credentials)");
     expect(markup).not.toContain("hunter2");
     // No length leak: the credential row must not borrow the `chars` wording.
-    expect(markup).not.toContain("字符");
+    expect(markup).not.toContain("chars (not shown)");
   });
 
   it("renders the elided tail as a bare count with no key", () => {
@@ -797,7 +796,7 @@ describe("tool call argument visibility", () => {
       ],
     }]);
 
-    expect(markup).toContain("还有 4 个字段");
+    expect(markup).toContain("4 more fields (not shown)");
   });
 
   it("renders array/object args as a count", () => {
@@ -808,7 +807,7 @@ describe("tool call argument visibility", () => {
     }]);
 
     expect(markup).toContain("urls");
-    expect(markup).toContain("3 项");
+    expect(markup).toContain("3 items");
   });
 
   it("still renders a plain row when a tool has neither args nor output", () => {

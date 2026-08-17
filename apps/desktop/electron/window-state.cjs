@@ -6,12 +6,17 @@
  * live `screen` displays.
  */
 
-// Defaults mirror the historical hardcoded BrowserWindow size; MIN_* mirror its
-// minWidth/minHeight so a restored size never undershoots what the live window
-// allows. A fresh install (no saved state) is byte-identical to before.
+// A fresh install starts maximized (see shouldStartMaximized), so DEFAULT_* is
+// the *unmaximized* restore size — what the window becomes when the user clicks
+// zoom off. Keep it wide enough for the two-column shell (preview rail + chat);
+// at 600 the chat column collapses to ~200px and wraps to one word per line.
 const DEFAULT_WIDTH = 1220
 const DEFAULT_HEIGHT = 800
-const MIN_WIDTH = 400
+// MIN_* mirror the live window's minWidth/minHeight so a restored size never
+// undershoots what the window allows. MIN_WIDTH must clear the shell's own
+// minimums: the preview rail (PREVIEW_RAIL_MIN_WIDTH, 18rem = 288px) plus the
+// sidebar (237px) already eat 525px, so anything near 400 leaves chat unusable.
+const MIN_WIDTH = 900
 const MIN_HEIGHT = 620
 
 // Keep at least this much of the window over a display work area before we trust
@@ -23,13 +28,20 @@ const clamp = (v, lo, hi) => Math.max(lo, Math.min(v, hi))
 
 // Parse raw JSON → clean state, or null if garbage. width/height are required
 // and floored; x/y survive only as a finite pair; isMaximized is strict.
+//
+// `wasTooNarrow` records that the *saved* width was below MIN_WIDTH, i.e. the
+// geometry predates MIN_WIDTH covering the two-column shell. Flooring the width
+// alone would leave such a window un-maximized at an arbitrary size, so
+// shouldStartMaximized() uses this to treat the state as unusable rather than as
+// a deliberate user choice.
 function sanitizeWindowState(raw) {
   if (!raw || typeof raw !== 'object' || !finite(raw.width) || !finite(raw.height)) return null
 
   const state = {
     width: Math.max(MIN_WIDTH, Math.round(raw.width)),
     height: Math.max(MIN_HEIGHT, Math.round(raw.height)),
-    isMaximized: raw.isMaximized === true
+    isMaximized: raw.isMaximized === true,
+    wasTooNarrow: Math.round(raw.width) < MIN_WIDTH
   }
   if (finite(raw.x) && finite(raw.y)) {
     state.x = Math.round(raw.x)
@@ -84,6 +96,23 @@ function computeWindowOptions(state, displays) {
   return opts
 }
 
+// Should the main window open maximized? A fresh install (no saved state) does,
+// so the two-column shell gets the full work area instead of the DEFAULT_WIDTH
+// box. Once the user has a saved state we respect their choice exactly — an
+// explicit un-maximize must survive the next launch, so absent/false both mean
+// "don't maximize" here and only a literal `true` opts back in.
+//
+// Exception: a state whose saved width was narrower than MIN_WIDTH can't be a
+// deliberate choice, because the window could never have been dragged that
+// narrow — it was written while DEFAULT_WIDTH was briefly 600 (too narrow for
+// the shell; chat wrapped to one word per line). Maximize those instead of
+// restoring a size the layout can't use.
+function shouldStartMaximized(state) {
+  if (!state) return true
+  if (state.wasTooNarrow) return true
+  return state.isMaximized === true
+}
+
 // Trailing debounce: collapse a burst of resize/move events (Linux fires many
 // mid-drag) into a single run `delayMs` after the last. `.flush()` runs now and
 // cancels the pending timer — used on close, before the window is gone.
@@ -113,5 +142,6 @@ module.exports = {
   sanitizeWindowState,
   onScreen,
   computeWindowOptions,
+  shouldStartMaximized,
   debounce
 }

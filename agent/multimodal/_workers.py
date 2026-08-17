@@ -41,6 +41,12 @@ except ImportError:  # pragma: no cover
 import httpx
 from openai import AsyncOpenAI
 
+from agent.multimodal._sentinels import (
+    RECALL_NO_CLUES,
+    SYNTH_THOUGHT_CONTINUE,
+    SYNTH_THOUGHT_DIRECT,
+)
+
 log = logging.getLogger("hermes.multimodal")
 
 
@@ -935,12 +941,12 @@ class QwenVLOCRClient:
 
 
 def _dump_ocr_debug(fr: Frame, raw_text: str, blocks: List[Dict[str, Any]]) -> None:
-    """Dump the OCR input frame and parsed text when HERMES_OCR_DUMP=1."""
-    if os.environ.get("HERMES_OCR_DUMP", "0").strip().lower() not in {
+    """Dump the OCR input frame and parsed text when ARGUS_OCR_DUMP=1."""
+    if os.environ.get("ARGUS_OCR_DUMP", "0").strip().lower() not in {
             "1", "true", "yes", "on"}:
         return
     try:
-        home = os.environ.get("HERMES_HOME") or os.path.expanduser("~/.hermes")
+        home = os.environ.get("ARGUS_HOME") or os.path.expanduser("~/.argus")
         dump_dir = os.path.join(home, "tmp", "ocr_dump")
         os.makedirs(dump_dir, exist_ok=True)
         stamp = datetime.now().strftime("%H%M%S_%f")[:-3]
@@ -971,7 +977,7 @@ def _dump_ocr_debug(fr: Frame, raw_text: str, blocks: List[Dict[str, Any]]) -> N
             "[ocr-dump] wrote %s (blocks=%d text_len=%d)",
             os.path.basename(jpg_path), len(blocks), len(raw_text))
         try:
-            keep = int(os.environ.get("HERMES_OCR_DUMP_KEEP", "200") or 200)
+            keep = int(os.environ.get("ARGUS_OCR_DUMP_KEEP", "200") or 200)
         except ValueError:
             keep = 200
         if keep > 0:
@@ -7879,8 +7885,8 @@ class WatcherWorker:
                         # thought 为空时 (自解释场景) 合成一句进度行, 面板"👁看到"不空白。
                         _thought = (step.thought or "").strip()
                         if not _thought:
-                            _thought = ("Continue inspecting this segment." if _has_tools
-                                        else "This segment can be answered directly from the frames.")
+                            _thought = (SYNTH_THOUGHT_CONTINUE if _has_tools
+                                        else SYNTH_THOUGHT_DIRECT)
                         await on_event({"type": "router_react", "round": round_idx,
                                         "thought": _thought,
                                         "answer_len": len(step.answer),
@@ -8121,7 +8127,7 @@ class WatcherWorker:
                                                 "elapsed_sec": rres.elapsed_sec,
                                                 "found": bool(
                                                     rres.findings
-                                                    and rres.findings != "(记忆里未找到相关线索)"),
+                                                    and rres.findings != RECALL_NO_CLUES),
                                                 "findings_preview": rres.findings[:2000],
                                                 "frame_ids": list(rres.frame_ids),
                                                 "frames": self._build_ui_frame_payload(
@@ -10549,7 +10555,8 @@ class RecallAgent:
         sentinel_or_empty = (
             "NO_USEFUL_INFORMATION_THIS_ROUND",
             "本轮工具无有效信息",
-            "记忆里未找到相关线索",
+            "记忆里未找到相关线索",  # legacy Chinese sentinel (backward compat)
+            RECALL_NO_CLUES,  # new language-neutral sentinel
         )
         if any(s in c for s in sentinel_or_empty):
             return False
@@ -10937,7 +10944,7 @@ class RecallAgent:
                 break
 
         if not final_findings:
-            final_findings = "\n".join(clues) or "(no relevant clues found in memory)"
+            final_findings = "\n".join(clues) or RECALL_NO_CLUES
 
         # ★ 末尾视觉验收: 过滤掉不含目标的召回帧 (recall 按关键词/图谱召回易带噪声帧).
         #   解析失败/全删时退回原 fids (兜底, 不冒险丢光让 Router 没帧可用).

@@ -94,10 +94,12 @@ function createMessageStreamHarness(initialState: ClientSessionState) {
   const activeSessionIdRef: MutableRefObject<string | null> = { current: SESSION_ID }
   setActiveSessionId(SESSION_ID)
 
+  const hydrateFromStoredSession = vi.fn(async () => undefined)
+
   const hook = renderHook(() =>
     useMessageStream({
       activeSessionIdRef,
-      hydrateFromStoredSession: vi.fn(async () => undefined),
+      hydrateFromStoredSession,
       queryClient: { invalidateQueries: vi.fn() } as unknown as QueryClient,
       refreshHermesConfig: vi.fn(async () => undefined),
       refreshSessions: vi.fn(async () => undefined),
@@ -109,6 +111,7 @@ function createMessageStreamHarness(initialState: ClientSessionState) {
   return {
     ...hook,
     getState: () => state,
+    hydrateFromStoredSession,
     update: (updater: (current: ClientSessionState) => ClientSessionState) =>
       updateSessionState(SESSION_ID, updater),
     updateSessionState
@@ -499,5 +502,91 @@ describe('useMessageStream deferred QueryWorker routing', () => {
     expect(state.messages.find(message => message.id === foregroundStreamId)?.pending).toBe(true)
     expect($busy.get()).toBe(true)
     expect($clarifyRequests.get()[SESSION_ID]?.requestId).toBe('clarify-q2')
+  })
+})
+
+// A failed turn is deliberately not persisted as assistant text by the backend
+// (gateway/run.py:10580), so if the completion isn't marked as an error the
+// post-turn hydrate refetches a turn with no reply and erases the message the
+// user just saw — it flashes on screen and vanishes. The gateway always sends
+// status:"error" for these, so the status field alone must drive the decision;
+// matching on the text was unreliable because the gateway prepends "Error: "
+// when the backend produced no visible output.
+describe('useMessageStream failed-turn completions', () => {
+  afterEach(() => {
+    cleanup()
+    setActiveSessionId(null)
+    $busy.set(false)
+  })
+
+  const QUOTA_ERRORS = [
+    'Billing or credits exhausted: 402 insufficient credits',
+    'Error: 429 You exceeded your current quota',
+    'Error: Context length exceeded (250,000 tokens). Cannot compress further.',
+    'Error: content_policy_blocked: flagged'
+  ]
+
+  it.each(QUOTA_ERRORS)('keeps %s as an inline error and skips hydrate', errorText => {
+    const harness = createMessageStreamHarness(
+      stateWithMessages([{ id: 'user-quota', role: 'user', parts: [textPart('你好')] }])
+    )
+
+    act(() => {
+      harness.result.current.handleGatewayEvent({
+        type: 'message.complete',
+        session_id: SESSION_ID,
+        payload: { status: 'error', text: errorText }
+      })
+    })
+
+    const state = harness.getState()
+    const assistant = state.messages.find(message => message.role === 'assistant')
+
+    expect(assistant?.error).toBe(errorText)
+    expect(assistant?.pending).toBe(false)
+    // The decisive assertion: hydrate would overwrite this bubble with a stored
+    // turn that has no assistant reply, which is exactly the disappearance bug.
+    expect(harness.hydrateFromStoredSession).not.toHaveBeenCalled()
+    expect(state.busy).toBe(false)
+    expect(state.awaitingResponse).toBe(false)
+  })
+
+  it('labels an errored turn that carries no text at all', () => {
+    const harness = createMessageStreamHarness(
+      stateWithMessages([{ id: 'user-empty', role: 'user', parts: [textPart('你好')] }])
+    )
+
+    act(() => {
+      harness.result.current.handleGatewayEvent({
+        type: 'message.complete',
+        session_id: SESSION_ID,
+        payload: { status: 'error', text: '' }
+      })
+    })
+
+    const assistant = harness.getState().messages.find(message => message.role === 'assistant')
+
+    expect(assistant?.error).toBeTruthy()
+    expect(harness.hydrateFromStoredSession).not.toHaveBeenCalled()
+  })
+
+  it('still hydrates a successful completion', () => {
+    const harness = createMessageStreamHarness(
+      stateWithMessages([{ id: 'user-ok', role: 'user', parts: [textPart('你好')] }])
+    )
+
+    act(() => {
+      harness.result.current.handleGatewayEvent({
+        type: 'message.complete',
+        session_id: SESSION_ID,
+        payload: { status: 'complete', text: '嗨' }
+      })
+    })
+
+    const assistant = harness.getState().messages.find(message => message.role === 'assistant')
+
+    expect(assistant?.error).toBeUndefined()
+    expect(chatMessageText(assistant!)).toBe('嗨')
+    expect(harness.hydrateFromStoredSession).toHaveBeenCalled()
   })
 })

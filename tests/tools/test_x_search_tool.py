@@ -231,7 +231,7 @@ def test_x_search_retries_5xx_then_succeeds(monkeypatch):
 
 def _no_xai_env(monkeypatch):
     """Strip any XAI_* env vars so the resolver doesn't see a leaked dev key."""
-    for var in ("XAI_API_KEY", "XAI_BASE_URL", "HERMES_XAI_BASE_URL"):
+    for var in ("XAI_API_KEY", "XAI_BASE_URL", "ARGUS_XAI_BASE_URL"):
         monkeypatch.delenv(var, raising=False)
 
 
@@ -375,7 +375,7 @@ def test_x_search_returns_tool_error_when_no_credentials(monkeypatch):
     # surfaces a friendly error rather than an HTTP exception.
     result = x_search_tool(query="anything")
     assert "No xAI credentials available" in result
-    assert "hermes auth add xai-oauth" in result
+    assert "argus auth add xai-oauth" in result
 
 
 def test_x_search_check_fn_false_when_resolver_raises(monkeypatch):
@@ -402,7 +402,7 @@ def test_x_search_honors_config_model_and_timeout(monkeypatch, tmp_path):
 
     monkeypatch.setenv("XAI_API_KEY", "xai-test-key")
 
-    # Patch the in-module config loader so tests don't touch ~/.hermes/config.yaml.
+    # Patch the in-module config loader so tests don't touch ~/.argus/config.yaml.
     monkeypatch.setattr(
         "tools.x_search_tool._load_x_search_config",
         lambda: {"model": "grok-custom-test", "timeout_seconds": 45, "retries": 0},

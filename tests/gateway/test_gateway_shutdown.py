@@ -416,7 +416,7 @@ async def test_signal_initiated_shutdown_persists_running_not_stopped(tmp_path, 
 @pytest.mark.asyncio
 async def test_operator_initiated_stop_persists_stopped(tmp_path, monkeypatch):
     """A planned stop (marker written → not signal-initiated) must persist
-    gateway_state=stopped so an explicit `hermes gateway stop` stays down."""
+    gateway_state=stopped so an explicit `argus gateway stop` stays down."""
     monkeypatch.setattr(gateway_run, "_hermes_home", tmp_path)
     runner, adapter = make_restart_runner()
     adapter.disconnect = AsyncMock()

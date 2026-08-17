@@ -6,9 +6,11 @@ import { Input } from "@nous-research/ui/ui/components/input";
 import { Label } from "@nous-research/ui/ui/components/label";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { ThinkingSlider } from "@/components/ThinkingSlider";
-import { getReasoningEffort, setReasoningEffort } from "@/lib/config-api";
+import {
+  getReasoningEffort,
+  setReasoningEffort,
+} from "@/lib/config-api";
 import { normalizeEffort, VALID_EFFORTS } from "@/lib/reasoning-effort";
-import type { GatewayClient } from "@/lib/gatewayClient";
 import { Check, Search, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -22,17 +24,18 @@ import { fuzzyRank } from "@/lib/fuzzy";
  *   Stage 1: pick provider (authenticated providers only)
  *   Stage 2: pick model within that provider
  *
- * Two invocation modes:
+ * One invocation mode: pass a `loader` and `onApply`. The picker fetches
+ * options over REST and calls `onApply({provider, model, ...})`, which writes
+ * the config.yaml baseline for NEW sessions (ModelsPage main/auxiliary/MoA).
  *
- * 1. Chat-session mode (ChatSidebar) — pass `gw` + `sessionId`. The picker
- *    loads options via `model.options` JSON-RPC and applies the choice via
- *    `config.set`, so expensive-model confirmation can happen before switch.
- *
- * 2. Standalone mode (ModelsPage, Config settings) — pass a `loader` and
- *    `onApply`. The picker fetches options via the REST endpoint and calls
- *    `onApply(provider, model, persistGlobal)` instead of emitting a slash
- *    command.  This lets the Models page reuse the same UI without
- *    requiring an open chat PTY.
+ * ★ This dialog is deliberately NOT a session-switch surface. Hot-swapping the
+ *   model on a LIVE session is `config.set{key:"model"}` → agent.switch_model(),
+ *   and it belongs to the composer's ChatModelPill (see lib/config-api
+ *   setSessionModel). This picker used to carry two extra branches for that
+ *   (`gw`+`sessionId` → config.set, and `onSubmit` → a /model slash command),
+ *   but every caller passed `onApply`, so both were unreachable — and the one
+ *   chat surface that used it wrote config.yaml over REST, which cannot affect a
+ *   running agent. They were removed rather than left as a second path to drift.
  */
 
 interface ModelOptionProvider {
@@ -56,10 +59,6 @@ interface ExpensiveModelConfirmResponse {
   warning?: string;
 }
 
-interface ConfigSetResponse extends ExpensiveModelConfirmResponse {
-  value?: string;
-}
-
 interface PendingExpensiveConfirm {
   message: string;
   model: string;
@@ -68,14 +67,10 @@ interface PendingExpensiveConfirm {
 }
 
 interface Props {
-  /** Chat-mode: when present, picker emits a slash command via onSubmit. */
-  gw?: GatewayClient;
-  sessionId?: string;
-  onSubmit?(slashCommand: string): void;
-
-  /** Standalone-mode: when present (and onSubmit absent), picker calls onApply. */
-  loader?(): Promise<ModelOptionsResponse>;
-  onApply?(args: {
+  /** Fetches the provider/model catalog over REST. */
+  loader(): Promise<ModelOptionsResponse>;
+  /** Writes the choice as the config.yaml baseline for new sessions. */
+  onApply(args: {
     confirmExpensiveModel?: boolean;
     provider: string;
     model: string;
@@ -93,16 +88,12 @@ interface Props {
 
 export function ModelPickerDialog(props: Props) {
   const {
-    gw,
-    sessionId,
-    onSubmit,
     loader,
     onApply,
     onClose,
     title = "Switch Model",
     alwaysGlobal = false,
   } = props;
-  const standalone = !!loader && !!onApply;
 
   const [providers, setProviders] = useState<ModelOptionProvider[]>([]);
   const [currentModel, setCurrentModel] = useState("");
@@ -127,14 +118,7 @@ export function ModelPickerDialog(props: Props) {
   useEffect(() => {
     closedRef.current = false;
 
-    const promise = standalone
-      ? (loader as () => Promise<ModelOptionsResponse>)()
-      : (gw as GatewayClient).request<ModelOptionsResponse>(
-          "model.options",
-          sessionId ? { session_id: sessionId } : {},
-        );
-
-    promise
+    loader()
       .then((r) => {
         if (closedRef.current) return;
         const next = r?.providers ?? [];
@@ -231,65 +215,31 @@ export function ModelPickerDialog(props: Props) {
 
     if (!providerSlug || !model || applying) return;
 
-    if (standalone && onApply) {
-      setApplying(true);
-      try {
-        const result = await onApply({
-          confirmExpensiveModel,
+    setApplying(true);
+    try {
+      const result = await onApply({
+        confirmExpensiveModel,
+        provider: providerSlug,
+        model,
+        persistGlobal: shouldPersistGlobal,
+      });
+      if (result?.confirm_required) {
+        setPendingConfirm({
           provider: providerSlug,
           model,
           persistGlobal: shouldPersistGlobal,
+          message:
+            result.confirm_message ||
+            result.warning ||
+            "This model has unusually high known pricing.",
         });
-        if (result?.confirm_required) {
-          setPendingConfirm({
-            provider: providerSlug,
-            model,
-            persistGlobal: shouldPersistGlobal,
-            message:
-              result.confirm_message ||
-              result.warning ||
-              "This model has unusually high known pricing.",
-          });
-          return;
-        }
-        onClose();
-      } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
-      } finally {
-        setApplying(false);
+        return;
       }
-    } else if (gw && sessionId) {
-      setApplying(true);
-      try {
-        const global = shouldPersistGlobal ? " --global" : "";
-        const result = await gw.request<ConfigSetResponse>("config.set", {
-          confirm_expensive_model: confirmExpensiveModel,
-          key: "model",
-          session_id: sessionId,
-          value: `${model} --provider ${providerSlug}${global}`,
-        });
-        if (result?.confirm_required) {
-          setPendingConfirm({
-            provider: providerSlug,
-            model,
-            persistGlobal: shouldPersistGlobal,
-            message:
-              result.confirm_message ||
-              result.warning ||
-              "This model has unusually high known pricing.",
-          });
-          return;
-        }
-        onClose();
-      } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
-      } finally {
-        setApplying(false);
-      }
-    } else if (onSubmit) {
-      const global = shouldPersistGlobal ? " --global" : "";
-      onSubmit(`/model ${model} --provider ${providerSlug}${global}`);
       onClose();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setApplying(false);
     }
   };
 
@@ -298,9 +248,14 @@ export function ModelPickerDialog(props: Props) {
     void applySelection();
   };
 
+  // This dialog has no session (see the header note), so the dial writes the
+  // config.yaml baseline for NEW sessions. Changing a LIVE session's effort is
+  // ChatModelPill's job, via setSessionReasoningEffort.
+  // ★ No `next === effort` short-circuit: see the matching note in
+  //   ChatModelPill.applyEffort — it made a persistence bug look like a dead
+  //   control by swallowing clicks on the currently-displayed tier.
   const applyEffort = (next: string) => {
-    if (!VALID_EFFORTS.has(next)) return;
-    if (next === effort || savingEffort) return;
+    if (!VALID_EFFORTS.has(next) || savingEffort) return;
     const prev = effort;
     setEffort(next); // optimistic
     setSavingEffort(true);

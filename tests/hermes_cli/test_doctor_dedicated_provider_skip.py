@@ -1,4 +1,4 @@
-"""Regression: hermes doctor must not run a generic Bearer-auth health
+"""Regression: argus doctor must not run a generic Bearer-auth health
 check for providers that already have a dedicated check (Anthropic,
 OpenRouter, Bedrock).
 

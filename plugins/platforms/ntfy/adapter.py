@@ -564,7 +564,7 @@ def register(ctx) -> None:
         required_env=["NTFY_TOPIC"],
         install_hint="pip install httpx   # already a Hermes dependency",
         # Env-driven auto-configuration: seeds PlatformConfig.extra so
-        # env-only setups show up in `hermes gateway status` without
+        # env-only setups show up in `argus gateway status` without
         # instantiating the HTTP client.
         env_enablement_fn=_env_enablement,
         # Cron home-channel delivery support — `deliver=ntfy` cron jobs

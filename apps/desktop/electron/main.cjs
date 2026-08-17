@@ -255,8 +255,8 @@ var require_bootstrap_platform = __commonJS2({
     function detectRemoteDisplay2(options = {}) {
       const env2 = options.env ?? process.env;
       const platform = options.platform ?? process.platform;
-      const override = String(env2.HERMES_DESKTOP_DISABLE_GPU || "").trim().toLowerCase();
-      if (GPU_OVERRIDE_ON.has(override)) return "override (HERMES_DESKTOP_DISABLE_GPU)";
+      const override = String(env2.ARGUS_DESKTOP_DISABLE_GPU || "").trim().toLowerCase();
+      if (GPU_OVERRIDE_ON.has(override)) return "override (ARGUS_DESKTOP_DISABLE_GPU)";
       if (GPU_OVERRIDE_OFF.has(override)) return null;
       if (env2.SSH_CONNECTION || env2.SSH_CLIENT || env2.SSH_TTY) return "ssh-session";
       if (platform === "linux") {
@@ -316,7 +316,7 @@ var require_bootstrap_runner = __commonJS2({
     }
     function installedAgentInstallScript(hermesHome) {
       if (!hermesHome) return null;
-      const candidate = path2.join(hermesHome, "hermes-agent", "scripts", installScriptName());
+      const candidate = path2.join(hermesHome, "argus", "scripts", installScriptName());
       try {
         fs2.accessSync(candidate, fs2.constants.R_OK);
         return candidate;
@@ -329,7 +329,7 @@ var require_bootstrap_runner = __commonJS2({
     }
     function downloadInstallScript(commit, destPath) {
       const scriptName = installScriptName();
-      const url = `https://raw.githubusercontent.com/NousResearch/hermes-agent/${commit}/scripts/${scriptName}`;
+      const url = `https://raw.githubusercontent.com/MMArgus-Team/Argus/${commit}/scripts/${scriptName}`;
       return new Promise((resolve, reject) => {
         fs2.mkdirSync(path2.dirname(destPath), { recursive: true });
         const tmpPath = destPath + ".tmp";
@@ -490,9 +490,9 @@ var require_bootstrap_runner = __commonJS2({
             stdio: ["ignore", "pipe", "pipe"],
             env: {
               ...process.env,
-              // Pass HERMES_HOME through so install.ps1 respects the caller's
+              // Pass ARGUS_HOME through so install.ps1 respects the caller's
               // choice rather than re-computing the default.
-              HERMES_HOME: hermesHome || process.env.HERMES_HOME || ""
+              ARGUS_HOME: hermesHome || process.env.ARGUS_HOME || ""
             }
           })
         );
@@ -555,7 +555,7 @@ var require_bootstrap_runner = __commonJS2({
           stdio: ["ignore", "pipe", "pipe"],
           env: {
             ...process.env,
-            HERMES_HOME: hermesHome || process.env.HERMES_HOME || ""
+            ARGUS_HOME: hermesHome || process.env.ARGUS_HOME || ""
           }
         });
         let stdout = "";
@@ -1127,12 +1127,12 @@ var require_dashboard_token = __commonJS2({
     async function fetchPublicText(url, options = {}) {
       const { protocol: protocol2 } = new URL(url);
       if (protocol2 !== "http:" && protocol2 !== "https:") {
-        throw new Error(`Unsupported Hermes backend URL protocol: ${protocol2}`);
+        throw new Error(`Unsupported Argus backend URL protocol: ${protocol2}`);
       }
       const timeoutMs = options.timeoutMs ?? DEFAULT_TOKEN_FETCH_TIMEOUT_MS;
       const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) }).catch((error) => {
         if (error.name === "TimeoutError") {
-          throw new Error(`Timed out connecting to Hermes backend after ${timeoutMs}ms`);
+          throw new Error(`Timed out connecting to Argus backend after ${timeoutMs}ms`);
         }
         throw error;
       });
@@ -1141,7 +1141,7 @@ var require_dashboard_token = __commonJS2({
       return text;
     }
     function extractInjectedDashboardToken(html) {
-      const match = /window\.__HERMES_SESSION_TOKEN__\s*=\s*("(?:\\.|[^"\\])*")/.exec(String(html || ""));
+      const match = /window\.__ARGUS_SESSION_TOKEN__\s*=\s*("(?:\\.|[^"\\])*")/.exec(String(html || ""));
       if (!match) return null;
       try {
         return JSON.parse(match[1]);
@@ -1166,7 +1166,7 @@ var require_dashboard_token = __commonJS2({
     function isForeignBackendToken({ servedToken, spawnToken, childAlive }) {
       return Boolean(servedToken) && servedToken !== spawnToken && !childAlive;
     }
-    async function adoptServedDashboardToken2(baseUrl, spawnToken, { childAlive, label = "Hermes backend", ...options }) {
+    async function adoptServedDashboardToken2(baseUrl, spawnToken, { childAlive, label = "Argus backend", ...options }) {
       const servedToken = await resolveServedDashboardToken(baseUrl, spawnToken, options).catch((error) => {
         options.rememberLog?.(`[boot] could not read served dashboard token (${label}): ${error.message}`);
         return spawnToken;
@@ -1193,11 +1193,11 @@ var require_backend_ready = __commonJS2({
   "electron/backend-ready.cjs"(exports2, module2) {
     "use strict";
     var fs2 = require("node:fs");
-    var _READY_RE = /^HERMES_DASHBOARD_READY port=(\d+)/m;
+    var _READY_RE = /^ARGUS_DASHBOARD_READY port=(\d+)/m;
     var DEFAULT_PORT_ANNOUNCE_TIMEOUT_MS = 9e4;
     var MIN_PORT_ANNOUNCE_TIMEOUT_MS = 45e3;
     function resolvePortAnnounceTimeoutMs(env2 = process.env) {
-      const parsed = Number(env2.HERMES_DESKTOP_PORT_ANNOUNCE_TIMEOUT_MS);
+      const parsed = Number(env2.ARGUS_DESKTOP_PORT_ANNOUNCE_TIMEOUT_MS);
       if (Number.isFinite(parsed) && parsed > 0) {
         return Math.max(MIN_PORT_ANNOUNCE_TIMEOUT_MS, Math.round(parsed));
       }
@@ -1231,7 +1231,7 @@ var require_backend_ready = __commonJS2({
         }
         function onExit(code, signal) {
           cleanup();
-          reject(new Error(`Hermes backend: exited before port announcement (${signal || code})`));
+          reject(new Error(`Argus backend: exited before port announcement (${signal || code})`));
         }
         function onError(err) {
           cleanup();
@@ -1239,7 +1239,7 @@ var require_backend_ready = __commonJS2({
         }
         const timer = setTimeout(() => {
           cleanup();
-          reject(new Error(`Timed out waiting for Hermes backend port announcement (${timeoutMs}ms)`));
+          reject(new Error(`Timed out waiting for Argus backend port announcement (${timeoutMs}ms)`));
         }, timeoutMs);
         child.stdout.on("data", onData);
         child.on("exit", onExit);
@@ -1277,7 +1277,7 @@ var require_backend_ready = __commonJS2({
         }
         function onExit(code, signal) {
           cleanup();
-          reject(new Error(`Hermes backend: exited before port announcement (${signal || code})`));
+          reject(new Error(`Argus backend: exited before port announcement (${signal || code})`));
         }
         function onError(err) {
           cleanup();
@@ -1285,7 +1285,7 @@ var require_backend_ready = __commonJS2({
         }
         const timer = setTimeout(() => {
           cleanup();
-          reject(new Error(`Timed out waiting for Hermes backend port announcement (${timeoutMs}ms)`));
+          reject(new Error(`Timed out waiting for Argus backend port announcement (${timeoutMs}ms)`));
         }, timeoutMs);
         child.on("exit", onExit);
         child.on("error", onError);
@@ -1416,7 +1416,7 @@ var require_vscode_marketplace = __commonJS2({
           Accept: "application/json;api-version=3.0-preview.1",
           "Content-Type": "application/json",
           "Content-Length": Buffer.byteLength(body),
-          "User-Agent": "Hermes-Desktop"
+          "User-Agent": "Argus-Desktop"
         },
         body,
         maxBytes
@@ -1542,7 +1542,7 @@ var require_vscode_marketplace = __commonJS2({
         throw new Error('Expected a Marketplace id like "publisher.extension".');
       }
       const { displayName, vsixUrl } = await resolveExtension(trimmed);
-      const vsix = await request(vsixUrl, { headers: { "User-Agent": "Hermes-Desktop" } });
+      const vsix = await request(vsixUrl, { headers: { "User-Agent": "Argus-Desktop" } });
       const themes = extractThemes(vsix);
       return { extensionId: trimmed, displayName, themes };
     }
@@ -1809,7 +1809,7 @@ var require_hardening = __commonJS2({
       }
       if (!encryptionAvailable) {
         throw new Error(
-          "Secure token storage is unavailable, so Hermes Desktop cannot save remote gateway tokens. Set HERMES_DESKTOP_REMOTE_URL and HERMES_DESKTOP_REMOTE_TOKEN in your environment, or enable OS keychain access and try again."
+          "Secure token storage is unavailable, so Argus Desktop cannot save remote gateway tokens. Set ARGUS_DESKTOP_REMOTE_URL and ARGUS_DESKTOP_REMOTE_TOKEN in your environment, or enable OS keychain access and try again."
         );
       }
       try {
@@ -1820,7 +1820,7 @@ var require_hardening = __commonJS2({
       } catch (error) {
         const detail = error instanceof Error && error.message ? ` (${error.message})` : "";
         throw new Error(
-          `Failed to encrypt the remote gateway token for secure storage${detail}. Set HERMES_DESKTOP_REMOTE_URL and HERMES_DESKTOP_REMOTE_TOKEN in your environment as a fallback.`
+          `Failed to encrypt the remote gateway token for secure storage${detail}. Set ARGUS_DESKTOP_REMOTE_URL and ARGUS_DESKTOP_REMOTE_TOKEN in your environment as a fallback.`
         );
       }
     }
@@ -2219,8 +2219,8 @@ var require_update_relaunch = __commonJS2({
         );
       });
     }
-    var PRESERVED_ENV_KEYS = ["HERMES_HOME", "ELECTRON_DISABLE_SANDBOX"];
-    var PRESERVED_ENV_PREFIXES = ["HERMES_DESKTOP_"];
+    var PRESERVED_ENV_KEYS = ["ARGUS_HOME", "ELECTRON_DISABLE_SANDBOX"];
+    var PRESERVED_ENV_PREFIXES = ["ARGUS_DESKTOP_"];
     function collectRelaunchEnv2(env2) {
       const out = {};
       if (!env2 || typeof env2 !== "object") return out;
@@ -2443,9 +2443,9 @@ var require_git_worktree_ops = __commonJS2({
           gitBin,
           [
             "-c",
-            "user.email=hermes@localhost",
+            "user.email=argus@localhost",
             "-c",
-            "user.name=Hermes",
+            "user.name=Argus",
             "commit",
             "--allow-empty",
             "-m",
@@ -9037,8 +9037,8 @@ var require_git_repo_scan = __commonJS2({
 var require_update_remote = __commonJS2({
   "electron/update-remote.cjs"(exports2, module2) {
     "use strict";
-    var OFFICIAL_REPO_HTTPS_URL2 = "https://github.com/NousResearch/hermes-agent.git";
-    var OFFICIAL_REPO_CANONICAL = "github.com/nousresearch/hermes-agent";
+    var OFFICIAL_REPO_HTTPS_URL2 = "https://github.com/MMArgus-Team/Argus.git";
+    var OFFICIAL_REPO_CANONICAL = "github.com/mmargus-team/argus";
     function canonicalGitHubRemote(url) {
       if (!url) return "";
       let value = String(url).trim();
@@ -9160,7 +9160,7 @@ var require_desktop_uninstall = __commonJS2({
         "    sleep 0.5",
         "  done",
         "fi",
-        `export HERMES_HOME=${q(hermesHome)}`
+        `export ARGUS_HOME=${q(hermesHome)}`
       ];
       if (pythonPath) {
         lines.push(`export PYTHONPATH=${q(pythonPath)}\${PYTHONPATH:+:$PYTHONPATH}`);
@@ -9187,7 +9187,7 @@ var require_desktop_uninstall = __commonJS2({
       const lines = [
         "@echo off",
         "setlocal enableextensions",
-        `set "HERMES_HOME=${String(hermesHome).replace(/"/g, "")}"`,
+        `set "ARGUS_HOME=${String(hermesHome).replace(/"/g, "")}"`,
         `set "PID=${pid}"`
       ];
       if (pythonPath) {
@@ -9274,7 +9274,7 @@ var require_window_state = __commonJS2({
     "use strict";
     var DEFAULT_WIDTH = 1220;
     var DEFAULT_HEIGHT = 800;
-    var MIN_WIDTH = 400;
+    var MIN_WIDTH = 900;
     var MIN_HEIGHT = 620;
     var MIN_VISIBLE = 48;
     var finite = (v) => typeof v === "number" && Number.isFinite(v);
@@ -9284,7 +9284,8 @@ var require_window_state = __commonJS2({
       const state = {
         width: Math.max(MIN_WIDTH, Math.round(raw.width)),
         height: Math.max(MIN_HEIGHT, Math.round(raw.height)),
-        isMaximized: raw.isMaximized === true
+        isMaximized: raw.isMaximized === true,
+        wasTooNarrow: Math.round(raw.width) < MIN_WIDTH
       };
       if (finite(raw.x) && finite(raw.y)) {
         state.x = Math.round(raw.x);
@@ -9320,6 +9321,11 @@ var require_window_state = __commonJS2({
       }
       return opts;
     }
+    function shouldStartMaximized2(state) {
+      if (!state) return true;
+      if (state.wasTooNarrow) return true;
+      return state.isMaximized === true;
+    }
     function debounce2(fn, delayMs) {
       let timer = null;
       const debounced = () => {
@@ -9345,6 +9351,7 @@ var require_window_state = __commonJS2({
       sanitizeWindowState: sanitizeWindowState2,
       onScreen,
       computeWindowOptions: computeWindowOptions2,
+      shouldStartMaximized: shouldStartMaximized2,
       debounce: debounce2
     };
   }
@@ -9588,6 +9595,7 @@ var {
   MIN_HEIGHT: WINDOW_MIN_HEIGHT,
   sanitizeWindowState,
   computeWindowOptions,
+  shouldStartMaximized,
   debounce
 } = require_window_state();
 var {
@@ -9641,13 +9649,13 @@ try {
     nodePtyDir = null;
   }
 }
-var USER_DATA_OVERRIDE = process.env.HERMES_DESKTOP_USER_DATA_DIR;
+var USER_DATA_OVERRIDE = process.env.ARGUS_DESKTOP_USER_DATA_DIR;
 if (USER_DATA_OVERRIDE) {
   const resolvedUserData = path.resolve(USER_DATA_OVERRIDE);
   fs.mkdirSync(resolvedUserData, { recursive: true });
   app.setPath("userData", resolvedUserData);
 }
-var DEV_SERVER = process.env.HERMES_DESKTOP_DEV_SERVER;
+var DEV_SERVER = process.env.ARGUS_DESKTOP_DEV_SERVER;
 var IS_PACKAGED = app.isPackaged;
 var IS_MAC = process.platform === "darwin";
 var IS_WINDOWS = process.platform === "win32";
@@ -9733,19 +9741,19 @@ if (INSTALL_STAMP) {
   );
 }
 function resolveHermesHome() {
-  if (process.env.HERMES_HOME) return normalizeHermesHomeRoot(process.env.HERMES_HOME);
+  if (process.env.ARGUS_HOME) return normalizeHermesHomeRoot(process.env.ARGUS_HOME);
   if (USER_DATA_OVERRIDE) return path.join(path.resolve(USER_DATA_OVERRIDE), "hermes-home");
   if (IS_WINDOWS) {
-    const fromRegistry = readWindowsUserEnvVar("HERMES_HOME");
+    const fromRegistry = readWindowsUserEnvVar("ARGUS_HOME");
     if (fromRegistry) return normalizeHermesHomeRoot(fromRegistry);
   }
   if (IS_WINDOWS && process.env.LOCALAPPDATA) {
-    const localappdata = path.join(process.env.LOCALAPPDATA, "hermes");
-    const legacy = path.join(app.getPath("home"), ".hermes");
+    const localappdata = path.join(process.env.LOCALAPPDATA, "argus");
+    const legacy = path.join(app.getPath("home"), ".argus");
     if (!directoryExists(localappdata) && directoryExists(legacy)) return legacy;
     return localappdata;
   }
-  return path.join(app.getPath("home"), ".hermes");
+  return path.join(app.getPath("home"), ".argus");
 }
 var HERMES_HOME = resolveHermesHome();
 function hermesManagedNodePathEntries() {
@@ -9757,7 +9765,7 @@ function hermesManagedNodePathEntries() {
 function pathWithHermesManagedNode(...entries) {
   return [...hermesManagedNodePathEntries(), ...entries, process.env.PATH].filter(Boolean).join(path.delimiter);
 }
-var ACTIVE_HERMES_ROOT = path.join(HERMES_HOME, "hermes-agent");
+var ACTIVE_HERMES_ROOT = path.join(HERMES_HOME, "argus");
 var VENV_ROOT = path.join(ACTIVE_HERMES_ROOT, "venv");
 var BOOTSTRAP_COMPLETE_MARKER = path.join(ACTIVE_HERMES_ROOT, ".hermes-bootstrap-complete");
 var BOOTSTRAP_MARKER_SCHEMA_VERSION = 1;
@@ -9774,9 +9782,9 @@ var DESKTOP_LOG_MAX_BYTES = 10 * 1024 * 1024;
 var DESKTOP_LOG_BACKUP_COUNT = 3;
 var DESKTOP_LOG_DISCARD_BYTES = DESKTOP_LOG_MAX_BYTES * 4;
 var desktopLogBackupPath = (n) => `${DESKTOP_LOG_PATH}.${n}`;
-var BOOT_FAKE_MODE = process.env.HERMES_DESKTOP_BOOT_FAKE === "1";
+var BOOT_FAKE_MODE = process.env.ARGUS_DESKTOP_BOOT_FAKE === "1";
 var BOOT_FAKE_STEP_MS = (() => {
-  const raw = Number.parseInt(String(process.env.HERMES_DESKTOP_BOOT_FAKE_STEP_MS || ""), 10);
+  const raw = Number.parseInt(String(process.env.ARGUS_DESKTOP_BOOT_FAKE_STEP_MS || ""), 10);
   if (!Number.isFinite(raw) || raw <= 0) return 650;
   return Math.max(120, raw);
 })();
@@ -9975,12 +9983,12 @@ function previewFileMetadata(filePath, mimeType) {
 }
 app.setName(APP_NAME);
 if (IS_WINDOWS) {
-  app.setAppUserModelId("com.nousresearch.hermes");
+  app.setAppUserModelId("com.argus.desktop");
 }
 app.setAboutPanelOptions({
   applicationName: APP_NAME,
   applicationVersion: resolveHermesVersion(),
-  copyright: "Copyright \xA9 2026 Nous Research"
+  copyright: "Copyright \xA9 2026 Argus"
 });
 var MEDIA_PROTOCOL = "hermes-media";
 var STREAMABLE_MEDIA_EXTS = /* @__PURE__ */ new Set([
@@ -10032,8 +10040,8 @@ app.isQuitting = false;
 var hermesProcess = null;
 var connectionPromise = null;
 var backendPool = /* @__PURE__ */ new Map();
-var POOL_MAX_BACKENDS = Math.max(1, Number(process.env.HERMES_DESKTOP_POOL_MAX) || 3);
-var POOL_IDLE_MS = Math.max(6e4, Number(process.env.HERMES_DESKTOP_POOL_IDLE_MS) || 10 * 6e4);
+var POOL_MAX_BACKENDS = Math.max(1, Number(process.env.ARGUS_DESKTOP_POOL_MAX) || 3);
+var POOL_IDLE_MS = Math.max(6e4, Number(process.env.ARGUS_DESKTOP_POOL_IDLE_MS) || 10 * 6e4);
 var POOL_KEEPALIVE_FRESH_MS = 9e4;
 var poolIdleReaper = null;
 var RENDERER_RELOAD_WINDOW_MS = 6e4;
@@ -10054,7 +10062,7 @@ var nativeThemeListenerInstalled = false;
 var bootProgressState = {
   error: null,
   fakeMode: BOOT_FAKE_MODE,
-  message: "Waiting to start Hermes backend",
+  message: "Waiting to start Argus backend",
   phase: "idle",
   progress: 0,
   running: false,
@@ -10386,7 +10394,7 @@ async function waitForUpdateToFinish() {
   while (marker && Date.now() < deadline) {
     await advanceBootProgress(
       "backend.update-wait",
-      "An update is finishing \u2014 Hermes will start automatically when it completes\u2026",
+      "An update is finishing \u2014 Argus will start automatically when it completes\u2026",
       12
     );
     await new Promise((r) => setTimeout(r, UPDATE_WAIT_POLL_MS));
@@ -10475,7 +10483,7 @@ function isHermesSourceRoot(root) {
   return directoryExists(root) && fileExists(path.join(root, "hermes_cli", "main.py"));
 }
 function findPythonForRoot(root) {
-  const override = process.env.HERMES_DESKTOP_PYTHON;
+  const override = process.env.ARGUS_DESKTOP_PYTHON;
   if (override && fileExists(override)) return override;
   const relativePaths = IS_WINDOWS ? [path.join(".venv", "Scripts", "python.exe"), path.join("venv", "Scripts", "python.exe")] : [path.join(".venv", "bin", "python"), path.join("venv", "bin", "python")];
   for (const relativePath of relativePaths) {
@@ -10714,7 +10722,7 @@ function persistWindowState() {
 var schedulePersistWindowState = debounce(persistWindowState, 250);
 function resolveUpdateRoot() {
   const candidates = [
-    process.env.HERMES_DESKTOP_HERMES_ROOT && path.resolve(process.env.HERMES_DESKTOP_HERMES_ROOT),
+    process.env.ARGUS_DESKTOP_HERMES_ROOT && path.resolve(process.env.ARGUS_DESKTOP_HERMES_ROOT),
     !IS_PACKAGED && isHermesSourceRoot(SOURCE_REPO_ROOT) ? SOURCE_REPO_ROOT : null,
     isHermesSourceRoot(ACTIVE_HERMES_ROOT) ? ACTIVE_HERMES_ROOT : null
   ].filter(Boolean);
@@ -10883,7 +10891,7 @@ async function readCommitLog(cwd, branch) {
 }
 var updateInFlight = false;
 function resolveUpdaterBinary() {
-  const name = IS_WINDOWS ? "hermes-setup.exe" : "hermes-setup";
+  const name = IS_WINDOWS ? "argus-setup.exe" : "argus-setup";
   const candidate = path.join(HERMES_HOME, name);
   return fileExists(candidate) ? candidate : null;
 }
@@ -10992,7 +11000,7 @@ async function applyUpdates(opts = {}) {
     }
     emitUpdateProgress({
       stage: "restart",
-      message: "Updating Hermes \u2014 this window will close and the updater will open. Don\u2019t reopen Hermes yourself; it restarts automatically when the update finishes.",
+      message: "Updating Argus \u2014 this window will close and the updater will open. Don\u2019t reopen Argus yourself; it restarts automatically when the update finishes.",
       percent: 100
     });
     repairMacUpdaterHelper(updater);
@@ -11010,7 +11018,7 @@ async function applyUpdates(opts = {}) {
       cwd: HERMES_HOME,
       env: {
         ...process.env,
-        HERMES_HOME,
+        ARGUS_HOME: HERMES_HOME,
         PATH: pathWithHermesManagedNode(venvBin)
       },
       detached: true,
@@ -11042,7 +11050,7 @@ async function handOffWindowsBootstrapRecovery(reason) {
     cwd: HERMES_HOME,
     env: {
       ...process.env,
-      HERMES_HOME,
+      ARGUS_HOME: HERMES_HOME,
       PATH: pathWithHermesManagedNode(venvBin)
     },
     detached: true,
@@ -11109,7 +11117,7 @@ async function applyUpdatesPosixInApp() {
     return { ok: true, manual: true, command: "hermes update", hermesRoot: updateRoot };
   }
   const env2 = {
-    HERMES_HOME,
+    ARGUS_HOME: HERMES_HOME,
     PATH: pathWithHermesManagedNode(path.join(updateRoot, "venv", "bin"))
   };
   const desktopChildPids = [];
@@ -11122,7 +11130,7 @@ async function applyUpdatesPosixInApp() {
     }
   }
   if (desktopChildPids.length) {
-    env2.HERMES_DESKTOP_CHILD_PID = desktopChildPids.join(",");
+    env2.ARGUS_DESKTOP_CHILD_PID = desktopChildPids.join(",");
   }
   let branchArgs = [];
   try {
@@ -11133,7 +11141,7 @@ async function applyUpdatesPosixInApp() {
     }
   } catch {
   }
-  emitUpdateProgress({ stage: "update", message: "Updating Hermes (git + dependencies)\u2026", percent: 10 });
+  emitUpdateProgress({ stage: "update", message: "Updating Argus (git + dependencies)\u2026", percent: 10 });
   const updated = await runStreamedUpdate(hermes, ["update", "--yes", ...branchArgs], {
     cwd: updateRoot,
     env: env2,
@@ -11153,7 +11161,7 @@ async function applyUpdatesPosixInApp() {
   if (rebuilt.code !== 0) {
     emitUpdateProgress({
       stage: "error",
-      message: "Backend updated, but the desktop rebuild failed. Restart Hermes to retry.",
+      message: "Backend updated, but the desktop rebuild failed. Restart Argus to retry.",
       error: rebuilt.error || "rebuild-failed"
     });
     return { ok: false, backendUpdated: true, error: "desktop rebuild failed" };
@@ -11171,7 +11179,7 @@ async function applyUpdatesPosixInApp() {
     }
     const outcome = decideRelaunchOutcome({ underUnpacked, sandboxOk });
     if (outcome === "relaunch") {
-      emitUpdateProgress({ stage: "restart", message: "Restarting Hermes\u2026", percent: 100 });
+      emitUpdateProgress({ stage: "restart", message: "Restarting Argus\u2026", percent: 100 });
       const relaunchArgs = collectRelaunchArgs(process.argv.slice(1));
       const relaunchEnv = collectRelaunchEnv(process.env);
       const relaunchScript = buildRelaunchScript({
@@ -11198,14 +11206,14 @@ async function applyUpdatesPosixInApp() {
           backendUpdated: true,
           guiUpdated: false,
           manualRestart: true,
-          message: "Backend updated. Quit and reopen Hermes to load the new version."
+          message: "Backend updated. Quit and reopen Argus to load the new version."
         };
       }
     }
     if (outcome === "guiSkew") {
       emitUpdateProgress({
         stage: "guiSkew",
-        message: "Backend updated, but the desktop app package was not changed. Update or reinstall the Hermes desktop app to match.",
+        message: "Backend updated, but the desktop app package was not changed. Update or reinstall the Argus desktop app to match.",
         percent: 100
       });
       rememberLog(
@@ -11222,7 +11230,7 @@ async function applyUpdatesPosixInApp() {
       guiUpdated: false,
       manualRestart: true,
       sandboxBlocked: true,
-      message: "Backend updated. The rebuilt app can\u2019t relaunch automatically (sandbox helper needs root). Quit and reopen Hermes to finish."
+      message: "Backend updated. The rebuilt app can\u2019t relaunch automatically (sandbox helper needs root). Quit and reopen Argus to finish."
     };
   }
   const rebuiltApp = [
@@ -11233,7 +11241,7 @@ async function applyUpdatesPosixInApp() {
   if (!rebuiltApp || !targetApp) {
     emitUpdateProgress({
       stage: "done",
-      message: "Backend updated. Restart Hermes to load the new version.",
+      message: "Backend updated. Restart Argus to load the new version.",
       percent: 100
     });
     return { ok: true, backendUpdated: true, rebuiltApp: rebuiltApp || null };
@@ -11265,7 +11273,7 @@ fi
   } catch (err) {
     emitUpdateProgress({
       stage: "done",
-      message: "Backend + app updated. Restart Hermes to load the new version.",
+      message: "Backend + app updated. Restart Argus to load the new version.",
       percent: 100
     });
     rememberLog(`[updates] could not write swap script: ${err.message}; rebuilt app at ${rebuiltApp}`);
@@ -11307,14 +11315,14 @@ function writeBootstrapMarker(payload) {
   return merged;
 }
 function resolveWebDist() {
-  const override = process.env.HERMES_DESKTOP_WEB_DIST;
+  const override = process.env.ARGUS_DESKTOP_WEB_DIST;
   if (override && directoryExists(path.resolve(override))) return path.resolve(override);
   const unpackedDist = path.join(unpackedPathFor(APP_ROOT), "dist");
   if (directoryExists(unpackedDist)) return unpackedDist;
   const fallback = path.join(APP_ROOT, "dist");
   if (IS_PACKAGED && /app\.asar(?=$|[\\/])/.test(fallback) && !directoryExists(fallback)) {
     rememberLog(
-      `[web-dist] dashboard frontend dir resolved to an asar-internal path that is not a real directory: ${fallback}. Static routes will 404. Ensure dist/** is unpacked (asarUnpack) or set HERMES_DESKTOP_WEB_DIST.`
+      `[web-dist] dashboard frontend dir resolved to an asar-internal path that is not a real directory: ${fallback}. Static routes will 404. Ensure dist/** is unpacked (asarUnpack) or set ARGUS_DESKTOP_WEB_DIST.`
     );
   }
   return fallback;
@@ -11341,7 +11349,7 @@ function isPackagedInstallPath(dir) {
 function resolveHermesCwd() {
   const candidates = [
     readDefaultProjectDir(),
-    process.env.HERMES_DESKTOP_CWD,
+    process.env.ARGUS_DESKTOP_CWD,
     IS_PACKAGED ? null : process.env.INIT_CWD,
     IS_PACKAGED ? null : process.cwd(),
     !IS_PACKAGED ? SOURCE_REPO_ROOT : null,
@@ -11439,7 +11447,7 @@ function createActiveBackend(dashboardArgs) {
   });
 }
 function resolveHermesBackend(dashboardArgs) {
-  const overrideRoot = process.env.HERMES_DESKTOP_HERMES_ROOT && path.resolve(process.env.HERMES_DESKTOP_HERMES_ROOT);
+  const overrideRoot = process.env.ARGUS_DESKTOP_HERMES_ROOT && path.resolve(process.env.ARGUS_DESKTOP_HERMES_ROOT);
   if (overrideRoot && isHermesSourceRoot(overrideRoot)) {
     const backend = createPythonBackend(overrideRoot, `Hermes source at ${overrideRoot}`, dashboardArgs);
     if (backend) return backend;
@@ -11451,9 +11459,9 @@ function resolveHermesBackend(dashboardArgs) {
   if (isBootstrapComplete()) {
     return createActiveBackend(dashboardArgs);
   }
-  if (process.env.HERMES_DESKTOP_IGNORE_EXISTING !== "1") {
+  if (process.env.ARGUS_DESKTOP_IGNORE_EXISTING !== "1") {
     let hermesCommand = null;
-    const hermesOverride = process.env.HERMES_DESKTOP_HERMES;
+    const hermesOverride = process.env.ARGUS_DESKTOP_HERMES;
     if (hermesOverride) {
       const resolvedOverride = findOnPath(hermesOverride);
       if (resolvedOverride) {
@@ -11511,7 +11519,7 @@ function resolveHermesBackend(dashboardArgs) {
   }
   return {
     kind: "bootstrap-needed",
-    label: "Hermes Agent not installed yet; bootstrap required",
+    label: "Argus Agent not installed yet; bootstrap required",
     command: null,
     args: dashboardArgs,
     bootstrap: true,
@@ -11531,10 +11539,10 @@ async function ensureRuntime(backend) {
     return applyWindowsNoConsoleSpawnHints(backend);
   }
   if (backend.kind === "bootstrap-needed") {
-    rememberLog("[bootstrap] no Hermes install found; starting first-launch bootstrap");
+    rememberLog("[bootstrap] no Argus install found; starting first-launch bootstrap");
     if (await handOffWindowsBootstrapRecovery("bootstrap-needed")) {
       const handoffError = new Error(
-        "Hermes recovery was handed off to Hermes Setup. The desktop will restart when recovery completes."
+        "Argus recovery was handed off to Argus Setup. The desktop will restart when recovery completes."
       );
       handoffError.isBootstrapFailure = true;
       handoffError.bootstrapHandedOff = true;
@@ -11575,7 +11583,7 @@ async function ensureRuntime(backend) {
     });
     bootstrapAbortController = null;
     if (bootstrapResult.cancelled) {
-      const cancelledError = new Error("Hermes install was cancelled.");
+      const cancelledError = new Error("Argus install was cancelled.");
       cancelledError.isBootstrapFailure = true;
       cancelledError.bootstrapCancelled = true;
       bootstrapFailure = cancelledError;
@@ -11600,7 +11608,7 @@ async function ensureRuntime(backend) {
   }
   if (IS_WINDOWS && !findGitBash()) {
     throw new Error(
-      "Git for Windows is required for Hermes on Windows (provides Git Bash, which the agent's terminal tool uses). Install it from https://git-scm.com/download/win or run `winget install -e --id Git.Git`, then relaunch Hermes."
+      "Git for Windows is required for Argus on Windows (provides Git Bash, which the agent's terminal tool uses). Install it from https://git-scm.com/download/win or run `winget install -e --id Git.Git`, then relaunch Argus."
     );
   }
   const venvPython = getVenvPython(VENV_ROOT);
@@ -11613,7 +11621,7 @@ async function ensureRuntime(backend) {
   backend.label = `Hermes at ${ACTIVE_HERMES_ROOT} (venv: ${VENV_ROOT})`;
   updateBootProgress({
     phase: "runtime.ready",
-    message: "Hermes runtime is ready",
+    message: "Argus runtime is ready",
     progress: 82,
     running: true,
     error: null
@@ -11631,7 +11639,7 @@ function fetchJson(url, token, options = {}) {
     const diagnosticMethod = safeApiMethod(method);
     const requestPath = safeApiPath(parsed.pathname);
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      reject(new Error(`Unsupported Hermes backend URL protocol: ${parsed.protocol}`));
+      reject(new Error(`Unsupported Argus backend URL protocol: ${parsed.protocol}`));
       return;
     }
     let settled = false;
@@ -11676,7 +11684,7 @@ function fetchJson(url, token, options = {}) {
           if (looksHtml || contentType.includes("text/html")) {
             safeReject(
               new Error(
-                `Expected JSON from ${url} but got HTML (status ${res.statusCode}). The endpoint is likely missing on the Hermes backend.`
+                `Expected JSON from ${url} but got HTML (status ${res.statusCode}). The endpoint is likely missing on the Argus backend.`
               )
             );
             return;
@@ -11693,7 +11701,7 @@ function fetchJson(url, token, options = {}) {
     req.setTimeout(timeoutMs, () => {
       safeReject(
         new Error(
-          `Timed out waiting for Hermes backend response: ${diagnosticMethod} ${requestPath} after ${Date.now() - startedAt}ms (limit ${timeoutMs}ms)`
+          `Timed out waiting for Argus backend response: ${diagnosticMethod} ${requestPath} after ${Date.now() - startedAt}ms (limit ${timeoutMs}ms)`
         )
       );
       req.destroy();
@@ -11715,7 +11723,7 @@ function fetchPublicJson(url, options = {}) {
     const client = parsed.protocol === "https:" ? https : http;
     const timeoutMs = resolveTimeoutMs(options.timeoutMs, DEFAULT_FETCH_TIMEOUT_MS);
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      reject(new Error(`Unsupported Hermes backend URL protocol: ${parsed.protocol}`));
+      reject(new Error(`Unsupported Argus backend URL protocol: ${parsed.protocol}`));
       return;
     }
     let settled = false;
@@ -11759,7 +11767,7 @@ function fetchPublicJson(url, options = {}) {
           if (looksHtml || contentType.includes("text/html")) {
             safeReject(
               new Error(
-                `Expected JSON from ${url} but got HTML (status ${res.statusCode}). The endpoint is likely missing on the Hermes backend.`
+                `Expected JSON from ${url} but got HTML (status ${res.statusCode}). The endpoint is likely missing on the Argus backend.`
               )
             );
             return;
@@ -11774,7 +11782,7 @@ function fetchPublicJson(url, options = {}) {
     );
     req.on("error", safeReject);
     req.setTimeout(timeoutMs, () => {
-      safeReject(new Error(`Timed out connecting to Hermes backend after ${timeoutMs}ms`));
+      safeReject(new Error(`Timed out connecting to Argus backend after ${timeoutMs}ms`));
       req.destroy();
     });
     if (body) req.write(body);
@@ -12190,7 +12198,7 @@ async function waitForHermes(baseUrl, token) {
       await new Promise((resolve) => setTimeout(resolve, 500));
     }
   }
-  throw new Error(`Hermes backend did not become ready: ${lastError?.message || "timeout"}`);
+  throw new Error(`Argus backend did not become ready: ${lastError?.message || "timeout"}`);
 }
 function getWindowButtonPosition() {
   if (!IS_MAC) return null;
@@ -12269,7 +12277,7 @@ function toggleMainWindow() {
 }
 function buildTrayMenu() {
   return Menu.buildFromTemplate([
-    { label: "\u663E\u793A Hermes", click: () => showMainWindow() },
+    { label: "\u663E\u793A Argus", click: () => showMainWindow() },
     { label: "\u9690\u85CF\u5230\u6258\u76D8", click: () => {
       mainWindow?.hide?.();
       if (IS_MAC) app.dock?.hide?.();
@@ -12779,7 +12787,7 @@ function openOauthLoginWindow(baseUrl) {
       win = new BrowserWindow({
         width: 520,
         height: 720,
-        title: "Sign in to Hermes gateway",
+        title: "Sign in to Argus gateway",
         autoHideMenuBar: true,
         webPreferences: {
           contextIsolation: true,
@@ -12822,7 +12830,7 @@ function fetchJsonViaOauthSession(url, options = {}) {
       return;
     }
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      reject(new Error(`Unsupported Hermes backend URL protocol: ${parsed.protocol}`));
+      reject(new Error(`Unsupported Argus backend URL protocol: ${parsed.protocol}`));
       return;
     }
     const body = serializeJsonBody(options.body);
@@ -12847,7 +12855,7 @@ function fetchJsonViaOauthSession(url, options = {}) {
       }
       reject(
         new Error(
-          `Timed out waiting for Hermes backend response: ${diagnosticMethod} ${requestPath} after ${Date.now() - startedAt}ms (limit ${timeoutMs}ms)`
+          `Timed out waiting for Argus backend response: ${diagnosticMethod} ${requestPath} after ${Date.now() - startedAt}ms (limit ${timeoutMs}ms)`
         )
       );
     }, timeoutMs);
@@ -13018,10 +13026,10 @@ async function sanitizeDesktopConnectionConfig(config = readDesktopConnectionCon
   const key = connectionScopeKey(profile);
   const scoped = key ? config.profiles?.[key] || null : null;
   const block = key ? scoped || {} : config.remote || {};
-  const envOverride = key ? false : Boolean(process.env.HERMES_DESKTOP_REMOTE_URL);
+  const envOverride = key ? false : Boolean(process.env.ARGUS_DESKTOP_REMOTE_URL);
   const remoteToken = decryptDesktopSecret(block.token);
   const authMode = normAuthMode(block.authMode);
-  const remoteUrl = envOverride ? String(process.env.HERMES_DESKTOP_REMOTE_URL || "") : String(block.url || "");
+  const remoteUrl = envOverride ? String(process.env.ARGUS_DESKTOP_REMOTE_URL || "") : String(block.url || "");
   const mode = envOverride || (key ? scoped?.mode : config.mode) === "remote" ? "remote" : "local";
   let remoteOauthConnected = false;
   if (authMode === "oauth" && remoteUrl) {
@@ -13041,7 +13049,7 @@ async function sanitizeDesktopConnectionConfig(config = readDesktopConnectionCon
     remoteTokenPreview: tokenPreview(remoteToken),
     remoteTokenSet: Boolean(remoteToken),
     // The env override only forces the global/primary connection; a per-profile
-    // scope is never overridden by HERMES_DESKTOP_REMOTE_URL.
+    // scope is never overridden by ARGUS_DESKTOP_REMOTE_URL.
     envOverride
   };
 }
@@ -13077,7 +13085,7 @@ async function buildRemoteConnection(rawUrl, authMode, token, source) {
   if (authMode === "oauth") {
     if (!await hasLiveOauthSession(baseUrl)) {
       const err = new Error(
-        'Remote Hermes gateway uses OAuth, but you are not signed in. Open Settings \u2192 Gateway and click "Sign in", or switch back to Local.'
+        'Remote Argus gateway uses OAuth, but you are not signed in. Open Settings \u2192 Gateway and click "Sign in", or switch back to Local.'
       );
       err.needsOauthLogin = true;
       throw err;
@@ -13105,7 +13113,7 @@ async function buildRemoteConnection(rawUrl, authMode, token, source) {
   }
   if (!token) {
     throw new Error(
-      "Remote Hermes gateway is selected, but no session token is saved. Open Settings \u2192 Gateway and save a token, or switch back to Local."
+      "Remote Argus gateway is selected, but no session token is saved. Open Settings \u2192 Gateway and save a token, or switch back to Local."
     );
   }
   return {
@@ -13124,12 +13132,12 @@ async function resolveRemoteBackend(profile) {
     const token2 = override.authMode === "oauth" ? null : decryptDesktopSecret(override.token);
     return buildRemoteConnection(override.url, override.authMode, token2, "profile");
   }
-  const rawEnvUrl = process.env.HERMES_DESKTOP_REMOTE_URL;
-  const rawEnvToken = process.env.HERMES_DESKTOP_REMOTE_TOKEN;
+  const rawEnvUrl = process.env.ARGUS_DESKTOP_REMOTE_URL;
+  const rawEnvToken = process.env.ARGUS_DESKTOP_REMOTE_TOKEN;
   if (rawEnvUrl) {
     if (!rawEnvToken) {
       throw new Error(
-        "HERMES_DESKTOP_REMOTE_URL is set but HERMES_DESKTOP_REMOTE_TOKEN is not. Both must be provided to connect to a remote Hermes backend."
+        "ARGUS_DESKTOP_REMOTE_URL is set but ARGUS_DESKTOP_REMOTE_TOKEN is not. Both must be provided to connect to a remote Argus backend."
       );
     }
     return buildRemoteConnection(rawEnvUrl, "token", rawEnvToken, "env");
@@ -13149,7 +13157,7 @@ function configuredRemoteProfileNames() {
   return Object.keys(config.profiles || {}).filter((name) => profileRemoteOverride(config, name));
 }
 function globalRemoteActive() {
-  if (process.env.HERMES_DESKTOP_REMOTE_URL) {
+  if (process.env.ARGUS_DESKTOP_REMOTE_URL) {
     return true;
   }
   return readDesktopConnectionConfig().mode === "remote";
@@ -13364,7 +13372,7 @@ async function spawnPoolBackend(profile, entry) {
   const hermesCwd = resolveHermesCwd();
   const webDist = resolveWebDist();
   const readyFile = backend.readyFile ? makeDashboardReadyFile() : null;
-  rememberLog(`Starting Hermes backend for profile "${profile}" via ${backend.label}`);
+  rememberLog(`Starting Argus backend for profile "${profile}" via ${backend.label}`);
   const child = spawn(
     backend.command,
     backend.args,
@@ -13372,18 +13380,18 @@ async function spawnPoolBackend(profile, entry) {
       cwd: hermesCwd,
       env: {
         ...process.env,
-        HERMES_HOME,
+        ARGUS_HOME: HERMES_HOME,
         ...backend.env,
         // Pin the gateway's tool/terminal cwd to the same directory we chose for
         // the child process. Inherited TERMINAL_CWD (or a stale config bridge)
         // can still point at the install dir even when spawn cwd is home.
         TERMINAL_CWD: hermesCwd,
-        HERMES_DASHBOARD_SESSION_TOKEN: token,
+        ARGUS_DASHBOARD_SESSION_TOKEN: token,
         // Marks this dashboard backend as desktop-spawned so it runs the cron
         // scheduler tick loop (the gateway isn't running under the app).
-        HERMES_DESKTOP: "1",
-        HERMES_WEB_DIST: webDist,
-        ...readyFile ? { HERMES_DESKTOP_READY_FILE: readyFile } : {}
+        ARGUS_DESKTOP: "1",
+        ARGUS_WEB_DIST: webDist,
+        ...readyFile ? { ARGUS_DESKTOP_READY_FILE: readyFile } : {}
       },
       shell: backend.shell,
       stdio: ["ignore", "pipe", "pipe"]
@@ -13399,16 +13407,16 @@ async function spawnPoolBackend(profile, entry) {
     rejectStart = reject;
   });
   child.once("error", (error) => {
-    rememberLog(`Hermes backend for profile "${profile}" failed to start: ${error.message}`);
+    rememberLog(`Argus backend for profile "${profile}" failed to start: ${error.message}`);
     backendPool.delete(profile);
     rejectStart?.(error);
   });
   child.once("exit", (code, signal) => {
-    rememberLog(`Hermes backend for profile "${profile}" exited (${signal || code})`);
+    rememberLog(`Argus backend for profile "${profile}" exited (${signal || code})`);
     backendPool.delete(profile);
     if (!ready) {
       rejectStart?.(
-        new Error(`Hermes backend for profile "${profile}" exited before it became ready (${signal || code}).`)
+        new Error(`Argus backend for profile "${profile}" exited before it became ready (${signal || code}).`)
       );
     }
   });
@@ -13423,7 +13431,7 @@ async function spawnPoolBackend(profile, entry) {
   ready = true;
   const authToken = await adoptServedDashboardToken(baseUrl, token, {
     childAlive: () => child.exitCode === null && !child.killed,
-    label: `Hermes backend for profile "${profile}"`,
+    label: `Argus backend for profile "${profile}"`,
     rememberLog
   });
   entry.token = authToken;
@@ -13511,14 +13519,14 @@ async function startHermes() {
   }
   if (connectionPromise) return connectionPromise;
   connectionPromise = (async () => {
-    await advanceBootProgress("backend.resolve", "Resolving Hermes backend", 8);
+    await advanceBootProgress("backend.resolve", "Resolving Argus backend", 8);
     const remote = await resolveRemoteBackend(primaryProfileKey());
     if (remote) {
-      await advanceBootProgress("backend.remote", `Connecting to remote Hermes backend at ${remote.baseUrl}`, 24);
+      await advanceBootProgress("backend.remote", `Connecting to remote Argus backend at ${remote.baseUrl}`, 24);
       await waitForHermes(remote.baseUrl, remote.token);
       updateBootProgress({
         phase: "backend.ready",
-        message: "Remote Hermes backend is ready",
+        message: "Remote Argus backend is ready",
         progress: 94,
         running: true,
         error: null
@@ -13541,13 +13549,13 @@ async function startHermes() {
     if (activeProfile) {
       dashboardArgs.unshift("--profile", activeProfile);
     }
-    await advanceBootProgress("backend.runtime", "Resolving Hermes runtime", 28);
+    await advanceBootProgress("backend.runtime", "Resolving Argus runtime", 28);
     const backend = await ensureRuntime(resolveHermesBackend(dashboardArgs));
     const hermesCwd = resolveHermesCwd();
     const webDist = resolveWebDist();
     const readyFile = backend.readyFile ? makeDashboardReadyFile() : null;
-    await advanceBootProgress("backend.spawn", `Starting Hermes backend via ${backend.label}`, 84);
-    rememberLog(`Starting Hermes backend via ${backend.label}`);
+    await advanceBootProgress("backend.spawn", `Starting Argus backend via ${backend.label}`, 84);
+    rememberLog(`Starting Argus backend via ${backend.label}`);
     hermesProcess = spawn(
       backend.command,
       backend.args,
@@ -13555,23 +13563,23 @@ async function startHermes() {
         cwd: hermesCwd,
         env: {
           ...process.env,
-          // Explicitly pin HERMES_HOME for the child so Python's get_hermes_home()
+          // Explicitly pin ARGUS_HOME for the child so Python's get_hermes_home()
           // resolves to the SAME location our resolveHermesHome() picked. Without
-          // this pin, Python falls back to ~/.hermes on every platform — fine on
-          // mac/linux (where our default matches), but on Windows our default is
-          // %LOCALAPPDATA%\hermes, which differs from C:\Users\<u>\.hermes.
-          // Mismatch would split config / sessions / .env / logs across two
-          // directories. install.ps1 sets HERMES_HOME via setx; the desktop
+          // this pin Python just takes its own platform default, and any
+          // divergence would split config / sessions / .env / logs across two
+          // directories. install.ps1 sets ARGUS_HOME via setx; the desktop
           // can't reliably do that, so we set it inline for every spawn.
-          HERMES_HOME,
+          // (The local binding is still named HERMES_HOME — renaming it would
+          // churn ~19 unrelated call sites for no behavioural gain.)
+          ARGUS_HOME: HERMES_HOME,
           ...backend.env,
           TERMINAL_CWD: hermesCwd,
-          HERMES_DASHBOARD_SESSION_TOKEN: token,
+          ARGUS_DASHBOARD_SESSION_TOKEN: token,
           // Marks this dashboard backend as desktop-spawned so it runs the cron
           // scheduler tick loop (the gateway isn't running under the app).
-          HERMES_DESKTOP: "1",
-          HERMES_WEB_DIST: webDist,
-          ...readyFile ? { HERMES_DESKTOP_READY_FILE: readyFile } : {}
+          ARGUS_DESKTOP: "1",
+          ARGUS_WEB_DIST: webDist,
+          ...readyFile ? { ARGUS_DESKTOP_READY_FILE: readyFile } : {}
         },
         shell: backend.shell,
         stdio: ["ignore", "pipe", "pipe"]
@@ -13585,11 +13593,11 @@ async function startHermes() {
       rejectBackendStart = reject;
     });
     hermesProcess.once("error", (error) => {
-      rememberLog(`Hermes backend failed to start: ${error.message}`);
+      rememberLog(`Argus backend failed to start: ${error.message}`);
       updateBootProgress(
         {
           error: error.message,
-          message: `Hermes backend failed to start: ${error.message}`,
+          message: `Argus backend failed to start: ${error.message}`,
           phase: "backend.error",
           running: false
         },
@@ -13601,12 +13609,12 @@ async function startHermes() {
       rejectBackendStart?.(error);
     });
     hermesProcess.once("exit", (code, signal) => {
-      rememberLog(`Hermes backend exited (${signal || code})`);
+      rememberLog(`Argus backend exited (${signal || code})`);
       hermesProcess = null;
       connectionPromise = null;
       sendBackendExit({ code, signal });
       if (!backendReady) {
-        const message = `Hermes backend exited before it became ready (${signal || code}).`;
+        const message = `Argus backend exited before it became ready (${signal || code}).`;
         updateBootProgress(
           {
             error: message,
@@ -13618,13 +13626,13 @@ async function startHermes() {
         );
         rejectBackendStart?.(
           new Error(
-            `Hermes backend exited before it became ready (${signal || code}). Log: ${DESKTOP_LOG_PATH}
+            `Argus backend exited before it became ready (${signal || code}). Log: ${DESKTOP_LOG_PATH}
 ${recentHermesLog()}`
           )
         );
       }
     });
-    await advanceBootProgress("backend.port", "Waiting for Hermes backend to launch", 86);
+    await advanceBootProgress("backend.port", "Waiting for Argus backend to launch", 86);
     const port = await Promise.race([
       waitForDashboardPortAnnouncement(hermesProcess, { readyFile }),
       backendStartFailed
@@ -13634,7 +13642,7 @@ ${recentHermesLog()}`
       });
     }
     const baseUrl = `http://127.0.0.1:${port}`;
-    await advanceBootProgress("backend.wait", "Waiting for Hermes backend to become ready", 90);
+    await advanceBootProgress("backend.wait", "Waiting for Argus backend to become ready", 90);
     await Promise.race([waitForHermes(baseUrl, token), backendStartFailed]);
     backendReady = true;
     backendStartFailure = null;
@@ -13645,7 +13653,7 @@ ${recentHermesLog()}`
     });
     updateBootProgress({
       phase: "backend.ready",
-      message: "Hermes backend is ready. Finalizing desktop startup",
+      message: "Argus backend is ready. Finalizing desktop startup",
       progress: 94,
       running: true,
       error: null
@@ -13895,7 +13903,7 @@ function createWindow() {
       });
     }
   }
-  if (savedWindowState?.isMaximized) mainWindow.maximize();
+  if (shouldStartMaximized(savedWindowState)) mainWindow.maximize();
   mainWindow.once("ready-to-show", () => {
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.show();
   });
@@ -13980,7 +13988,7 @@ ipcMain.handle("hermes:connection:revalidate", async () => {
     await fetchPublicJson(`${base}/api/status`, { timeoutMs: 2500 });
     return { ok: true, rebuilt: false };
   } catch {
-    rememberLog("Cached remote Hermes backend failed liveness probe; dropping stale connection.");
+    rememberLog("Cached remote Argus backend failed liveness probe; dropping stale connection.");
     resetHermesConnection();
     return { ok: true, rebuilt: true };
   }
@@ -14586,7 +14594,7 @@ function windowsShellSpec() {
   return shellSpecFor(command);
 }
 function terminalShellCommand() {
-  const override = (process.env.HERMES_DESKTOP_SHELL || (IS_WINDOWS ? "" : process.env.SHELL) || "").trim();
+  const override = (process.env.ARGUS_DESKTOP_SHELL || (IS_WINDOWS ? "" : process.env.SHELL) || "").trim();
   if (override) {
     const resolved = isExecutableFile(override) ? override : findOnPath(override);
     if (resolved) {
@@ -14623,7 +14631,7 @@ function terminalShellEnv() {
   env2.TERM = "xterm-256color";
   env2.TERM_PROGRAM = "Argus";
   env2.TERM_PROGRAM_VERSION = app.getVersion();
-  env2.HERMES_DESKTOP_TERMINAL = "1";
+  env2.ARGUS_DESKTOP_TERMINAL = "1";
   return env2;
 }
 function terminalChannel(id, suffix) {
@@ -14761,7 +14769,7 @@ ipcMain.handle("hermes:git:scanRepos", async (_event, roots, options) => {
 });
 ipcMain.handle("hermes:terminal:start", async (event, payload = {}) => {
   if (!nodePty) {
-    throw new Error("PTY support is unavailable. Reinstall desktop dependencies and restart Hermes.");
+    throw new Error("PTY support is unavailable. Reinstall desktop dependencies and restart Argus.");
   }
   ensureSpawnHelperExecutable();
   const id = crypto.randomUUID();
@@ -14853,7 +14861,7 @@ function showAboutPanelFresh() {
   app.setAboutPanelOptions({
     applicationName: APP_NAME,
     applicationVersion: resolveHermesVersion(),
-    copyright: "Copyright \xA9 2026 Nous Research"
+    copyright: "Copyright \xA9 2026 Argus"
   });
   app.showAboutPanel();
 }
@@ -14898,7 +14906,7 @@ async function getUninstallSummary() {
         ["-m", "hermes_cli.main", "uninstall", "--gui-summary"],
         hiddenWindowsChildOptions({
           cwd: agentRoot,
-          env: { ...process.env, HERMES_HOME, NO_COLOR: "1" },
+          env: { ...process.env, ARGUS_HOME: HERMES_HOME, NO_COLOR: "1" },
           stdio: ["ignore", "pipe", "ignore"]
         })
       );

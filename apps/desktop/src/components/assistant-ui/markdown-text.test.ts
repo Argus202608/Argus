@@ -174,13 +174,13 @@ describe('preprocessMarkdown', () => {
   })
 
   it('does not swallow trailing emphasis asterisks into an autolinked url', () => {
-    const input = '**PR opened: https://github.com/NousResearch/hermes-agent/pull/12345**'
+    const input = '**PR opened: https://github.com/MMArgus-Team/Argus/pull/12345**'
 
     const output = preprocessMarkdown(input)
 
     // The URL is autolinked WITHOUT the trailing `**` glued into the href,
     // and the bold emphasis run stays intact so it renders as bold + a link.
-    expect(output).toContain('<https://github.com/NousResearch/hermes-agent/pull/12345>')
+    expect(output).toContain('<https://github.com/MMArgus-Team/Argus/pull/12345>')
     expect(output).not.toContain('pull/12345**>')
     expect(output).not.toContain('12345*')
   })
@@ -192,6 +192,25 @@ describe('preprocessMarkdown', () => {
 
     expect(output).toContain('<https://github.com/foo/bar>')
     expect(output).toContain('**bold**')
+  })
+
+  it('leaves plain bold prose untouched by the CJK emphasis fix', () => {
+    // `*` is itself \p{P}, so a leading-punctuation class that forgets to
+    // exclude it matches the OPENING `**` and injects the zero-width space
+    // inside the delimiter (`**​bold**`), which renders as literal
+    // asterisks instead of bold.
+    const output = preprocessMarkdown('- **Multicolored cube**\n- **Rotates**')
+
+    expect(output).not.toContain('​')
+    expect(output).toContain('- **Multicolored cube**')
+  })
+
+  it('still separates a CJK emphasis close from the following character', () => {
+    // The fix this regex exists for: `：` before the closing `**` violates
+    // CommonMark's right-flanking rule, so the close needs a ZWSP after it.
+    const output = preprocessMarkdown('**提示：**午后见')
+
+    expect(output).toContain('**提示：**​午后见')
   })
 
   it('keeps underscores and tildes inside autolinked url paths', () => {

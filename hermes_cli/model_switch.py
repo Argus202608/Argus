@@ -73,7 +73,7 @@ def _bare_custom_provider_def(current_base_url: str) -> Optional[ProviderDef]:
 # Non-agentic model warning
 # ---------------------------------------------------------------------------
 
-_HERMES_MODEL_WARNING = (
+_ARGUS_MODEL_WARNING = (
     "Nous Research Hermes 3 & 4 models are NOT agentic and are not designed "
     "for use with Hermes Agent. They lack the tool-calling capabilities "
     "required for agent workflows. Consider using an agentic model instead "
@@ -110,7 +110,7 @@ def is_nous_hermes_non_agentic(model_name: str) -> bool:
 def _check_hermes_model_warning(model_name: str) -> str:
     """Return a warning string if *model_name* is a Nous Hermes 3/4 chat model."""
     if is_nous_hermes_non_agentic(model_name):
-        return _HERMES_MODEL_WARNING
+        return _ARGUS_MODEL_WARNING
     return ""
 
 
@@ -214,7 +214,7 @@ def _load_direct_aliases() -> dict[str, DirectAlias]:
             provider: custom
             base_url: "https://ollama.com/v1"
 
-    Also reads ``model.aliases`` (set by ``hermes config set model.aliases.xxx``)
+    Also reads ``model.aliases`` (set by ``argus config set model.aliases.xxx``)
     and converts simple string entries (``ds-flash: deepseek/deepseek-v4-flash``)
     into DirectAlias objects.  The provider is parsed from the ``provider/``
     prefix in the value; if no slash, the current provider is used.
@@ -393,6 +393,41 @@ def resolve_persist_behavior(is_global: bool, is_session: bool) -> bool:
     except Exception:
         pass
     return True
+
+
+def _merge_explicit_with_live(
+    explicit: Optional[List[str]], live: List[str]
+) -> List[str]:
+    """Live ``/models`` catalog, with hand-configured models kept in front.
+
+    Live discovery is the source of truth for *what an endpoint offers*, so it
+    supersedes a partial ``models:`` map (which often exists only to carry
+    ``context_length`` overrides). But it must not be treated as an allow-list:
+    an endpoint can happily serve a model its ``/models`` never lists. Vision
+    models are the common case — ``open.bigmodel.cn``'s catalog omits
+    ``glm-5v-turbo`` even though the endpoint serves it.
+
+    Replacing outright meant such a model was only visible while it happened to
+    be the *current* model (the ``current_model`` post-pass in
+    ``list_authenticated_providers`` re-injects that one). Switching away from it
+    dropped it from every picker, so it could never be switched back to — a
+    one-way trap, not just a display gap.
+
+    Order matters: explicit entries first (they are what the user deliberately
+    wrote, and the first entry is what a picker highlights), then the live
+    catalog minus anything already listed. De-duplicated, order-stable.
+    """
+    merged: List[str] = []
+    seen: set[str] = set()
+
+    for name in list(explicit or []) + list(live):
+        if not name or name in seen:
+            continue
+
+        seen.add(name)
+        merged.append(name)
+
+    return merged
 
 
 # ---------------------------------------------------------------------------
@@ -829,7 +864,7 @@ def switch_model(
         if pdef is None:
             _switch_err = (
                 f"Unknown provider '{explicit_provider}'. "
-                f"Check 'hermes model' for available providers, or define it "
+                f"Check 'argus model' for available providers, or define it "
                 f"in config.yaml under 'providers:'."
             )
             # Check for common config issues that cause provider resolution failures
@@ -837,7 +872,7 @@ def switch_model(
                 from hermes_cli.config import validate_config_structure
                 _cfg_issues = validate_config_structure()
                 if _cfg_issues:
-                    _switch_err += "\n\nRun 'hermes doctor' — config issues detected:"
+                    _switch_err += "\n\nRun 'argus doctor' — config issues detected:"
                     for _ci in _cfg_issues[:3]:
                         _switch_err += f"\n  • {_ci.message}"
             except Exception:
@@ -1259,11 +1294,21 @@ def switch_model(
             for entry in custom_providers:
                 if not isinstance(entry, dict):
                     continue
-                # Match by provider slug (custom:<name>) or by base_url
+                # Match by provider slug (custom:<name>) or by base_url.
+                # ★ Case/slash-insensitive: provider slugs are lowercased
+                #   downstream, so a config entry named "Open.bigmodel.cn"
+                #   produced "custom:Open.bigmodel.cn" and never matched the
+                #   incoming "custom:open.bigmodel.cn" — the override silently
+                #   failed for the exact configs it exists to protect. base_urls
+                #   likewise differ only by a trailing slash between the entry
+                #   and the resolved runtime.
                 entry_name = entry.get("name", "")
-                entry_slug = f"custom:{entry_name}" if entry_name else ""
-                entry_url = entry.get("base_url", "")
-                if entry_slug == target_provider or entry_url == base_url:
+                entry_slug = f"custom:{entry_name}".lower() if entry_name else ""
+                entry_url = str(entry.get("base_url", "") or "").rstrip("/").lower()
+                if (
+                    (entry_slug and entry_slug == str(target_provider or "").lower())
+                    or (entry_url and entry_url == str(base_url or "").rstrip("/").lower())
+                ):
                     # Check if the requested model matches the entry's model
                     entry_model = entry.get("model", "")
                     entry_models = entry.get("models", {})
@@ -1622,7 +1667,7 @@ def list_authenticated_providers(
         # minimax-cn → MINIMAX_API_KEY instead of MINIMAX_CN_API_KEY).
         pconfig = PROVIDER_REGISTRY.get(hermes_id)
         # Skip non-API-key auth providers here — they are handled in
-        # section 2 (HERMES_OVERLAYS) with proper auth store checking.
+        # section 2 (ARGUS_OVERLAYS) with proper auth store checking.
         if pconfig and pconfig.auth_type != "api_key":
             continue
         if pconfig and pconfig.api_key_env_vars:
@@ -1646,7 +1691,7 @@ def list_authenticated_providers(
             continue
 
         # Unified pathway: route through cached_provider_model_ids() so the
-        # /model picker sees the SAME list `hermes model` would build, with
+        # /model picker sees the SAME list `argus model` would build, with
         # disk caching to keep the picker open snappy. Falls back to the
         # curated static list when the live fetcher returns nothing.
         model_ids = cached_provider_model_ids(hermes_id)
@@ -1678,15 +1723,15 @@ def list_authenticated_providers(
         _record_builtin_endpoint(slug)
 
     # --- 2. Check Hermes-only providers (nous, openai-codex, copilot, opencode-go) ---
-    from hermes_cli.providers import HERMES_OVERLAYS
+    from hermes_cli.providers import ARGUS_OVERLAYS
     from hermes_cli.auth import PROVIDER_REGISTRY as _auth_registry
 
     # Build reverse mapping: models.dev ID → Hermes provider ID.
-    # HERMES_OVERLAYS keys may be models.dev IDs (e.g. "github-copilot")
+    # ARGUS_OVERLAYS keys may be models.dev IDs (e.g. "github-copilot")
     # while _PROVIDER_MODELS and config.yaml use Hermes IDs ("copilot").
     _mdev_to_hermes = {v: k for k, v in PROVIDER_TO_MODELS_DEV.items()}
 
-    for pid, overlay in HERMES_OVERLAYS.items():
+    for pid, overlay in ARGUS_OVERLAYS.items():
         if pid.lower() in seen_slugs:
             continue
 
@@ -1777,7 +1822,7 @@ def list_authenticated_providers(
         elif hermes_slug == "nous":
             # Nous serves a large live /v1/models catalog (vendor-prefixed
             # models from many providers, returned alphabetically). The
-            # `hermes model` picker deliberately shows ONLY the curated agentic
+            # `argus model` picker deliberately shows ONLY the curated agentic
             # list — augmented with the Portal's free/paid recommendations so
             # newly-launched models surface without a CLI release — in curated
             # order. Mirror that exactly (see _model_flow_nous in main.py) so
@@ -1841,8 +1886,8 @@ def list_authenticated_providers(
 
     # --- 2b. Cross-check canonical provider list ---
     # Catches providers that are in CANONICAL_PROVIDERS but weren't found
-    # in PROVIDER_TO_MODELS_DEV or HERMES_OVERLAYS (keeps /model in sync
-    # with `hermes model`).
+    # in PROVIDER_TO_MODELS_DEV or ARGUS_OVERLAYS (keeps /model in sync
+    # with `argus model`).
     try:
         from hermes_cli.models import CANONICAL_PROVIDERS as _canon_provs
     except ImportError:
@@ -1995,7 +2040,10 @@ def list_authenticated_providers(
                     from hermes_cli.models import fetch_api_models
                     live_models = fetch_api_models(api_key, api_url)
                     if live_models:
-                        models_list = live_models
+                        # Merge, don't replace — see _merge_explicit_with_live.
+                        # A model the user wrote in config must survive an
+                        # endpoint whose /models omits it.
+                        models_list = _merge_explicit_with_live(models_list, live_models)
                 except Exception:
                     pass
 
@@ -2214,10 +2262,18 @@ def list_authenticated_providers(
             # the Telegram/Discord picker should do the same for parity.
             # Live-discovery policy:
             # - With an api_key, the user has explicitly opted into the
-            #   endpoint and live /models is the source of truth — replace
-            #   the (possibly partial) ``models:`` subset configured for
-            #   context-length overrides with the full live catalog.
+            #   endpoint and live /models is the source of truth for the
+            #   *catalog* — it supersedes the (possibly partial) ``models:``
+            #   subset configured for context-length overrides.
             #   This is the Bifrost / aggregator-gateway case.
+            #   ★ But it does NOT get to DELETE a model the user wrote down by
+            #   hand: plenty of endpoints omit models from /models that they
+            #   happily serve (vision models especially — open.bigmodel.cn's
+            #   /models has no glm-5v-turbo). Replacing outright made such a
+            #   model visible only while it happened to be the *current* one
+            #   (via the `current_model` post-pass below), so switching away
+            #   from it deleted it from the picker and you could never switch
+            #   back. Explicit config entries are therefore merged in front.
             # - Without an api_key but with an explicit ``models:`` list
             #   (or top-level ``model:``), the user is narrowing a public
             #   endpoint to a specific subset (e.g. ollama.com /v1/models
@@ -2242,8 +2298,10 @@ def list_authenticated_providers(
 
                     live_models = fetch_api_models(api_key, api_url)
                     if live_models:
-                        grp["models"] = live_models
-                        grp["total_models"] = len(live_models)
+                        grp["models"] = _merge_explicit_with_live(
+                            grp["models"], live_models
+                        )
+                        grp["total_models"] = len(grp["models"])
                 except Exception:
                     pass
             results.append({

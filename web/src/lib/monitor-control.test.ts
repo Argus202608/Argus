@@ -24,8 +24,7 @@ describe("monitorPresentation", () => {
       done: false,
       canToggle: true,
       mode: "continuous",
-      modeLabel: "持续",
-      statusLabel: "进行中",
+      statusToken: "active",
     });
   });
 
@@ -39,8 +38,7 @@ describe("monitorPresentation", () => {
       done: true,
       canToggle: false,
       mode: "once",
-      modeLabel: "单次",
-      statusLabel: "已完成",
+      statusToken: "done",
     });
   });
 
@@ -49,7 +47,7 @@ describe("monitorPresentation", () => {
       active: false,
       done: true,
       canToggle: false,
-      statusLabel: "已完成",
+      statusToken: "done",
     });
   });
 
@@ -61,8 +59,8 @@ describe("monitorPresentation", () => {
     }))).toMatchObject({
       active: false,
       canToggle: true,
-      modeLabel: "持续",
-      statusLabel: "已中断",
+      mode: "continuous",
+      statusToken: "interrupted",
     });
   });
 });

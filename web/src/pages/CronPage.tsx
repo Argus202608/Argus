@@ -345,7 +345,7 @@ function CronJobFormFields({
     deliveryTargets.map((target) => {
       const base = target.id === "local" ? t.cron.delivery.local : target.name;
       if (target.id !== "local" && !target.home_target_set) {
-        const hint = t.cron.delivery.needsHomeChannel ?? "set a home channel first";
+        const hint = t.cron.delivery.needsHomeChannel;
         return { value: target.id, label: `${base} — ${hint}` };
       }
       return { value: target.id, label: base };
@@ -392,8 +392,7 @@ function CronJobFormFields({
         </Select>
         {onlyLocalAvailable && (
           <p className="text-xs text-muted-foreground">
-            {t.cron.delivery.noneConfigured ??
-              "No messaging platforms configured. Set one up under Channels to deliver reports."}
+            {t.cron.delivery.noneConfigured}
           </p>
         )}
       </div>

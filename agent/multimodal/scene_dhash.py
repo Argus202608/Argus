@@ -308,6 +308,11 @@ class SceneDhashController:
             "messages": messages,
             "stream": False,
         }
+        # Kimi K2.6 (MaaS / vLLM 后端) 默认走 thinking mode, max_tokens 会被 reasoning_content 全部占满
+        # 导致 content 输出空 → scene JSON 解析失败。显式关 thinking, 响应速度也从 ~3s 降到 ~0.4s。
+        # vLLM/SGLang 的正确格式是 chat_template_kwargs.thinking=False (布尔), 不是 enable_thinking。
+        if "kimi-k2" in (self.model or "").lower():
+            base["extra_body"] = {"chat_template_kwargs": {"thinking": False}}
         default_attempt = dict(base, max_tokens=120, temperature=0.0)
         portable_attempt = dict(base, max_completion_tokens=256)
         if "gpt-5.6-luna" in (self.model or "").lower():

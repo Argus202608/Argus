@@ -63,13 +63,13 @@ def default_local_model_dir() -> str:
 
     公开给下载脚本用: 下载后要放到这里, 才与运行时加载路径一致.
     """
-    hh = os.environ.get("HERMES_HOME")
+    hh = os.environ.get("ARGUS_HOME")
     if not hh:
         try:
             from hermes_constants import get_hermes_home
             hh = str(get_hermes_home())
         except Exception:
-            hh = os.path.expanduser("~/.hermes")
+            hh = os.path.expanduser("~/.argus")
     return os.path.join(hh, "models", _DEFAULT_LOCAL_DIRNAME)
 
 
@@ -121,21 +121,21 @@ def _hermes_home_root() -> str:
     """HERMES_HOME 根目录 (config.yaml 里相对路径的解析根).
 
     优先环境变量 HERMES_HOME; 否则 get_hermes_home() (Windows 默认
-    ~/AppData/Local/hermes, macOS/Linux 默认 ~/.hermes).
+    ~/AppData/Local/hermes, macOS/Linux 默认 ~/.argus).
 
     ★ 项目约定: config.yaml 里的相对路径以 HERMES_HOME 为根解析
     (不是 CWD, 也不是项目安装目录). 这样用户跨机器部署时只需拷贝
     HERMES_HOME (包含 config + 模型权重 + session db 等), 项目代码可
     单独更新.
     """
-    hh = os.environ.get("HERMES_HOME")
+    hh = os.environ.get("ARGUS_HOME")
     if hh:
         return hh
     try:
         from hermes_constants import get_hermes_home
         return str(get_hermes_home())
     except Exception:
-        return os.path.expanduser("~/.hermes")
+        return os.path.expanduser("~/.argus")
 
 
 def _resolve_maybe_relative(path: str) -> str:
@@ -152,7 +152,7 @@ def _resolve_maybe_relative(path: str) -> str:
 
 
 def _resolve_config() -> Tuple[str, str, str]:
-    """从 hermes config 拉 (model_id_or_path, device, dtype). 失败用默认.
+    """从 argus config 拉 (model_id_or_path, device, dtype). 失败用默认.
 
     读 auxiliary.text.local_backend.{local_path, local_device, local_dtype}
     (v33: auxiliary.llm→text; 本地小模型配置放 local_backend 子块, use_local 决定启用).

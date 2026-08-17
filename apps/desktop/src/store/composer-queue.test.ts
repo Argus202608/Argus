@@ -16,7 +16,7 @@ import {
 } from './composer-queue'
 
 const SESSION_KEY = 'session-abc'
-const QUEUE_STORAGE_KEY = 'hermes.desktop.composerQueue.v1'
+const QUEUE_STORAGE_KEY = 'argus.desktop.composerQueue.v1'
 
 function attachment(id: string, kind: ComposerAttachment['kind'] = 'file'): ComposerAttachment {
   return {

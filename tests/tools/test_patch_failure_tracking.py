@@ -21,7 +21,7 @@ def hermes_home(monkeypatch, tmp_path):
     subsequent tests (see test_line_ending_preservation.py for details)."""
     home = tmp_path / "hermes"
     home.mkdir()
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("ARGUS_HOME", str(home))
     yield home
     try:
         from tools.file_tools import clear_file_ops_cache, _read_tracker_lock, _read_tracker

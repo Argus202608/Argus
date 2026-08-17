@@ -1,5 +1,7 @@
 import { atom } from 'nanostores'
 
+import { translateNow } from '@/i18n'
+
 import { $gateway } from './gateway'
 import { $mmSessionId, addVoiceUserMessage } from './multimodal'
 
@@ -7,8 +9,10 @@ import { $mmSessionId, addVoiceUserMessage } from './multimodal'
  * Voice I/O for the multimodal page (desktop port of web startMic/stopMic +
  * onTtsChunk + env-audio):
  *   - Mic streaming ASR: getUserMedia → AudioWorklet(pcm-worklet.js) → 16k PCM
- *     batches → multimodal.asr_audio; asr_partial/asr_final drive the preview
- *     bar and inject the final as a voice user message.
+ *     batches → multimodal.asr_audio. Ordinary mic input is one explicit
+ *     manual turn: partial/buffer events are preview-only, and the second click
+ *     flushes + finishes before exactly one final is submitted. Voice Dialog
+ *     keeps the existing continuous/VAD behavior.
  *   - TTS playback: multimodal.tts PCM16 chunks → WebAudio gapless scheduling.
  *   - Env audio: screen-share audio track → MediaRecorder 5s slices →
  *     multimodal.env_audio.
@@ -18,9 +22,11 @@ import { $mmSessionId, addVoiceUserMessage } from './multimodal'
  * keeps working when the page/window is hidden.
  */
 
-export type MicState = 'idle' | 'connecting' | 'recording'
+export type MicState = 'idle' | 'connecting' | 'recording' | 'finalizing'
+export type MicMode = 'manual_turn' | 'continuous'
 
 export const $mmMicState = atom<MicState>('idle')
+export const $mmMicError = atom<string>('')
 export const $mmAsrPartial = atom<string>('')
 // EOU listening mode can stitch several finalized speech segments before it
 // submits the complete user turn. Keep those segments separate from the live
@@ -73,6 +79,16 @@ interface MicRefs {
   preRoll: ArrayBuffer[]
   preRollBytes: number
   cancelPendingDraft: (() => void) | null
+  /** Stable logical turn id. It is allocated before permission and follows
+   * start/audio/stop so late PCM can never leak into a replacement turn. */
+  turnId: string
+  mode: MicMode
+  backendReady: boolean
+  startPromise: Promise<void> | null
+  finishPromise: Promise<void> | null
+  pendingAudio: Set<Promise<void>>
+  audioFailed: boolean
+  flushResolver: ((flushed: boolean) => void) | null
 }
 
 const mic: MicRefs = {
@@ -88,10 +104,80 @@ const mic: MicRefs = {
   draftEnsureSession: null,
   preRoll: [],
   preRollBytes: 0,
-  cancelPendingDraft: null
+  cancelPendingDraft: null,
+  turnId: '',
+  mode: 'manual_turn',
+  backendReady: false,
+  startPromise: null,
+  finishPromise: null,
+  pendingAudio: new Set(),
+  audioFailed: false,
+  flushResolver: null
 }
 
-const MIC_PRE_ROLL_MAX_BYTES = 16_000 * 2 * 3
+// Cover the legal 210s cold-activation budget plus 30s of scheduling/ACK
+// headroom. Mono PCM16 is ~7.68 MB: bounded, without rolling off the opening
+// words at the edge of an otherwise-valid activation.
+const MIC_PRE_ROLL_MAX_BYTES = 16_000 * 2 * 240
+let micTurnSequence = 0
+
+function nextMicTurnId(): string {
+  micTurnSequence += 1
+  const random = globalThis.crypto?.randomUUID?.() || Math.random().toString(36).slice(2)
+
+  return `desktop-asr-${Date.now()}-${micTurnSequence}-${random}`
+}
+
+async function requestMicrophoneStream(): Promise<MediaStream> {
+  const requestAccess = window.hermesDesktop?.requestMicrophoneAccess
+
+  if (requestAccess) {
+    const permitted = await requestAccess()
+
+    if (!permitted) {
+      throw new Error(translateNow('multimodal.voiceErrors.micPermissionDenied'))
+    }
+  }
+
+  return navigator.mediaDevices.getUserMedia({
+    audio: {
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+      channelCount: 1
+    }
+  })
+}
+
+async function prepareMicContext(stream: MediaStream): Promise<{
+  ctx: AudioContext
+  source: MediaStreamAudioSourceNode
+  node: AudioWorkletNode
+}> {
+  const Ctx =
+    window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
+  const ctx = new Ctx()
+
+  try {
+    await ctx.audioWorklet.addModule(WORKLET_URL)
+    if (ctx.state === 'suspended') {
+      await ctx.resume()
+    }
+
+    const source = ctx.createMediaStreamSource(stream)
+    const node = new AudioWorkletNode(ctx, 'pcm-downsample-processor', {
+      numberOfInputs: 1,
+      numberOfOutputs: 1,
+      processorOptions: { inRate: ctx.sampleRate, batchMs: 200 }
+    })
+
+    return { ctx, source, node }
+  } catch (error) {
+    await ctx.close().catch(() => undefined)
+
+    throw error
+  }
+}
 
 /** Desktop main-chat injection point. It deliberately creates nothing until
  * the locally-armed draft mic produces non-empty PCM. */
@@ -105,7 +191,11 @@ function clearMicPreRoll(): void {
 }
 
 function appendMicPreRoll(buf: ArrayBuffer): void {
-  const copy = buf.slice(0)
+  // Worklet packets are normally ~6.4 KB, but keep the invariant strict even
+  // if a malformed/alternate producer emits one packet larger than the cap.
+  const copy = buf.byteLength > MIC_PRE_ROLL_MAX_BYTES
+    ? buf.slice(buf.byteLength - MIC_PRE_ROLL_MAX_BYTES)
+    : buf.slice(0)
 
   mic.preRoll.push(copy)
   mic.preRollBytes += copy.byteLength
@@ -122,12 +212,102 @@ function clearAsrPreview(): void {
   $mmAsrBuffer.set([])
 }
 
+function consumeMicControlMessage(data: unknown): boolean {
+  if (!data || typeof data !== 'object' || (data as { type?: unknown }).type !== 'flushed') {
+    return false
+  }
+
+  const resolve = mic.flushResolver
+
+  mic.flushResolver = null
+  resolve?.(true)
+
+  return true
+}
+
+async function flushMicTail(): Promise<boolean> {
+  const node = mic.node
+
+  if (!node) {
+    return false
+  }
+
+  return new Promise<boolean>(resolve => {
+    let settled = false
+    let handleFlush: ((flushed: boolean) => void) | null = null
+    const finish = (flushed: boolean) => {
+      if (settled) {
+        return
+      }
+      settled = true
+      if (mic.flushResolver === handleFlush) {
+        mic.flushResolver = null
+      }
+      resolve(flushed)
+    }
+    const timer = setTimeout(() => finish(false), 500)
+
+    handleFlush = flushed => {
+      clearTimeout(timer)
+      finish(flushed)
+    }
+    mic.flushResolver = handleFlush
+    try {
+      node.port.postMessage({ type: 'flush' })
+    } catch {
+      clearTimeout(timer)
+      finish(false)
+    }
+  })
+}
+
 /** True when the mic either owns resources or is waiting for the replacement
  * runtime of the same durable conversation. The latter intentionally does not
  * rely on the presentation atom: a failed start against the stale runtime may
  * return the UI to idle before session.resume publishes its replacement id. */
 export function hasMicCaptureIntent(): boolean {
   return Boolean(mic.rearmPending || mic.recording || mic.sessionId || $mmMicState.get() !== 'idle')
+}
+
+function queueMicAudio(
+  gw: NonNullable<ReturnType<typeof $gateway.get>>,
+  sid: string,
+  turnId: string,
+  generation: number,
+  buf: ArrayBuffer
+): void {
+  const pcm_b64 = bytesToBase64(new Uint8Array(buf))
+
+  if (
+    mic.generation !== generation ||
+    mic.turnId !== turnId ||
+    mic.sessionId !== sid ||
+    $mmSessionId.get() !== sid
+  ) {
+    return
+  }
+
+  const pending = gw.request<{ ok?: boolean }>('multimodal.asr_audio', {
+    session_id: sid,
+    turn_id: turnId,
+    pcm_b64
+  }).then(result => {
+    if (result?.ok === false) {
+      throw new Error('asr_audio rejected')
+    }
+  }).catch(() => {
+    if (
+      mic.mode === 'manual_turn' &&
+      mic.generation === generation &&
+      mic.turnId === turnId &&
+      mic.sessionId === sid
+    ) {
+      mic.audioFailed = true
+    }
+  })
+
+  mic.pendingAudio.add(pending)
+  void pending.finally(() => mic.pendingAudio.delete(pending))
 }
 
 async function startMicOwned(keepRearmIntentOnFailure: boolean): Promise<void> {
@@ -143,162 +323,176 @@ async function startMicOwned(keepRearmIntentOnFailure: boolean): Promise<void> {
   }
 
   const generation = mic.generation + 1
+  const turnId = mic.turnId || nextMicTurnId()
+  const mode = mic.mode || ($mmVoiceDialogEnabled.get() ? 'continuous' : 'manual_turn')
 
   mic.generation = generation
   mic.gateway = gw
   mic.sessionId = sid
+  mic.turnId = turnId
+  mic.mode = mode
+  mic.backendReady = false
+  mic.pendingAudio.clear()
+  mic.audioFailed = false
   clearAsrPreview()
   $mmMicState.set('connecting')
 
   let pendingStream: MediaStream | null = null
   let pendingCtx: AudioContext | null = null
 
-  const stillOwnsStart = () => mic.generation === generation && mic.sessionId === sid && $mmSessionId.get() === sid
-
+  const stillOwnsStart = () => (
+    mic.generation === generation &&
+    mic.turnId === turnId &&
+    mic.sessionId === sid &&
+    $mmSessionId.get() === sid
+  )
   const releasePending = () => {
     if (pendingCtx) {
       void pendingCtx.close().catch(() => undefined)
       pendingCtx = null
     }
-
     if (pendingStream) {
       pendingStream.getTracks().forEach(track => track.stop())
       pendingStream = null
     }
   }
-
-  const stopOwnedBackend = () => {
-    // A superseding generation may deliberately re-open ASR on the same
-    // runtime (transport reconnect). Its session now owns that backend key, so
-    // a late stale starter must not stop the replacement it just created.
-    if (mic.generation !== generation && mic.sessionId === sid) {
-      return
-    }
-
-    void gw.request('multimodal.asr_stop', { session_id: sid }).catch(() => undefined)
-  }
-
-  const abandonStaleStart = () => {
-    releasePending()
-    stopOwnedBackend()
-
-    // If no newer generation took ownership, this start became stale solely
-    // because its session disappeared. Do not leave the UI stuck connecting.
-    if (mic.generation === generation && mic.sessionId === sid) {
-      mic.gateway = null
-      mic.sessionId = ''
-
-      if (!keepRearmIntentOnFailure) {
-        mic.rearmPending = false
-      }
-
-      $mmMicState.set('idle')
-      clearAsrPreview()
-    }
+  mic.cancelPendingDraft = releasePending
+  const cancelOwnedBackend = () => {
+    void gw.request('multimodal.asr_stop', {
+      session_id: sid,
+      turn_id: turnId,
+      disposition: 'cancel'
+    }).catch(() => undefined)
   }
 
   try {
-    const res = await gw.request<{ enabled?: boolean }>('multimodal.asr_start', { session_id: sid }, 210_000)
-
+    // Acquire first, then open ASR. The worklet buffers immediately so a cold
+    // backend cannot eat the first words of the user's explicit recording.
+    pendingStream = await requestMicrophoneStream()
     if (!stillOwnsStart()) {
-      abandonStaleStart()
+      releasePending()
 
       return
     }
 
-    if (!res?.enabled) {
-      $mmMicState.set('idle')
-      throw new Error('流式语音未启用（需在配置里填 dashscope_api_key）')
-    }
+    const prepared = await prepareMicContext(pendingStream)
 
-    pendingStream = await navigator.mediaDevices.getUserMedia({
-      // Full software 3A: echo-cancel + noise-suppress + auto-gain (AGC was
-      // missing — it levels your voice so it stands out over background). This
-      // is the browser/Electron ceiling: it suppresses STEADY noise but cannot
-      // beam-form or target-speaker like a phone's mic array + DSP, so nearby
-      // human speech still leaks. channelCount:1 = mono (ASR wants 16k mono).
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-        channelCount: 1
-      }
-    })
-
+    pendingCtx = prepared.ctx
     if (!stillOwnsStart()) {
-      abandonStaleStart()
+      prepared.node.port.close()
+      prepared.node.disconnect()
+      prepared.source.disconnect()
+      releasePending()
 
       return
     }
 
-    const Ctx =
-      window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
-    pendingCtx = new Ctx()
-    await pendingCtx.audioWorklet.addModule(WORKLET_URL)
+    mic.stream = pendingStream
+    mic.ctx = pendingCtx
+    mic.source = prepared.source
+    mic.node = prepared.node
+    mic.cancelPendingDraft = null
+    pendingStream = null
+    pendingCtx = null
 
-    if (!stillOwnsStart()) {
-      abandonStaleStart()
-
-      return
-    }
-
-    const source = pendingCtx.createMediaStreamSource(pendingStream)
-    const node = new AudioWorkletNode(pendingCtx, 'pcm-downsample-processor', {
-      numberOfInputs: 1,
-      numberOfOutputs: 1,
-      processorOptions: { inRate: pendingCtx.sampleRate, batchMs: 200 }
-    })
-
-    node.port.onmessage = (ev: MessageEvent) => {
-      if (!mic.recording || mic.generation !== generation || mic.sessionId !== sid || $mmSessionId.get() !== sid) {
+    prepared.node.port.onmessage = (ev: MessageEvent) => {
+      if (consumeMicControlMessage(ev.data)) {
         return
       }
-      // Barge-in guard: while the assistant's TTS is audible (+ tail), drop the
-      // mic PCM so speaker output isn't re-captured and looped back into ASR.
-      if (micGatedForTts()) {
+      if (
+        !mic.recording ||
+        mic.generation !== generation ||
+        mic.turnId !== turnId ||
+        mic.sessionId !== sid ||
+        $mmSessionId.get() !== sid ||
+        micGatedForTts()
+      ) {
         return
       }
 
       const buf = ev.data as ArrayBuffer
 
-      if (!buf || !buf.byteLength) {
+      if (!buf?.byteLength) {
         return
       }
 
-      const pcm_b64 = bytesToBase64(new Uint8Array(buf))
-      void gw.request('multimodal.asr_audio', { session_id: sid, pcm_b64 }).catch(() => undefined)
+      if (mic.backendReady) {
+        queueMicAudio(gw, sid, turnId, generation, buf)
+      } else {
+        appendMicPreRoll(buf)
+      }
     }
-    source.connect(node)
-    node.connect(pendingCtx.destination)
-
-    mic.stream = pendingStream
-    mic.ctx = pendingCtx
-    mic.source = source
-    mic.node = node
-    pendingStream = null
-    pendingCtx = null
+    // Install the receiver before connecting the graph. Chromium may schedule
+    // the first audio quantum immediately after source.connect().
     mic.recording = true
+    prepared.source.connect(prepared.node)
+    prepared.node.connect(prepared.ctx.destination)
     mic.rearmPending = false
-    $mmMicState.set('recording')
-  } catch (e) {
-    releasePending()
-    stopOwnedBackend()
 
-    if (mic.generation !== generation || mic.sessionId !== sid) {
+    // Permission + local capture are the truthful red-recording boundary.
+    if ($mmMicState.get() !== 'finalizing') {
+      $mmMicState.set('recording')
+    } else {
+      mic.recording = false
+      _releaseMicResources()
+    }
+
+    const res = await gw.request<{ enabled?: boolean; turn_id?: string }>(
+      'multimodal.asr_start',
+      {
+        session_id: sid,
+        turn_id: turnId,
+        mode
+      },
+      210_000
+    )
+
+    if (!stillOwnsStart()) {
+      cancelOwnedBackend()
+
+      return
+    }
+    if (!res?.enabled) {
+      throw new Error(translateNow('multimodal.voiceErrors.streamingNotEnabled'))
+    }
+    if (res.turn_id && res.turn_id !== turnId) {
+      throw new Error(translateNow('multimodal.voiceErrors.turnMismatch'))
+    }
+
+    mic.backendReady = true
+    const queued = mic.preRoll
+
+    clearMicPreRoll()
+    for (const chunk of queued) {
+      if (!stillOwnsStart()) {
+        break
+      }
+      queueMicAudio(gw, sid, turnId, generation, chunk)
+    }
+  } catch (error) {
+    releasePending()
+    cancelOwnedBackend()
+
+    if (!stillOwnsStart()) {
       return
     }
 
+    mic.recording = false
+    mic.backendReady = false
     mic.gateway = null
     mic.sessionId = ''
+    mic.turnId = ''
+    mic.cancelPendingDraft = null
+    _releaseMicResources()
+    clearMicPreRoll()
 
-    if (!keepRearmIntentOnFailure) {
-      mic.rearmPending = false
-    }
+    mic.rearmPending = keepRearmIntentOnFailure
 
     $mmMicState.set('idle')
     clearAsrPreview()
+    $mmMicError.set(error instanceof Error ? error.message : String(error))
 
-    throw e
+    throw error
   }
 }
 
@@ -314,30 +508,24 @@ async function armDraftMic(): Promise<void> {
   }
 
   const generation = mic.generation + 1
+  const turnId = nextMicTurnId()
+  const mode: MicMode = $mmVoiceDialogEnabled.get() ? 'continuous' : 'manual_turn'
 
   mic.generation = generation
   mic.rearmPending = true
+  mic.turnId = turnId
+  mic.mode = mode
+  mic.backendReady = false
+  mic.pendingAudio.clear()
+  mic.audioFailed = false
   clearAsrPreview()
   clearMicPreRoll()
   $mmMicState.set('connecting')
 
   let pendingStream: MediaStream | null = null
   let pendingCtx: AudioContext | null = null
-  let source: MediaStreamAudioSourceNode | null = null
-  let node: AudioWorkletNode | null = null
-  let createInFlight: Promise<void> | null = null
-
-  const stillOwnsDraft = () => mic.generation === generation && mic.rearmPending
+  const stillOwnsDraft = () => mic.generation === generation && mic.turnId === turnId
   const releasePending = () => {
-    if (node) {
-      node.port.onmessage = null
-      node.port.close()
-      node.disconnect()
-      node = null
-    }
-    source?.disconnect()
-    source = null
-
     if (pendingCtx) {
       void pendingCtx.close().catch(() => undefined)
       pendingCtx = null
@@ -348,17 +536,26 @@ async function armDraftMic(): Promise<void> {
     }
   }
   mic.cancelPendingDraft = releasePending
-
-  const failDraft = () => {
+  const failDraft = (error?: unknown) => {
     if (!stillOwnsDraft()) {
       return
     }
 
     mic.rearmPending = false
     mic.cancelPendingDraft = null
+    mic.recording = false
+    mic.backendReady = false
+    mic.gateway = null
+    mic.sessionId = ''
+    mic.turnId = ''
     $mmMicState.set('idle')
     clearMicPreRoll()
+    clearAsrPreview()
+    _releaseMicResources()
     releasePending()
+    if (error) {
+      $mmMicError.set(error instanceof Error ? error.message : String(error))
+    }
 
     if ($mmVoiceDialogEnabled.get()) {
       $mmVoiceDialogEnabled.set(false)
@@ -366,40 +563,40 @@ async function armDraftMic(): Promise<void> {
   }
 
   try {
-    pendingStream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-        channelCount: 1
+    pendingStream = await requestMicrophoneStream()
+
+    if (!stillOwnsDraft()) {
+      releasePending()
+
+      return
+    }
+
+    const prepared = await prepareMicContext(pendingStream)
+
+    pendingCtx = prepared.ctx
+
+    if (!stillOwnsDraft()) {
+      prepared.node.port.close()
+      prepared.node.disconnect()
+      prepared.source.disconnect()
+      releasePending()
+
+      return
+    }
+
+    mic.stream = pendingStream
+    mic.ctx = pendingCtx
+    mic.source = prepared.source
+    mic.node = prepared.node
+    mic.cancelPendingDraft = null
+    pendingStream = null
+    pendingCtx = null
+
+    prepared.node.port.onmessage = (ev: MessageEvent) => {
+      if (consumeMicControlMessage(ev.data)) {
+        return
       }
-    })
-
-    if (!stillOwnsDraft()) {
-      releasePending()
-
-      return
-    }
-
-    const Ctx =
-      window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
-    pendingCtx = new Ctx()
-    await pendingCtx.audioWorklet.addModule(WORKLET_URL)
-
-    if (!stillOwnsDraft()) {
-      releasePending()
-
-      return
-    }
-
-    source = pendingCtx.createMediaStreamSource(pendingStream)
-    node = new AudioWorkletNode(pendingCtx, 'pcm-downsample-processor', {
-      numberOfInputs: 1,
-      numberOfOutputs: 1,
-      processorOptions: { inRate: pendingCtx.sampleRate, batchMs: 200 }
-    })
-    node.port.onmessage = (ev: MessageEvent) => {
-      if (!stillOwnsDraft()) {
+      if (!stillOwnsDraft() || !mic.recording || micGatedForTts()) {
         return
       }
 
@@ -409,13 +606,23 @@ async function armDraftMic(): Promise<void> {
         return
       }
 
+      if (mic.backendReady && mic.gateway && mic.sessionId) {
+        queueMicAudio(mic.gateway, mic.sessionId, turnId, generation, buf)
+
+        return
+      }
+
       appendMicPreRoll(buf)
 
-      createInFlight ??= (async () => {
+      if (!mic.startPromise) {
+        const createInFlight = (async () => {
         const sid = await ensureSession()
 
-        if (!sid || !stillOwnsDraft() || $mmSessionId.get() !== sid) {
-          failDraft()
+        if (!stillOwnsDraft()) {
+          return
+        }
+        if (!sid || $mmSessionId.get() !== sid) {
+          failDraft(new Error(translateNow('multimodal.voiceErrors.sessionCreateFailed')))
 
           return
         }
@@ -423,84 +630,52 @@ async function armDraftMic(): Promise<void> {
         const gw = $gateway.get()
 
         if (!gw) {
-          failDraft()
-
-          return
-        }
-
-        const res = await gw.request<{ enabled?: boolean }>(
-          'multimodal.asr_start',
-          {
-            session_id: sid
-          },
-          210_000
-        )
-
-        if (!res?.enabled || !stillOwnsDraft() || $gateway.get() !== gw || $mmSessionId.get() !== sid) {
-          if (res?.enabled) {
-            void gw.request('multimodal.asr_stop', { session_id: sid }).catch(() => undefined)
-          }
-
-          failDraft()
-
-          return
-        }
-
-        const committedNode = node
-
-        if (!committedNode) {
-          failDraft()
+          failDraft(new Error(translateNow('multimodal.voiceErrors.connectionUnavailable')))
 
           return
         }
 
         mic.gateway = gw
         mic.sessionId = sid
-        mic.stream = pendingStream
-        mic.ctx = pendingCtx
-        mic.source = source
-        mic.node = committedNode
-        mic.recording = true
-        mic.rearmPending = false
-        mic.cancelPendingDraft = null
-        pendingStream = null
-        pendingCtx = null
-        source = null
-        node = null
-        $mmMicState.set('recording')
+        const res = await gw.request<{ enabled?: boolean; turn_id?: string }>(
+          'multimodal.asr_start',
+          {
+            session_id: sid,
+            turn_id: turnId,
+            mode
+          },
+          210_000
+        )
 
-        committedNode.port.onmessage = (event: MessageEvent) => {
-          if (
-            !mic.recording ||
-            mic.generation !== generation ||
-            mic.sessionId !== sid ||
-            $mmSessionId.get() !== sid ||
-            micGatedForTts()
-          ) {
-            return
-          }
-
-          const liveBuf = event.data as ArrayBuffer
-
-          if (!liveBuf?.byteLength) {
-            return
-          }
-
-          const pcm_b64 = bytesToBase64(new Uint8Array(liveBuf))
-
-          void gw.request('multimodal.asr_audio', { session_id: sid, pcm_b64 }).catch(() => undefined)
+        if (!res?.enabled) {
+          throw new Error(translateNow('multimodal.voiceErrors.streamingNotEnabled'))
         }
+        if (!stillOwnsDraft() || $gateway.get() !== gw || $mmSessionId.get() !== sid) {
+          void gw.request('multimodal.asr_stop', {
+            session_id: sid,
+            turn_id: turnId,
+            disposition: 'cancel'
+          }).catch(() => undefined)
+
+          failDraft()
+
+          return
+        }
+        if (res.turn_id && res.turn_id !== turnId) {
+          throw new Error(translateNow('multimodal.voiceErrors.turnMismatch'))
+        }
+
+        mic.backendReady = true
+        mic.rearmPending = false
 
         const queued = mic.preRoll
 
         clearMicPreRoll()
         for (const chunk of queued) {
-          if (mic.generation !== generation || mic.sessionId !== sid || $mmSessionId.get() !== sid) {
+          if (!stillOwnsDraft() || mic.sessionId !== sid || $mmSessionId.get() !== sid) {
             break
           }
-          const pcm_b64 = bytesToBase64(new Uint8Array(chunk))
-
-          void gw.request('multimodal.asr_audio', { session_id: sid, pcm_b64 }).catch(() => undefined)
+          queueMicAudio(gw, sid, turnId, generation, chunk)
         }
 
         if ($mmVoiceDialogEnabled.get() && mic.generation === generation) {
@@ -511,18 +686,31 @@ async function armDraftMic(): Promise<void> {
             })
             .catch(() => undefined)
         }
-      })().catch(failDraft)
+        })()
+
+        mic.startPromise = createInFlight
+        void createInFlight.catch(failDraft)
+      }
     }
-    source.connect(node)
-    node.connect(pendingCtx.destination)
+    // No opening audio quantum can beat the pre-roll handler.
+    mic.recording = true
+    prepared.source.connect(prepared.node)
+    prepared.node.connect(prepared.ctx.destination)
+    $mmMicState.set('recording')
   } catch (error) {
     releasePending()
 
     if (stillOwnsDraft()) {
       mic.rearmPending = false
       mic.cancelPendingDraft = null
+      mic.recording = false
+      mic.backendReady = false
+      mic.turnId = ''
       $mmMicState.set('idle')
       clearMicPreRoll()
+      clearAsrPreview()
+      _releaseMicResources()
+      $mmMicError.set(error instanceof Error ? error.message : String(error))
 
       if ($mmVoiceDialogEnabled.get()) {
         $mmVoiceDialogEnabled.set(false)
@@ -534,6 +722,18 @@ async function armDraftMic(): Promise<void> {
 }
 
 export async function startMic(): Promise<void> {
+  if (hasMicCaptureIntent()) {
+    return
+  }
+
+  mic.turnId = nextMicTurnId()
+  mic.mode = $mmVoiceDialogEnabled.get() ? 'continuous' : 'manual_turn'
+  mic.finishPromise = null
+  mic.startPromise = null
+  mic.backendReady = false
+  mic.audioFailed = false
+  $mmMicError.set('')
+
   if (!$mmSessionId.get()) {
     await armDraftMic()
 
@@ -544,7 +744,16 @@ export async function startMic(): Promise<void> {
   // latent intent when the old runtime rejects before its replacement exists.
   mic.rearmPending = false
   clearMicPreRoll()
-  await startMicOwned(false)
+  const starting = startMicOwned(false)
+
+  mic.startPromise = starting
+  try {
+    await starting
+  } finally {
+    if (mic.startPromise === starting && $mmMicState.get() !== 'finalizing') {
+      mic.startPromise = null
+    }
+  }
 }
 
 /** Tear down mic AudioContext/worklet/stream (no server call). Shared by
@@ -570,6 +779,10 @@ function _releaseMicResources(): void {
     if (mic.ctx) void mic.ctx.close().catch(() => undefined)
     if (mic.stream) mic.stream.getTracks().forEach(t => t.stop())
   } finally {
+    const resolveFlush = mic.flushResolver
+
+    mic.flushResolver = null
+    resolveFlush?.(false)
     mic.node = null
     mic.source = null
     mic.ctx = null
@@ -590,14 +803,19 @@ async function rearmMic(stopPreviousBackend: boolean, keepIntentForReplacement: 
 
   const previousGateway = mic.gateway
   const previousSessionId = mic.sessionId
+  const previousTurnId = mic.turnId
   const cancelPendingDraft = mic.cancelPendingDraft
 
   mic.rearmPending = true
   mic.generation += 1
   mic.cancelPendingDraft = null
   mic.recording = false
+  mic.backendReady = false
   mic.gateway = null
   mic.sessionId = ''
+  mic.startPromise = null
+  mic.pendingAudio.clear()
+  mic.audioFailed = false
   _releaseMicResources()
   cancelPendingDraft?.()
   clearMicPreRoll()
@@ -608,7 +826,9 @@ async function rearmMic(stopPreviousBackend: boolean, keepIntentForReplacement: 
   if (stopPreviousBackend && previousGateway && previousSessionId) {
     void previousGateway
       .request('multimodal.asr_stop', {
-        session_id: previousSessionId
+        session_id: previousSessionId,
+        turn_id: previousTurnId,
+        disposition: 'cancel'
       })
       .catch(() => undefined)
   }
@@ -626,7 +846,13 @@ async function rearmMic(stopPreviousBackend: boolean, keepIntentForReplacement: 
   $mmMicState.set('idle')
 
   try {
-    await startMicOwned(keepIntentForReplacement)
+    const starting = startMicOwned(keepIntentForReplacement)
+
+    mic.startPromise = starting
+    await starting
+    if (mic.startPromise === starting) {
+      mic.startPromise = null
+    }
 
     // A replacement runtime has a fresh session dictionary. Restore the
     // conversation-mode bit after ASR comes up so the UI's still-enabled
@@ -654,54 +880,282 @@ async function rearmMic(stopPreviousBackend: boolean, keepIntentForReplacement: 
 /** Recreate ASR after a transport reconnect. The old backend-side ASR session
  * was already reaped with the socket, so only the local graph needs rearming. */
 export async function rearmMicAfterReconnect(): Promise<void> {
+  if (mic.mode === 'manual_turn') {
+    await stopMic()
+
+    return
+  }
+
   await rearmMic(false, true)
+}
+
+/** A manual push-to-talk turn cannot silently span a transport outage. Release
+ * it at the disconnect boundary; continuous Voice Dialog is rearmed instead. */
+export function cancelManualMicOnDisconnect(): void {
+  if (mic.mode === 'manual_turn' && hasMicCaptureIntent()) {
+    void stopMic()
+  }
 }
 
 /** Move a live mic from an obsolete runtime id to the replacement runtime for
  * the same durable conversation. The old runtime is explicitly stopped before
  * the new ASR session starts; voice-dialog state remains enabled. */
 export async function rearmMicForSessionRebind(): Promise<void> {
+  if (mic.mode === 'manual_turn') {
+    await stopMic()
+
+    return
+  }
+
   await rearmMic(true, false)
 }
 
+export interface FinishMicTurnResult {
+  error?: string
+  ok?: boolean
+  turn_id?: string
+  transcript?: string
+  submitted?: boolean
+  reason?: string
+}
+
+function finishFailureMessage(result: FinishMicTurnResult): string {
+  // A successfully submitted turn may still carry a non-fatal upstream warning
+  // (for example a recovered timeout with usable partial text).
+  if (result.submitted === true) {
+    return ''
+  }
+
+  const reason = typeof result.reason === 'string' ? result.reason.trim().slice(0, 120) : ''
+
+  switch (reason) {
+    case 'empty':
+      return translateNow('multimodal.voiceErrors.asrEmpty')
+    case 'finish_timeout':
+      return translateNow('multimodal.voiceErrors.asrFinishTimeout')
+    case 'dispatch_failed':
+      return translateNow('multimodal.voiceErrors.asrDispatchFailed')
+    case 'no_engine':
+    case 'upstream_error':
+    case 'finish_failed':
+      return translateNow('multimodal.voiceErrors.asrServiceUnavailable')
+    case 'no_active_turn':
+    case 'stale_transport':
+    case 'stale_turn':
+      return translateNow('multimodal.voiceErrors.asrTurnStale')
+    default:
+      break
+  }
+
+  if (result.ok !== false && result.submitted !== false) {
+    return ''
+  }
+
+  return reason
+    ? translateNow('multimodal.voiceErrors.submitFailedWithReason', reason)
+    : translateNow('multimodal.voiceErrors.submitFailedGeneric')
+}
+
+/** Commit one explicit push-to-talk turn. Local capture stops immediately, but
+ * its owner remains valid until startup and every already-dispatched audio ACK
+ * settle; only then can finish overtake neither pre-roll nor the last chunk. */
+export async function finishMicTurn(): Promise<void> {
+  if (mic.finishPromise) {
+    return mic.finishPromise
+  }
+
+  if ($mmMicState.get() !== 'recording' || !hasMicCaptureIntent() || mic.mode !== 'manual_turn') {
+    return
+  }
+
+  const generation = mic.generation
+  const turnId = mic.turnId
+  const anchorPromise = import('./multimodal-capture')
+    .then(capture => capture.snapshotCaptureAnchor())
+    .catch(() => null)
+
+  $mmMicState.set('finalizing')
+  // Stop the physical input synchronously, but keep the worklet graph alive
+  // long enough to flush its sub-200ms tail into the same logical turn.
+  if (mic.stream) {
+    mic.stream.getTracks().forEach(track => track.stop())
+    mic.stream = null
+  }
+
+  const finish = (async () => {
+    try {
+      const tailFlushed = await flushMicTail()
+      if (mic.generation !== generation || mic.turnId !== turnId) {
+        return
+      }
+      if (!tailFlushed) {
+        throw new Error(translateNow('multimodal.voiceErrors.recordingFinalizeFailed'))
+      }
+      mic.recording = false
+      _releaseMicResources()
+
+      const starting = mic.startPromise
+
+      if (starting) {
+        await starting
+      }
+
+      if (mic.generation !== generation || mic.turnId !== turnId) {
+        return
+      }
+
+      // A draft with no PCM never created a runtime. Treat the second click as
+      // an empty turn and leave no chat/session artifact behind.
+      if (!mic.gateway || !mic.sessionId || !mic.backendReady) {
+        return
+      }
+
+      await Promise.allSettled(Array.from(mic.pendingAudio))
+      if (mic.generation !== generation || mic.turnId !== turnId) {
+        return
+      }
+      if (mic.audioFailed) {
+        throw new Error(translateNow('multimodal.voiceErrors.audioUploadInterrupted'))
+      }
+
+      const anchor = await anchorPromise
+      const result = await mic.gateway.request<FinishMicTurnResult>(
+        'multimodal.asr_stop',
+        {
+          session_id: mic.sessionId,
+          turn_id: turnId,
+          disposition: 'finish',
+          ...(anchor || {})
+        },
+        210_000
+      )
+
+      // A session/profile/disconnect boundary may cancel while the finish RPC
+      // is in flight. Its response belongs to the retired owner and must not
+      // revive an error/preview in the replacement conversation.
+      if (mic.generation !== generation || mic.turnId !== turnId) {
+        return
+      }
+
+      if (result?.turn_id && result.turn_id !== turnId) {
+        throw new Error(translateNow('multimodal.voiceErrors.turnMismatch'))
+      }
+      const failureMessage = finishFailureMessage(result || {})
+
+      if (failureMessage) {
+        throw new Error(failureMessage)
+      }
+    } catch (error) {
+      if (mic.generation !== generation || mic.turnId !== turnId) {
+        return
+      }
+
+      const ownerGateway = mic.gateway
+      const ownerSessionId = mic.sessionId
+
+      if (ownerGateway && ownerSessionId && mic.generation === generation && mic.turnId === turnId) {
+        void ownerGateway.request('multimodal.asr_stop', {
+          session_id: ownerSessionId,
+          turn_id: turnId,
+          disposition: 'cancel'
+        }).catch(() => undefined)
+      }
+
+      $mmMicError.set(error instanceof Error ? error.message : String(error))
+      throw error
+    } finally {
+      if (mic.generation === generation && mic.turnId === turnId) {
+        mic.generation += 1
+        mic.rearmPending = false
+        mic.cancelPendingDraft = null
+        mic.recording = false
+        mic.backendReady = false
+        mic.gateway = null
+        mic.sessionId = ''
+        mic.turnId = ''
+        mic.startPromise = null
+        mic.pendingAudio.clear()
+        mic.audioFailed = false
+        clearMicPreRoll()
+        clearAsrPreview()
+        $mmMicState.set('idle')
+      }
+    }
+  })()
+
+  mic.finishPromise = finish
+  try {
+    await finish
+  } finally {
+    if (mic.finishPromise === finish) {
+      mic.finishPromise = null
+    }
+  }
+}
+
+/** Cancel recording without submitting a turn. Session/profile/New/disconnect
+ * boundaries use this path; the ordinary mic button uses finishMicTurn(). */
 export async function stopMic(): Promise<void> {
   // Always clear the preview, even if a late stop races with an ASR/server
   // disconnect and the local recorder is already idle.
   const wasActive = hasMicCaptureIntent()
   const ownerGateway = mic.gateway
   const ownerSessionId = mic.sessionId
+  const ownerTurnId = mic.turnId
+  const starting = mic.startPromise
   const cancelPendingDraft = mic.cancelPendingDraft
+  const disableVoiceDialog = $mmVoiceDialogEnabled.get()
 
   mic.generation += 1
   mic.rearmPending = false
   mic.cancelPendingDraft = null
   mic.recording = false
+  mic.backendReady = false
   mic.gateway = null
   mic.sessionId = ''
+  mic.turnId = ''
+  mic.startPromise = null
+  mic.finishPromise = null
+  mic.pendingAudio.clear()
+  mic.audioFailed = false
   $mmMicState.set('idle')
   _releaseMicResources()
   cancelPendingDraft?.()
   clearAsrPreview()
   clearMicPreRoll()
 
+  // This presentation/ownership bit must fall synchronously with local mic
+  // ownership, before any slow backend stop can overlap a new profile/session.
+  if (disableVoiceDialog) {
+    $mmVoiceDialogEnabled.set(false)
+  }
+
   if (!wasActive) {
+    mic.mode = 'manual_turn'
+
     return
   }
 
   if (ownerGateway && ownerSessionId) {
-    void ownerGateway
+    await ownerGateway
       .request('multimodal.asr_stop', {
-        session_id: ownerSessionId
+        session_id: ownerSessionId,
+        turn_id: ownerTurnId,
+        disposition: 'cancel'
       })
       .catch(() => undefined)
+  }
+
+  // If cancel raced a cold asr_start, its owner detects the bumped generation
+  // and issues the same exact-id cancel after the backend start ACK.
+  if (starting) {
+    void starting.catch(() => undefined)
   }
 
   // ★ 麦关 → 强制关对话模式 (对话模式必须有活麦, 否则相当于哑火, 对齐 web)。
   //   只在真的处于开态时下发 RPC + set atom, 不做多余调用。不动 $mmTtsEnabled
   //   (喇叭按钮态由用户自己控制; 对话态清掉后后端 is_speaker_on 自然回落到 _mm_tts_on)。
-  if ($mmVoiceDialogEnabled.get()) {
-    $mmVoiceDialogEnabled.set(false)
-
+  if (disableVoiceDialog) {
     if (ownerGateway && ownerSessionId) {
       void ownerGateway
         .request('multimodal.voice_dialog_toggle', {
@@ -711,20 +1165,41 @@ export async function stopMic(): Promise<void> {
         .catch(() => undefined)
     }
   }
+
+  mic.mode = 'manual_turn'
+  $mmMicError.set('')
 }
 
-export function onAsrPartial(text: string): void {
+function ownsAsrEvent(turnId?: string): boolean {
+  // Modern desktop ASR is exact-turn only. Untagged events are accepted solely
+  // when no modern owner exists (legacy compatibility), never into a new turn.
+  return mic.turnId ? Boolean(turnId && mic.turnId === turnId) : !turnId
+}
+
+export function onAsrPartial(text: string, turnId?: string): void {
+  if (!ownsAsrEvent(turnId)) {
+    return
+  }
+
   $mmAsrPartial.set(text || '')
 }
 
-export function onAsrBuffer(segments: unknown): void {
+export function onAsrBuffer(segments: unknown, turnId?: string): void {
+  if (!ownsAsrEvent(turnId)) {
+    return
+  }
+
   const next = Array.isArray(segments)
     ? segments.filter((segment): segment is string => typeof segment === 'string' && Boolean(segment.trim()))
     : []
 
   $mmAsrBuffer.set(next)
 }
-export function onAsrFinal(text: string): void {
+export function onAsrFinal(text: string, turnId?: string): void {
+  if (!ownsAsrEvent(turnId)) {
+    return
+  }
+
   const t = (text || '').trim()
 
   if (t) {
@@ -900,8 +1375,16 @@ export function toggleMultimodalTts(): void {
  *    不动 $mmTtsEnabled atom (喇叭按钮态不变; TTS 由后端强制)。stopMic 里有"关麦→
  *    强制关对话"的反向联动, 幂等安全。
  */
-export function toggleMultimodalVoiceDialog(): void {
+export function toggleMultimodalVoiceDialog(): boolean {
   const next = !$mmVoiceDialogEnabled.get()
+
+  // Do not relabel an already-owned manual turn as continuous. Its callbacks
+  // and backend mode were frozen at asr_start, so that would make the UI claim
+  // dialog takeover while the turn still waits for the ordinary finish click.
+  if (next && mic.mode === 'manual_turn' && hasMicCaptureIntent()) {
+    return false
+  }
+
   $mmVoiceDialogEnabled.set(next)
   const gw = $gateway.get()
   const sid = $mmSessionId.get()
@@ -914,6 +1397,8 @@ export function toggleMultimodalVoiceDialog(): void {
   } else if (hasMicCaptureIntent()) {
     void stopMic().catch(() => undefined)
   }
+
+  return true
 }
 
 // ── Env audio (screen-share audio → 5s MediaRecorder slices) ────────────────
@@ -1238,7 +1723,7 @@ function startEnvMediaRecorder(
             ownerGateway,
             ownerSessionId,
             `stop:${reason}`,
-            `共享音频切片失败: ${reason}`
+            translateNow('multimodal.voiceErrors.sharedAudioSliceFailed', reason)
           )
         }
       }
@@ -1312,7 +1797,7 @@ function submitEnvAudioBlob(blob: Blob, upload: EnvAudioUpload): void {
         upload.ownerGateway,
         upload.ownerSessionId,
         reason,
-        `共享音频 ASR 未接收: ${reason}`
+        translateNow('multimodal.voiceErrors.sharedAudioNotReceived', reason)
       )
     })
     .catch(error => {
@@ -1323,7 +1808,7 @@ function submitEnvAudioBlob(blob: Blob, upload: EnvAudioUpload): void {
         upload.ownerGateway,
         upload.ownerSessionId,
         reason,
-        `共享音频 ASR 请求失败: ${reason}`
+        translateNow('multimodal.voiceErrors.sharedAudioAsrFailed', reason)
       )
     })
 }
@@ -1409,7 +1894,7 @@ function scheduleEnvPcmWindow(
           upload.ownerGateway,
           upload.ownerSessionId,
           'capture:silent_pcm',
-          '共享音频没有收到有效采样，请检查 macOS“屏幕与系统音频录制”权限，然后停止并重新共享屏幕。'
+          translateNow('multimodal.voiceErrors.sharedAudioNoSamples')
         )
 
         return
@@ -1536,7 +2021,7 @@ function startEnvPcmFallback(
       ownerGateway,
       ownerSessionId,
       `capture:${detail}`,
-      `共享音频录制启动失败: ${detail}`
+      translateNow('multimodal.voiceErrors.sharedAudioStartFailed', detail)
     )
   })
 }

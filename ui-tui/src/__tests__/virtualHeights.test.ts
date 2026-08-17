@@ -18,10 +18,13 @@ describe('virtual height estimates', () => {
   })
 
   it('uses compound user prompt width when estimating user message wrapping', () => {
-    const msg: Msg = { role: 'user', text: 'x'.repeat(21) }
+    const msg: Msg = { role: 'user', text: 'x'.repeat(33) }
 
-    expect(estimatedMsgHeight(msg, 26, { compact: false, details: false, userPrompt: '❯' })).toBe(3)
-    expect(estimatedMsgHeight(msg, 26, { compact: false, details: false, userPrompt: 'Ψ >' })).toBe(4)
+    // Must stay wide enough that transcriptBodyWidth's `Math.max(20, …)` floor
+    // does not bind — below ~28 cols both prompts clamp to the same body width
+    // and the assertion silently stops testing the prompt at all.
+    expect(estimatedMsgHeight(msg, 40, { compact: false, details: false, userPrompt: '❯' })).toBe(3)
+    expect(estimatedMsgHeight(msg, 40, { compact: false, details: false, userPrompt: 'Ψ >' })).toBe(4)
   })
 
   it('adds one row for a group-boundary lead gap', () => {

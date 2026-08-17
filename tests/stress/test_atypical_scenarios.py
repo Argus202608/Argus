@@ -46,7 +46,7 @@ def scenario(name):
     def wrap(fn):
         def run():
             home = tempfile.mkdtemp(prefix=f"hermes_atyp_{name}_")
-            os.environ["HERMES_HOME"] = home
+            os.environ["ARGUS_HOME"] = home
             os.environ["HOME"] = home
             for m in list(sys.modules.keys()):
                 if m.startswith(("hermes_cli", "plugins", "gateway")):
@@ -226,7 +226,7 @@ def _(home, kb):
     finally:
         conn.close()
 
-    env = {**os.environ, "PYTHONPATH": str(WT), "HERMES_HOME": home, "HOME": home}
+    env = {**os.environ, "PYTHONPATH": str(WT), "ARGUS_HOME": home, "HOME": home}
     bad_metas = [
         "not-json",
         "[1, 2, 3]",  # array not dict
@@ -436,7 +436,7 @@ def _(home, kb):
             resolved = resolve_workspace(task)
             # If resolve succeeded, check it's actually escape-safe.
             resolved_abs = str(Path(resolved).resolve())
-            home_abs = str(Path(os.environ["HERMES_HOME"]).resolve())
+            home_abs = str(Path(os.environ["ARGUS_HOME"]).resolve())
             if not resolved_abs.startswith(home_abs) and resolved_abs.startswith("/tmp"):
                 # This is escaping the home dir. Whether that's actually
                 # a problem depends on the threat model. Flag for attention.
@@ -534,7 +534,7 @@ def _(home, kb):
     # Note: home was already created with a safe prefix. We need to
     # reset to a weird one for this test.
     weird = tempfile.mkdtemp(prefix="hermes with spaces ")
-    os.environ["HERMES_HOME"] = weird
+    os.environ["ARGUS_HOME"] = weird
     os.environ["HOME"] = weird
     kb._INITIALIZED_PATHS.clear()
     kb.init_db()
@@ -560,7 +560,7 @@ def _(home, kb):
     # Pre-create directly since tempfile doesn't love unicode prefixes
     weird = f"/tmp/hermes_héllo_émöji_{os.getpid()}"
     os.makedirs(weird, exist_ok=True)
-    os.environ["HERMES_HOME"] = weird
+    os.environ["ARGUS_HOME"] = weird
     os.environ["HOME"] = weird
     kb._INITIALIZED_PATHS.clear()
     kb.init_db()
@@ -587,7 +587,7 @@ def _(home, kb):
     os.symlink(real, link1)
     os.symlink(real, link2)
     try:
-        os.environ["HERMES_HOME"] = link1
+        os.environ["ARGUS_HOME"] = link1
         os.environ["HOME"] = link1
         kb._INITIALIZED_PATHS.clear()
         kb.init_db()
@@ -596,7 +596,7 @@ def _(home, kb):
         conn1.close()
 
         # Switch to link2 pointing at the same dir
-        os.environ["HERMES_HOME"] = link2
+        os.environ["ARGUS_HOME"] = link2
         os.environ["HOME"] = link2
         conn2 = kb.connect()
         # Should see the task we created via link1
@@ -688,7 +688,7 @@ def _(home, kb):
 def _idempotency_race_worker(hermes_home: str, key: str, result_file: str,
                              barrier_path: str) -> None:
     """Subprocess body for the idempotency race test."""
-    os.environ["HERMES_HOME"] = hermes_home
+    os.environ["ARGUS_HOME"] = hermes_home
     os.environ["HOME"] = hermes_home
     sys.path.insert(0, str(WT))
     from hermes_cli import kanban_db as kb

@@ -28,7 +28,7 @@ def _patch_setup_io(monkeypatch, prompts, saved):
 
 def test_interactive_setup_saves_home_channel(monkeypatch, tmp_path):
     """interactive_setup() saves SLACK_HOME_CHANNEL when the user provides one."""
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ARGUS_HOME", str(tmp_path))
     saved = {}
     # prompts: bot token, app token, allowed users (empty), home channel
     _patch_setup_io(
@@ -44,7 +44,7 @@ def test_interactive_setup_saves_home_channel(monkeypatch, tmp_path):
 
 def test_interactive_setup_home_channel_empty_not_saved(monkeypatch, tmp_path):
     """interactive_setup() does not save SLACK_HOME_CHANNEL when left blank."""
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ARGUS_HOME", str(tmp_path))
     saved = {}
     _patch_setup_io(
         monkeypatch,

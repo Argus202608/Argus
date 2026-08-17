@@ -64,7 +64,7 @@ describe('QueryWorker structured trajectory mapping', () => {
       [4, 30],
       [4, 40]
     ])
-    expect(timeline.steps[0].title).toBe('接手问题并锁定提问时刻 · 冻结输入帧 3')
+    expect(timeline.steps[0].title).toBe('Accepted question and locked ask-time · frozen input frames 3')
     expect(timeline.steps[0].frames.map(frame => [frame.frame_id, frame.ts, frame.source_type])).toEqual([
       ['ask-1', 19.5, 'camera'],
       ['ask-2', 20.5, 'screen'],
@@ -279,7 +279,7 @@ describe('QueryWorkerTrajectoryPanel', () => {
 
     const panel = screen.getByTestId('query-worker-trajectory-panel')
 
-    expect(within(panel).getByText('完成一轮规划 · Search 1')).toBeTruthy()
+    expect(within(panel).getByText('Completed a planning round · Search 1')).toBeTruthy()
     expect(within(panel).getByText('需要查询画面文字')).toBeTruthy()
     expect(panel.textContent).toContain('<hidden internal reasoning>')
     expect(panel.textContent).not.toContain('PRIVATE ROUTER THOUGHT MUST NEVER RENDER')

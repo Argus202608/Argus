@@ -1,7 +1,7 @@
 """Consent-flow tests for the shell-hook allowlist.
 
 Covers the prompt/non-prompt decision tree: TTY vs non-TTY, and the
-three accept-hooks channels (--accept-hooks, HERMES_ACCEPT_HOOKS env,
+three accept-hooks channels (--accept-hooks, ARGUS_ACCEPT_HOOKS env,
 hooks_auto_accept: config key).
 """
 
@@ -17,8 +17,8 @@ from agent import shell_hooks
 
 @pytest.fixture(autouse=True)
 def _isolated_home(tmp_path, monkeypatch):
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes_home"))
-    monkeypatch.delenv("HERMES_ACCEPT_HOOKS", raising=False)
+    monkeypatch.setenv("ARGUS_HOME", str(tmp_path / "hermes_home"))
+    monkeypatch.delenv("ARGUS_ACCEPT_HOOKS", raising=False)
     shell_hooks.reset_for_tests()
     yield
     shell_hooks.reset_for_tests()
@@ -138,7 +138,7 @@ class TestNonTTYFlow:
 
         script = _write_hook_script(tmp_path)
         plugins._plugin_manager = plugins.PluginManager()
-        monkeypatch.setenv("HERMES_ACCEPT_HOOKS", "1")
+        monkeypatch.setenv("ARGUS_ACCEPT_HOOKS", "1")
 
         with patch("sys.stdin") as mock_stdin:
             mock_stdin.isatty.return_value = False

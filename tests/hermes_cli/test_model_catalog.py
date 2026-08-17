@@ -14,10 +14,10 @@ import pytest
 @pytest.fixture
 def isolated_home(tmp_path, monkeypatch):
     """Isolate HERMES_HOME + reset any module-level catalog cache per test."""
-    home = tmp_path / ".hermes"
+    home = tmp_path / ".argus"
     home.mkdir()
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("ARGUS_HOME", str(home))
 
     # Force a fresh catalog module state for each test.
     import importlib
@@ -182,7 +182,7 @@ class TestFallbackChain:
 
     PRIMARY = "https://hermes-agent.nousresearch.com/docs/api/model-catalog.json"
     FALLBACK = (
-        "https://raw.githubusercontent.com/NousResearch/hermes-agent"
+        "https://raw.githubusercontent.com/MMArgus-Team/Argus"
         "/main/website/static/api/model-catalog.json"
     )
 
@@ -388,7 +388,7 @@ class TestIntegrationWithModelsModule:
         try:
             from hermes_cli.model_switch import list_picker_providers
 
-            active_home = Path(os.environ["HERMES_HOME"])
+            active_home = Path(os.environ["ARGUS_HOME"])
             (active_home / "auth.json").write_text(
                 json.dumps(
                     {
@@ -440,7 +440,7 @@ class TestIntegrationWithModelsModule:
                 list_picker_providers,
             )
 
-            active_home = Path(os.environ["HERMES_HOME"])
+            active_home = Path(os.environ["ARGUS_HOME"])
             (active_home / "auth.json").write_text(
                 json.dumps(
                     {

@@ -18,7 +18,7 @@ def build_mm_parser(subparsers, *, cmd_mm: Callable) -> None:
         "mm",
         help="Multimodal utilities (readiness check, etc.)",
         description="Multimodal maintenance tools. "
-        "Run `hermes mm doctor` to check whether voice / deep-research / "
+        "Run `argus mm doctor` to check whether voice / deep-research / "
         "memory / tracking are ready and what's missing.",
     )
     mm_sub = mm_parser.add_subparsers(dest="mm_action")

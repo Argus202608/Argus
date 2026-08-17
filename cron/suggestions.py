@@ -21,7 +21,7 @@ auto-create jobs; acceptance is always explicit (consent-first). Dismissed
 suggestions latch by a stable ``dedup_key`` so the same proposal is not
 re-offered after the user says no.
 
-Storage mirrors ``cron/jobs.py``: ``~/.hermes/cron/suggestions.json``, atomic
+Storage mirrors ``cron/jobs.py``: ``~/.argus/cron/suggestions.json``, atomic
 writes, an in-process lock, and 0600 perms.
 """
 

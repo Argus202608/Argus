@@ -28,7 +28,7 @@ def _seed_auth_file(tmp_path):
 
 def test_get_nous_auth_status_caches_consecutive_calls(tmp_path, monkeypatch):
     """A second call within the TTL skips re-computing the snapshot."""
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ARGUS_HOME", str(tmp_path))
     _seed_auth_file(tmp_path)
 
     from hermes_cli import auth as auth_mod
@@ -60,7 +60,7 @@ def test_get_nous_auth_status_caches_consecutive_calls(tmp_path, monkeypatch):
 
 def test_get_nous_auth_status_invalidates_on_auth_file_mtime(tmp_path, monkeypatch):
     """Touching auth.json (login/logout) forces a re-compute."""
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ARGUS_HOME", str(tmp_path))
     auth_path = _seed_auth_file(tmp_path)
 
     from hermes_cli import auth as auth_mod
@@ -109,9 +109,9 @@ def test_get_nous_auth_status_cache_is_scoped_by_auth_file_path(tmp_path, monkey
         return {"logged_in": False, "call": call_count["n"]}
 
     with patch.object(auth_mod, "_compute_nous_auth_status", side_effect=fake_compute):
-        monkeypatch.setenv("HERMES_HOME", str(profile_a))
+        monkeypatch.setenv("ARGUS_HOME", str(profile_a))
         first = auth_mod.get_nous_auth_status()
-        monkeypatch.setenv("HERMES_HOME", str(profile_b))
+        monkeypatch.setenv("ARGUS_HOME", str(profile_b))
         second = auth_mod.get_nous_auth_status()
 
     assert call_count["n"] == 2
@@ -127,7 +127,7 @@ def test_get_nous_auth_status_cache_is_scoped_by_auth_file_path(tmp_path, monkey
 
 def test_invalidate_nous_auth_status_cache_forces_recompute(tmp_path, monkeypatch):
     """Explicit invalidate forces the next call to re-compute."""
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ARGUS_HOME", str(tmp_path))
     _seed_auth_file(tmp_path)
 
     from hermes_cli import auth as auth_mod
@@ -157,7 +157,7 @@ def test_get_nous_auth_status_caches_failure_path(tmp_path, monkeypatch):
     menu paint, all returning logged_in=False after a failed refresh POST.
     The whole point of the cache is to memoise that failure path too.
     """
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ARGUS_HOME", str(tmp_path))
     _seed_auth_file(tmp_path)
 
     from hermes_cli import auth as auth_mod

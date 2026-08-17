@@ -130,9 +130,9 @@ THREAT_PATTERNS = [
     (r'\$HOME/\.docker|\~/\.docker',
      "docker_dir_access", "high", "exfiltration",
      "references Docker config (may contain registry creds)"),
-    (r'\$HOME/\.hermes/\.env|\~/\.hermes/\.env',
+    (r'\$HOME/\.(?:argus|hermes)/\.env|\~/\.(?:argus|hermes)/\.env',
      "hermes_env_access", "critical", "exfiltration",
-     "directly references Hermes secrets file"),
+     "directly references Argus secrets file"),
     # Match `cat <secrets-file>` (reading credentials) but NOT `cat > <file>`
     # or `cat >> <file>`, which are output redirections that WRITE a file
     # (e.g. a setup doc telling the user to write their own keys into their
@@ -456,9 +456,9 @@ THREAT_PATTERNS = [
     (r'AGENTS\.md|CLAUDE\.md|\.cursorrules|\.clinerules',
      "agent_config_mod", "critical", "persistence",
      "references agent config files (could persist malicious instructions across sessions)"),
-    (r'\.hermes/config\.yaml|\.hermes/SOUL\.md',
+    (r'\.(?:argus|hermes)/config\.yaml|\.(?:argus|hermes)/SOUL\.md',
      "hermes_config_mod", "critical", "persistence",
-     "references Hermes configuration files directly"),
+     "references Argus configuration files directly"),
     (r'\.claude/settings|\.codex/config',
      "other_agent_config", "high", "persistence",
      "references other agent configuration files"),

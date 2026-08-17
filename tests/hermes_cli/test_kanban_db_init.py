@@ -46,9 +46,9 @@ def _make_legacy_db(path: Path) -> None:
 
 
 def _setup_home(tmp_path, monkeypatch) -> Path:
-    home = tmp_path / ".hermes"
+    home = tmp_path / ".argus"
     home.mkdir()
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("ARGUS_HOME", str(home))
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     db_path = kb.kanban_db_path(board="legacy")
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -70,9 +70,9 @@ def _table_struct(conn: sqlite3.Connection, table: str):
 
 
 def test_connect_initialization_is_thread_safe(tmp_path, monkeypatch):
-    home = tmp_path / ".hermes"
+    home = tmp_path / ".argus"
     home.mkdir()
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("ARGUS_HOME", str(home))
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
     db_path = kb.kanban_db_path(board="default")

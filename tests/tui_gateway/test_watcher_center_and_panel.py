@@ -89,7 +89,7 @@ class _FakeResponder:
 @pytest.fixture(autouse=True)
 def _home(monkeypatch):
     with tempfile.TemporaryDirectory() as d:
-        monkeypatch.setenv("HERMES_HOME", d)
+        monkeypatch.setenv("ARGUS_HOME", d)
         yield d
 
 

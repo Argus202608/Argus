@@ -76,6 +76,8 @@ const { mockActiveSessionId, _micState } = vi.hoisted(() => {
 vi.mock('./session', () => ({ $activeSessionId: mockActiveSessionId }))
 vi.mock('./multimodal-voice', () => ({
   $mmMicState: _micState,
+  cancelManualMicOnDisconnect: vi.fn(),
+  hasMicCaptureIntent: () => _micState.get() !== 'idle',
   rearmMicAfterReconnect: vi.fn(async () => undefined),
   onAsrPartial: vi.fn(),
   onAsrFinal: vi.fn(),

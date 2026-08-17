@@ -25,8 +25,8 @@ from agent.skill_utils import (
 
 @pytest.fixture
 def hermes_home_with_config(tmp_path, monkeypatch):
-    """Isolated ``~/.hermes/`` with a config.yaml referencing one external dir."""
-    home = tmp_path / ".hermes"
+    """Isolated ``~/.argus/`` with a config.yaml referencing one external dir."""
+    home = tmp_path / ".argus"
     home.mkdir()
     external = tmp_path / "external_skills"
     external.mkdir()
@@ -39,7 +39,7 @@ def hermes_home_with_config(tmp_path, monkeypatch):
         encoding="utf-8",
     )
 
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("ARGUS_HOME", str(home))
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     _external_dirs_cache_clear()
     yield home, external, config
@@ -99,9 +99,9 @@ def test_cache_invalidates_on_mtime_change(hermes_home_with_config):
 
 def test_returns_empty_when_config_missing(tmp_path, monkeypatch):
     """No config file → empty list, cached as empty."""
-    home = tmp_path / ".hermes"
+    home = tmp_path / ".argus"
     home.mkdir()
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("ARGUS_HOME", str(home))
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     _external_dirs_cache_clear()
 
@@ -119,7 +119,7 @@ def test_returned_list_is_a_copy(hermes_home_with_config):
 
 def test_cache_key_is_per_config_path(tmp_path, monkeypatch):
     """Two different HERMES_HOMEs keep separate cache entries."""
-    home_a = tmp_path / "home_a" / ".hermes"
+    home_a = tmp_path / "home_a" / ".argus"
     home_a.mkdir(parents=True)
     ext_a = tmp_path / "ext_a"
     ext_a.mkdir()
@@ -127,7 +127,7 @@ def test_cache_key_is_per_config_path(tmp_path, monkeypatch):
         f"skills:\n  external_dirs:\n    - {ext_a}\n", encoding="utf-8"
     )
 
-    home_b = tmp_path / "home_b" / ".hermes"
+    home_b = tmp_path / "home_b" / ".argus"
     home_b.mkdir(parents=True)
     ext_b = tmp_path / "ext_b"
     ext_b.mkdir()
@@ -137,12 +137,12 @@ def test_cache_key_is_per_config_path(tmp_path, monkeypatch):
 
     _external_dirs_cache_clear()
 
-    monkeypatch.setenv("HERMES_HOME", str(home_a))
+    monkeypatch.setenv("ARGUS_HOME", str(home_a))
     assert get_external_skills_dirs() == [ext_a.resolve()]
 
-    monkeypatch.setenv("HERMES_HOME", str(home_b))
+    monkeypatch.setenv("ARGUS_HOME", str(home_b))
     assert get_external_skills_dirs() == [ext_b.resolve()]
 
     # And switching back still works — both entries coexist in the cache.
-    monkeypatch.setenv("HERMES_HOME", str(home_a))
+    monkeypatch.setenv("ARGUS_HOME", str(home_a))
     assert get_external_skills_dirs() == [ext_a.resolve()]

@@ -30,7 +30,7 @@ defensively). The dispatcher also rejects plugin dispatch when a same-
 name command provider is configured.
 
 Providers live in ``<repo>/plugins/tts/<name>/`` (built-in plugins, no
-shipped today) or ``~/.hermes/plugins/tts/<name>/`` (user-installed).
+shipped today) or ``~/.argus/plugins/tts/<name>/`` (user-installed).
 None ship in-tree as of issue #30398 — the hook is additive
 infrastructure waiting for a real consumer (Cartesia, Fish Audio, …).
 
@@ -83,7 +83,7 @@ class TTSProvider(abc.ABC):
 
     @property
     def display_name(self) -> str:
-        """Human-readable label shown in ``hermes tools``.
+        """Human-readable label shown in ``argus tools``.
 
         Defaults to ``name.title()`` (e.g. ``Cartesia`` for ``cartesia``).
         """
@@ -96,7 +96,7 @@ class TTSProvider(abc.ABC):
         importable. Default: True (providers with no external
         dependencies are always available).
 
-        Must NOT raise — used by the picker and ``hermes setup`` for
+        Must NOT raise — used by the picker and ``argus setup`` for
         availability displays and should fail gracefully.
         """
         return True
@@ -137,7 +137,7 @@ class TTSProvider(abc.ABC):
         return []
 
     def get_setup_schema(self) -> Dict[str, Any]:
-        """Return provider metadata for the ``hermes tools`` picker.
+        """Return provider metadata for the ``argus tools`` picker.
 
         Used by ``tools_config.py`` to inject this provider as a row in
         the Text-to-Speech provider list. Shape::

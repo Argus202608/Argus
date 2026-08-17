@@ -105,7 +105,7 @@ def test_pyproject_aiohttp_pins_match_lazy_slack_pin():
 
     pyproject extras (messaging/slack/homeassistant/sms) exact-pin aiohttp.
     The Slack lazy-install deps (LAZY_DEPS['platform.slack']) also pin it.
-    If the two drift, `hermes update` resolves the pyproject pin and
+    If the two drift, `argus update` resolves the pyproject pin and
     downgrades aiohttp, reopening the CVEs the lazy pin fixed (#31817) —
     only for Slack's lazy refresh to upgrade it again on next use.
     """
@@ -128,7 +128,7 @@ def test_pyproject_aiohttp_pins_match_lazy_slack_pin():
     }
     assert not mismatches, (
         "pyproject.toml aiohttp pins must match "
-        "LAZY_DEPS['platform.slack'] to avoid hermes update downgrading "
+        "LAZY_DEPS['platform.slack'] to avoid argus update downgrading "
         "aiohttp before Slack's lazy refresh upgrades it again. "
         f"lazy aiohttp=={lazy_aiohttp}; mismatched extras: {mismatches}"
     )
@@ -139,7 +139,7 @@ def test_pyproject_pins_match_lazy_deps_pins():
 
     Any package that is exact-pinned in BOTH a pyproject extra and a
     `tools/lazy_deps.py` LAZY_DEPS entry must use the SAME version in both
-    places. When they drift, `hermes update` resolves the pyproject extra
+    places. When they drift, `argus update` resolves the pyproject extra
     pin and downgrades the package to the older version, reopening whatever
     the lazy pin fixed (the aiohttp #31817 case, and the anthropic
     CVE-2026-34450/34452 case found alongside it) — only for the lazy
@@ -179,7 +179,7 @@ def test_pyproject_pins_match_lazy_deps_pins():
     }
     assert not drift, (
         "pyproject extras pins must match tools/lazy_deps.py LAZY_DEPS pins "
-        "for every shared package — otherwise `hermes update` downgrades the "
+        "for every shared package — otherwise `argus update` downgrades the "
         "package below the security-current lazy pin (see #31817). Drift: "
         f"{drift}"
     )

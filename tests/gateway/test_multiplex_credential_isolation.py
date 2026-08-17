@@ -55,10 +55,10 @@ class TestRuntimeProviderUsesScope:
 
     def test_getenv_global_var_still_reads_environ(self, monkeypatch):
         from hermes_cli.runtime_provider import _getenv
-        monkeypatch.setenv("HERMES_MAX_ITERATIONS", "42")
+        monkeypatch.setenv("ARGUS_MAX_ITERATIONS", "42")
         ss.set_multiplex_active(True)
         # global var: no scope needed, no raise
-        assert _getenv("HERMES_MAX_ITERATIONS") == "42"
+        assert _getenv("ARGUS_MAX_ITERATIONS") == "42"
 
 
 class TestMcpInterpolationUsesScope:

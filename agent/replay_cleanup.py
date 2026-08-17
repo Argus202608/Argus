@@ -87,7 +87,7 @@ def strip_dangling_tool_call_tail(
     """Strip a trailing ``assistant(tool_calls)`` block left with NO answers.
 
     When a tool call itself kills the gateway process (``docker restart``,
-    ``systemctl restart``, ``kill``, ``hermes gateway restart``), the process
+    ``systemctl restart``, ``kill``, ``argus gateway restart``), the process
     is terminated by SIGKILL *mid-call* — before the tool result is ever
     written and before the orderly shutdown rewind
     (``_drop_trailing_empty_response_scaffolding``) can run.  The last thing

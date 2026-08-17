@@ -206,14 +206,14 @@ def _get_backend() -> ComputerUseBackend:
     global _backend
     with _backend_lock:
         if _backend is None:
-            backend_name = os.environ.get("HERMES_COMPUTER_USE_BACKEND", "cua").lower()
+            backend_name = os.environ.get("ARGUS_COMPUTER_USE_BACKEND", "cua").lower()
             if backend_name in {"cua", "cua-driver", ""}:
                 from tools.computer_use.cua_backend import CuaDriverBackend
                 _backend = CuaDriverBackend()
             elif backend_name == "noop":  # pragma: no cover
                 _backend = _NoopBackend()
             else:
-                raise RuntimeError(f"Unknown HERMES_COMPUTER_USE_BACKEND={backend_name!r}")
+                raise RuntimeError(f"Unknown ARGUS_COMPUTER_USE_BACKEND={backend_name!r}")
             try:
                 _backend.start()
             except Exception:
@@ -341,7 +341,7 @@ def handle_computer_use(args: Dict[str, Any], **kwargs) -> Any:
     except Exception as e:
         return json.dumps({
             "error": f"computer_use backend unavailable: {e}",
-            "hint": "If the cua-driver binary is missing, run `hermes computer-use install`. "
+            "hint": "If the cua-driver binary is missing, run `argus computer-use install`. "
                     "If a Python dependency is missing, the error above shows the exact install command.",
         })
 
@@ -486,7 +486,13 @@ def _summarize_action(action: str, args: Dict[str, Any]) -> str:
     if action == "key":
         return f"key {args.get('keys', '')!r}"
     if action == "focus_app":
-        return f"focus {args.get('app', '')!r}" + (" (raise)" if args.get("raise_window") else "")
+        raise_arg = args.get("raise_window")
+        # Default is now True; only annotate the non-default case explicitly.
+        if raise_arg is False:
+            suffix = " (no raise)"
+        else:
+            suffix = ""  # default (raise) — keep display quiet for the common case
+        return f"focus {args.get('app', '')!r}" + suffix
     return action
 
 
@@ -513,7 +519,12 @@ def _dispatch(backend: ComputerUseBackend, action: str, args: Dict[str, Any]) ->
         app = args.get("app")
         if not app:
             return json.dumps({"error": "focus_app requires `app`"})
-        res = backend.focus_app(app, raise_window=bool(args.get("raise_window")))
+        # Default raise_window=True: after a launch/switch, capture and click
+        # need the window visible or they see a blank 0x0 frame. Only skip
+        # the raise when the caller explicitly asks for background input.
+        raise_arg = args.get("raise_window")
+        raise_window = True if raise_arg is None else bool(raise_arg)
+        res = backend.focus_app(app, raise_window=raise_window)
         return _maybe_follow_capture(backend, res, capture_after)
 
     if action == "launch_app":

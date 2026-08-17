@@ -235,7 +235,7 @@ class TestBareCustomNoBaseUrlHealsFromConfig:
         # routable identity to recover; caller keeps its fallback behaviour.
         monkeypatch.setattr(rp, "load_config", lambda: {})
         monkeypatch.setattr(rp, "_get_model_config", lambda: {"provider": "custom"})
-        monkeypatch.delenv("HERMES_INFERENCE_PROVIDER", raising=False)
+        monkeypatch.delenv("ARGUS_INFERENCE_PROVIDER", raising=False)
 
         assert rp.canonical_custom_identity(base_url=None) is None
 
@@ -275,7 +275,7 @@ class TestBareCustomNoBaseUrlHealsFromConfig:
         default instead of the broken OpenRouter route."""
         monkeypatch.setattr(rp, "load_config", lambda: {})
         monkeypatch.setattr(rp, "_get_model_config", lambda: {})
-        monkeypatch.delenv("HERMES_INFERENCE_PROVIDER", raising=False)
+        monkeypatch.delenv("ARGUS_INFERENCE_PROVIDER", raising=False)
 
         from tui_gateway.server import _stored_session_runtime_overrides
 

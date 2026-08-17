@@ -12,7 +12,7 @@ class Session:
 
     All fields are mandatory. Providers that don't have a concept of orgs
     should set ``org_id`` to an empty string. ``access_token`` and
-    ``refresh_token`` are opaque to Hermes — provider-specific.
+    ``refresh_token`` are opaque to Argus — provider-specific.
     """
 
     user_id: str

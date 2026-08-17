@@ -8,7 +8,7 @@ platforms: [linux, macos, windows]
 metadata:
   hermes:
     tags: [hermes, setup, configuration, multi-agent, spawning, cli, gateway, development]
-    homepage: https://github.com/NousResearch/hermes-agent
+    homepage: https://github.com/MMArgus-Team/Argus
     related_skills: [claude-code, codex, opencode]
 ---
 
@@ -40,7 +40,7 @@ Good verification targets:
 
 - CLI commands: `hermes --help`, `hermes <command> --help`, and `hermes_cli/main.py`
 - User documentation: https://hermes-agent.nousresearch.com/docs/
-- Source tree: https://github.com/NousResearch/hermes-agent
+- Source tree: https://github.com/MMArgus-Team/Argus
 
 ## Quick Start
 
@@ -564,8 +564,8 @@ hermes config set approvals.mode off         # bypass everything (not recommende
 ```
 
 Per-invocation bypass without changing config:
-- `hermes --yolo …`
-- `export HERMES_YOLO_MODE=1`
+- `argus --yolo …`
+- `export ARGUS_YOLO_MODE=1`
 
 Note: YOLO / `approvals.mode: off` does NOT turn off secret redaction. They are independent.
 

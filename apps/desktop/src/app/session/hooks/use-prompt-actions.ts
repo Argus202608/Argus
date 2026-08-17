@@ -71,6 +71,7 @@ import {
 } from '@/store/session'
 import { clearSessionSubagents } from '@/store/subagents'
 import { clearSessionTodos } from '@/store/todos'
+import { clearSessionGeneratingTool } from '@/store/tool-generating'
 
 import type {
   BrowserManageResponse,
@@ -894,7 +895,7 @@ export function usePromptActions({
 
   // Queue a handoff of this session to a messaging platform and watch it to
   // a terminal state. We only write the request through the gateway; the
-  // separate `hermes gateway` process performs the actual transfer, so we
+  // separate `argus gateway` process performs the actual transfer, so we
   // poll `handoff.state` (mirror of the CLI's block-poll) for the result.
   const handoffSession = useCallback(
     async (
@@ -1585,6 +1586,9 @@ export function usePromptActions({
 
     clearSessionTodos(sessionId)
     clearSessionSubagents(sessionId)
+    // Stop can land between tool.generating and tool.start, so the "preparing
+    // <tool>" line must go too — the tool it names will never run.
+    clearSessionGeneratingTool(sessionId)
     resetSessionBackground(sessionId)
     // Stop ends the turn, so the gateway is no longer blocked on any prompt it
     // raised. Drop this session's pending clarify / approval / sudo / secret so

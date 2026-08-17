@@ -69,7 +69,7 @@ def _fake_warning():
 def _setup_isolated_home(tmp_path, monkeypatch, *, warn):
     import gateway.run as gateway_run
 
-    hermes_home = tmp_path / ".hermes"
+    hermes_home = tmp_path / ".argus"
     hermes_home.mkdir()
     cfg_path = hermes_home / "config.yaml"
     cfg_path.write_text(

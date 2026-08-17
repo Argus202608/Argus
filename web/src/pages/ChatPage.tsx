@@ -122,7 +122,10 @@ function terminalLineHeightForWidth(layoutWidthPx: number): number {
   return layoutWidthPx < 1024 ? 1.02 : 1.15;
 }
 
-export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
+export default function ChatPage({ isActive = true, hideSidePanel = false }: { isActive?: boolean; hideSidePanel?: boolean }) {
+  // Hoisted above the state initializers below: `banner` seeds itself from a
+  // translated string, so `t` has to exist before that useState runs.
+  const { t } = useI18n();
   const hostRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
@@ -139,9 +142,9 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
   // so a missing token there is expected, not an error.
   const [banner, setBanner] = useState<string | null>(() =>
     typeof window !== "undefined" &&
-    !window.__HERMES_SESSION_TOKEN__ &&
+    !window.__ARGUS_SESSION_TOKEN__ &&
     !window.__HERMES_AUTH_REQUIRED__
-      ? "Session token unavailable. Open this page through `hermes dashboard`, not directly."
+      ? t.chatPage.tokenUnavailable
       : null,
   );
   const [copyState, setCopyState] = useState<"idle" | "copied">("idle");
@@ -199,7 +202,6 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
     scope: string;
     title: string | null;
   }>({ scope: "", title: null });
-  const { t } = useI18n();
   const closeMobilePanel = useCallback(() => setMobilePanelOpenRaw(false), []);
   const modelToolsLabel = useMemo(
     () => `${t.app.modelToolsSheetTitle} ${t.app.modelToolsSheetSubtitle}`,
@@ -385,7 +387,7 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
     const host = hostRef.current;
     if (!host) return;
 
-    const token = window.__HERMES_SESSION_TOKEN__;
+    const token = window.__ARGUS_SESSION_TOKEN__;
     const gated = !!window.__HERMES_AUTH_REQUIRED__;
     // Banner already initialised above; just bail before wiring xterm/WS.
     // In gated mode the token is absent by design — buildWsAuthParam() mints
@@ -752,7 +754,7 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
         setBanner(
           ev.reason
             ? `Auth failed (${ev.reason}). Reload to refresh the session.`
-            : "Auth failed. Reload the page to refresh the session token.",
+            : t.chatPage.authFailed,
         );
         return;
       }
@@ -761,13 +763,13 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
         setBanner(
           ev.reason
             ? `Refused: ${ev.reason}.`
-            : "Refused: request host/origin doesn't match the dashboard.",
+            : t.chatPage.hostMismatch,
         );
         return;
       }
       if (ev.code === 4404) {
         setBanner(
-          "Embedded chat is disabled on this server (start it with --tui).",
+          t.chatPage.chatDisabled,
         );
         return;
       }
@@ -775,7 +777,7 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
         setBanner(
           ev.reason
             ? `Refused: ${ev.reason}.`
-            : "Refused: your client isn't permitted (server bound to localhost only).",
+            : t.chatPage.clientNotPermitted,
         );
         return;
       }
@@ -1053,14 +1055,14 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
           {sessionEnded && (
             <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 bg-black/60 backdrop-blur-sm">
               <div className="text-sm tracking-wide text-white/80">
-                Session ended.
+                {t.chatPage.sessionEnded}
               </div>
               <Button
                 onClick={reconnect}
                 prefix={<RotateCcw className="h-4 w-4" />}
-                aria-label="Start a new chat session"
+                aria-label={t.chatPage.startNewSessionAria}
               >
-                Start new session
+                {t.chatPage.startNewSession}
               </Button>
             </div>
           )}
@@ -1068,8 +1070,8 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
           <Button
             ghost
             onClick={handleCopyLast}
-            title="Copy last assistant response as raw markdown"
-            aria-label="Copy last assistant response"
+            title={t.chatPage.copyLastTitle}
+            aria-label={t.chatPage.copyLastAria}
             className={cn(
               "absolute z-10",
               "normal-case tracking-normal font-normal",
@@ -1091,7 +1093,7 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
           </Button>
         </div>
 
-        {!narrow && (
+        {!narrow && !hideSidePanel && (
           <div
             id="chat-side-panel"
             role="complementary"
@@ -1126,7 +1128,7 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
 
 declare global {
   interface Window {
-    __HERMES_SESSION_TOKEN__?: string;
+    __ARGUS_SESSION_TOKEN__?: string;
     __HERMES_AUTH_REQUIRED__?: boolean;
   }
 }

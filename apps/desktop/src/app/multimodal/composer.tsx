@@ -3,13 +3,24 @@ import { type KeyboardEvent, useState } from 'react'
 
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
+import { useI18n } from '@/i18n'
 import { Loader2, Mic, Send, Square, Volume2 } from '@/lib/icons'
 import {
   $mmGenerating,
   interruptMultimodal,
   sendMultimodalPrompt
 } from '@/store/multimodal'
-import { $mmAsrBuffer, $mmAsrPartial, $mmMicState, $mmTtsEnabled, startMic, stopMic, toggleMultimodalTts } from '@/store/multimodal-voice'
+import {
+  $mmAsrBuffer,
+  $mmAsrPartial,
+  $mmMicError,
+  $mmMicState,
+  $mmTtsEnabled,
+  finishMicTurn,
+  startMic,
+  stopMic,
+  toggleMultimodalTts
+} from '@/store/multimodal-voice'
 
 /**
  * Slim composer for the multimodal page: a text field + mic / TTS toggles.
@@ -19,8 +30,11 @@ import { $mmAsrBuffer, $mmAsrPartial, $mmMicState, $mmTtsEnabled, startMic, stop
  * Camera / screen capture controls live in VideoStage (right rail), not here.
  */
 export function Composer() {
+  const { t: tr } = useI18n()
+  const c = tr.multimodal.composer
   const ttsEnabled = useStore($mmTtsEnabled)
   const micState = useStore($mmMicState)
+  const micError = useStore($mmMicError)
   const asrPartial = useStore($mmAsrPartial)
   const asrBuffer = useStore($mmAsrBuffer)
   const generating = useStore($mmGenerating)
@@ -28,17 +42,32 @@ export function Composer() {
   const [text, setText] = useState('')
 
   const toggleMic = () => {
-    if (micState === 'recording' || micState === 'connecting') void stopMic()
-    else {
+    if (micState === 'finalizing') {
+      return
+    }
+
+    if (micState === 'connecting') {
+      void stopMic()
+
+      return
+    }
+
+    if (micState === 'recording') {
       setCapError('')
-      void startMic().catch(e => setCapError(`麦克风启动失败：${e instanceof Error ? e.message : String(e)}`))
+      void finishMicTurn().catch(error => {
+        setCapError(c.asrFailed(error instanceof Error ? error.message : String(error)))
+      })
+    } else {
+      setCapError('')
+      void startMic().catch(e => setCapError(c.micError(e instanceof Error ? e.message : String(e))))
     }
   }
 
   const submit = () => {
-    if (generating) return // don't stack a new turn while one is streaming
+    if (generating) {return} // don't stack a new turn while one is streaming
     const t = text.trim()
-    if (!t) return
+
+    if (!t) {return}
     void sendMultimodalPrompt(t)
     setText('')
   }
@@ -52,14 +81,25 @@ export function Composer() {
 
   const recording = micState === 'recording'
   const connecting = micState === 'connecting'
+  const finalizing = micState === 'finalizing'
+
+  const micLabel = recording
+    ? c.micLabelEndSend
+    : finalizing
+      ? c.micLabelFinalizing
+      : connecting
+        ? c.micLabelConnecting
+        : c.micLabelStart
+
   const bufferedAsr = asrBuffer.join(' ').trim()
 
   return (
     <div className="flex flex-col gap-2 rounded-xl border border-(--ui-stroke-secondary) bg-(--ui-bg-elevated) p-2 shadow-sm">
       {/* Live ASR partial preview (above the field, like a caption). */}
-      {(recording || asrPartial || bufferedAsr) && (
+      {(recording || finalizing || asrPartial || bufferedAsr) && (
         <div className="flex items-center gap-2 px-1 text-xs text-(--ui-text-tertiary)">
           {recording && <span className="size-1.5 shrink-0 animate-pulse rounded-full bg-(--ui-red)" />}
+          {finalizing && <Loader2 className="size-3 shrink-0 animate-spin" />}
           <span className="truncate">
             {bufferedAsr ? (
               <>
@@ -67,7 +107,7 @@ export function Composer() {
                 {asrPartial ? <span className="ml-1">{asrPartial}</span> : null}
               </>
             ) : (
-              asrPartial || '正在聆听…'
+              asrPartial || (finalizing ? c.finalizingRecognition : c.listening)
             )}
           </span>
         </div>
@@ -80,24 +120,26 @@ export function Composer() {
         {/* 语音: outline idle · destructive recording · spinner connecting. Runs
             module-scoped in the store, so it survives the window being hidden. */}
         <Button
-          className="shrink-0"
-          size="icon-sm"
-          variant={recording ? 'destructive' : 'outline'}
-          disabled={connecting}
+          aria-label={micLabel}
           aria-pressed={recording}
+          className="shrink-0"
+          disabled={finalizing}
           onClick={toggleMic}
-          title={recording ? '点击结束录音' : connecting ? '正在连接语音…' : '点击开始说话（流式语音）'}
+          size="icon-sm"
+          title={`${micLabel}${finalizing ? '…' : ''}`}
+          variant={recording ? 'destructive' : 'outline'}
         >
-          {connecting ? <Loader2 className="size-4 animate-spin" /> : <Mic className="size-4" />}
+          {connecting || finalizing ? <Loader2 className="size-4 animate-spin" /> : <Mic className="size-4" />}
         </Button>
         {/* 语音播报: solid when ON — 自动朗读主 agent / 深度分析的分析内容。 */}
         <Button
-          className="shrink-0"
-          size="icon-sm"
-          variant={ttsEnabled ? 'default' : 'outline'}
+          aria-label={ttsEnabled ? c.ttsAriaOn : c.ttsAriaOff}
           aria-pressed={ttsEnabled}
+          className="shrink-0"
           onClick={toggleMultimodalTts}
-          title={ttsEnabled ? '语音播报：开（自动朗读分析）— 点击关闭' : '语音播报：关 — 点击开启'}
+          size="icon-sm"
+          title={ttsEnabled ? c.ttsOnTitle : c.ttsOffTitle}
+          variant={ttsEnabled ? 'default' : 'outline'}
         >
           <Volume2 className="size-4" />
         </Button>
@@ -106,24 +148,24 @@ export function Composer() {
           className="max-h-24 min-h-8 flex-1 resize-none self-center border-0 bg-transparent px-1 shadow-none focus-visible:ring-0"
           onChange={e => setText(e.target.value)}
           onKeyDown={onKeyDown}
-          placeholder="提问（开启画面后，画面会随问题一起发送）…"
+          placeholder={c.askWithVideoPlaceholder}
           rows={1}
           value={text}
         />
 
         {/* Send ↔ Stop: while a turn streams, the primary button interrupts it. */}
         {generating ? (
-          <Button className="shrink-0" size="sm" variant="destructive" onClick={() => void interruptMultimodal()} title="停止生成">
-            <Square className="mr-1 size-3.5" /> 停止
+          <Button className="shrink-0" onClick={() => void interruptMultimodal()} size="sm" title={c.stopGenerating} variant="destructive">
+            <Square className="mr-1 size-3.5" /> {c.stopShort}
           </Button>
         ) : (
-          <Button className="shrink-0" size="sm" disabled={!text.trim()} onClick={submit}>
-            <Send className="mr-1 size-3.5" /> 发送
+          <Button className="shrink-0" disabled={!text.trim()} onClick={submit} size="sm">
+            <Send className="mr-1 size-3.5" /> {c.send}
           </Button>
         )}
       </div>
 
-      {capError && <div className="px-1 text-xs text-(--ui-red)">{capError}</div>}
+      {(capError || micError) && <div className="px-1 text-xs text-(--ui-red)">{capError || micError}</div>}
     </div>
   )
 }

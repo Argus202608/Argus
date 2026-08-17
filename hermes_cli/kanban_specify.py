@@ -42,9 +42,9 @@ from hermes_cli import kanban_db as kb
 
 from utils import env_int
 
-HERMES_KANBAN_SPECIFY_MAX_TOKENS = max(
+ARGUS_KANBAN_SPECIFY_MAX_TOKENS = max(
     1500,
-    env_int("HERMES_KANBAN_SPECIFY_MAX_TOKENS", 6000),
+    env_int("ARGUS_KANBAN_SPECIFY_MAX_TOKENS", 6000),
 )
 
 logger = logging.getLogger(__name__)
@@ -133,7 +133,7 @@ def _profile_author() -> str:
     """Mirror of ``hermes_cli.kanban._profile_author``. Kept local to
     avoid a circular import when kanban.py imports this module."""
     return (
-        os.environ.get("HERMES_PROFILE")
+        os.environ.get("ARGUS_PROFILE")
         or os.environ.get("USER")
         or "specifier"
     )
@@ -192,7 +192,7 @@ def specify_task(
                 {"role": "user", "content": user_msg},
             ],
             temperature=0.3,
-            max_tokens=HERMES_KANBAN_SPECIFY_MAX_TOKENS,
+            max_tokens=ARGUS_KANBAN_SPECIFY_MAX_TOKENS,
             timeout=timeout or 120,
             extra_body=get_auxiliary_extra_body() or None,
         )

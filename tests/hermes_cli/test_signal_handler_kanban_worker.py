@@ -10,7 +10,7 @@ keeps the process alive after the gateway has already restarted, the kanban
 dispatcher's ``_pid_alive`` check returns True forever, and the task stays
 ``running`` indefinitely.
 
-The fix: when the process is a dispatcher-spawned worker (``HERMES_KANBAN_TASK``
+The fix: when the process is a dispatcher-spawned worker (``ARGUS_KANBAN_TASK``
 env var set), flush logging + stdout/stderr and call ``os._exit(0)`` instead.
 The kernel reclaims the PID immediately, and ``detect_crashed_workers``
 reclaims the stale claim on the next dispatcher tick.
@@ -56,7 +56,7 @@ def _synthetic_worker_script() -> str:
                 time.sleep(0.05)
             except Exception:
                 pass
-            if os.environ.get("HERMES_KANBAN_TASK"):
+            if os.environ.get("ARGUS_KANBAN_TASK"):
                 try:
                     if hasattr(signal, "SIGALRM"):
                         signal.signal(signal.SIGALRM, lambda *_: os._exit(0))
@@ -143,9 +143,9 @@ def _cleanup(proc: subprocess.Popen) -> None:
     reason="SIGTERM semantics differ on Windows; kanban dispatcher is POSIX-only",
 )
 def test_sigterm_with_kanban_task_env_terminates_quickly():
-    """With HERMES_KANBAN_TASK set, SIGTERM should kill the process in <2s
+    """With ARGUS_KANBAN_TASK set, SIGTERM should kill the process in <2s
     even when a non-daemon thread is still alive."""
-    proc = _spawn_synthetic({"HERMES_KANBAN_TASK": "t_test_28181"})
+    proc = _spawn_synthetic({"ARGUS_KANBAN_TASK": "t_test_28181"})
     try:
         t0 = time.time()
         os.kill(proc.pid, signal.SIGTERM)
@@ -162,7 +162,7 @@ def test_sigterm_with_kanban_task_env_terminates_quickly():
                 return
             time.sleep(0.02)
         pytest.fail(
-            f"process still alive 2s after SIGTERM with HERMES_KANBAN_TASK set "
+            f"process still alive 2s after SIGTERM with ARGUS_KANBAN_TASK set "
             f"(dispatcher would keep extending claim) — fix regressed"
         )
     finally:
@@ -174,7 +174,7 @@ def test_sigterm_with_kanban_task_env_terminates_quickly():
     reason="SIGTERM semantics differ on Windows; kanban dispatcher is POSIX-only",
 )
 def test_sigterm_without_kanban_task_env_uses_keyboard_interrupt_path():
-    """Without HERMES_KANBAN_TASK, the original KeyboardInterrupt path runs.
+    """Without ARGUS_KANBAN_TASK, the original KeyboardInterrupt path runs.
 
     This is the contrast case proving the fix is gated on the env var: in
     interactive ``hermes chat -q`` (no env var), behavior is unchanged. The
@@ -204,7 +204,7 @@ def test_sigterm_without_kanban_task_env_uses_keyboard_interrupt_path():
 
 def test_real_handler_uses_os_exit_for_kanban_workers():
     """Source-level invariant: cli.py's _signal_handler_q must call
-    os._exit(0) when HERMES_KANBAN_TASK is set.
+    os._exit(0) when ARGUS_KANBAN_TASK is set.
 
     Catches the case where someone refactors the handler and accidentally
     drops the env-gated exit, restoring the bug. Reading cli.py directly is
@@ -221,9 +221,9 @@ def test_real_handler_uses_os_exit_for_kanban_workers():
     assert start != -1, "cli.py is missing _signal_handler_q"
     # Look ahead for the env-gated os._exit call within ~80 lines.
     body = src[start : start + 4000]
-    assert "HERMES_KANBAN_TASK" in body, (
+    assert "ARGUS_KANBAN_TASK" in body, (
         "_signal_handler_q must gate its kanban-worker exit path on "
-        "HERMES_KANBAN_TASK — see #28181"
+        "ARGUS_KANBAN_TASK — see #28181"
     )
     assert "os._exit(0)" in body, (
         "_signal_handler_q must call os._exit(0) for kanban workers — "

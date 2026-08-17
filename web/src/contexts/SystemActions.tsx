@@ -36,10 +36,25 @@ export function SystemActionsProvider({
     if (!activeAction) return;
     const name = ACTION_NAMES[activeAction];
     let cancelled = false;
+    const startedAt = Date.now();
+    let healthyStreak = 0;
 
     const poll = async () => {
       try {
-        const resp = await api.getActionStatus(name);
+        // For ``restart`` we also probe ``/api/status`` in parallel so the
+        // UI doesn't wedge on "Restarting gateway…" forever in the
+        // no-service-manager fallback: on that path the ``argus gateway
+        // restart`` command exec-hosts the new gateway itself, so its
+        // Popen never exits and ``resp.running`` stays ``true`` for the
+        // whole lifetime of the new gateway. Once the heartbeat has
+        // reported ``gateway_running=true`` a few polls in a row past a
+        // short grace window, treat the restart as done.
+        const [resp, gwStatus] = await Promise.all([
+          api.getActionStatus(name),
+          activeAction === "restart"
+            ? api.getStatus().catch(() => null)
+            : Promise.resolve(null),
+        ]);
         if (cancelled) return;
         setActionStatus(resp);
         if (!resp.running) {
@@ -51,6 +66,27 @@ export function SystemActionsProvider({
               : `${t.status.actionFailed} (exit ${resp.exit_code ?? "?"})`,
           });
           return;
+        }
+        if (
+          activeAction === "restart" &&
+          gwStatus?.gateway_running === true &&
+          Date.now() - startedAt > 5000
+        ) {
+          // Require the heartbeat to stay healthy across three
+          // consecutive polls (~4.5s) — one green tick right after we
+          // kicked off the restart could just be the old gateway before
+          // the kill has taken effect.
+          healthyStreak += 1;
+          if (healthyStreak >= 3) {
+            setActionStatus({ ...resp, running: false, exit_code: 0 });
+            setToast({
+              type: "success",
+              message: t.status.actionFinished,
+            });
+            return;
+          }
+        } else {
+          healthyStreak = 0;
         }
       } catch {
         // transient fetch error; keep polling

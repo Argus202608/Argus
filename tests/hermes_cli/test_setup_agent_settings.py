@@ -7,10 +7,10 @@ def test_setup_agent_settings_uses_displayed_max_iterations_value(tmp_path, monk
     """The helper text should match the value shown in the prompt.
 
     After PR#18413 max_turns is read exclusively from config.yaml — the
-    .env `HERMES_MAX_ITERATIONS` fallback was removed because it was
+    .env `ARGUS_MAX_ITERATIONS` fallback was removed because it was
     shadowing the user's current config (see the 60-vs-500 incident).
     """
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ARGUS_HOME", str(tmp_path))
 
     config = {
         "agent": {"max_turns": 60},
@@ -37,11 +37,11 @@ def test_setup_agent_settings_uses_displayed_max_iterations_value(tmp_path, monk
 def test_setup_agent_settings_prefers_config_over_stale_env(tmp_path, monkeypatch, capsys):
     """Config.yaml wins even when a stale .env value disagrees.
 
-    Regression guard for the bug where `.env HERMES_MAX_ITERATIONS=60`
-    from an old `hermes setup` run shadowed `agent.max_turns: 500` in
+    Regression guard for the bug where `.env ARGUS_MAX_ITERATIONS=60`
+    from an old `argus setup` run shadowed `agent.max_turns: 500` in
     config.yaml. The wizard must now display the config value.
     """
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ARGUS_HOME", str(tmp_path))
 
     config = {
         "agent": {"max_turns": 500},  # user bumped this in config.yaml
@@ -55,7 +55,7 @@ def test_setup_agent_settings_prefers_config_over_stale_env(tmp_path, monkeypatc
     # Simulate stale .env value — the wizard must ignore this.
     monkeypatch.setattr(
         "hermes_cli.setup.get_env_value",
-        lambda key: "60" if key == "HERMES_MAX_ITERATIONS" else "",
+        lambda key: "60" if key == "ARGUS_MAX_ITERATIONS" else "",
     )
     monkeypatch.setattr("hermes_cli.setup.prompt", lambda *args, **kwargs: next(prompt_answers))
     monkeypatch.setattr("hermes_cli.setup.prompt_choice", lambda *args, **kwargs: 4)
@@ -75,4 +75,4 @@ def test_setup_agent_settings_prefers_config_over_stale_env(tmp_path, monkeypatc
     assert "Press Enter to keep 500." in out
     assert "Press Enter to keep 60." not in out
     # And the stale .env entry gets cleaned up
-    assert "HERMES_MAX_ITERATIONS" in removed_keys
+    assert "ARGUS_MAX_ITERATIONS" in removed_keys

@@ -14,7 +14,7 @@ from __future__ import annotations
 import pytest
 
 from hermes_cli.model_switch import (
-    _HERMES_MODEL_WARNING,
+    _ARGUS_MODEL_WARNING,
     _check_hermes_model_warning,
     is_nous_hermes_non_agentic,
 )
@@ -40,7 +40,7 @@ def test_matches_real_nous_hermes_chat_models(model_name: str) -> None:
     assert is_nous_hermes_non_agentic(model_name), (
         f"expected {model_name!r} to be flagged as Nous Hermes 3/4"
     )
-    assert _check_hermes_model_warning(model_name) == _HERMES_MODEL_WARNING
+    assert _check_hermes_model_warning(model_name) == _ARGUS_MODEL_WARNING
 
 
 @pytest.mark.parametrize(

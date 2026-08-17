@@ -1,7 +1,7 @@
 """Tests for Bug #12905 fix — stale OAuth token detection in hermes model flow.
 
 Bug 3: `hermes model` with `provider=anthropic` skips OAuth re-authentication
-when a stale ANTHROPIC_TOKEN exists in ~/.hermes/.env but no valid
+when a stale ANTHROPIC_TOKEN exists in ~/.argus/.env but no valid
 Claude Code credentials are available. The fast-path silently proceeds to
 model selection with a broken token instead of offering re-auth.
 """
@@ -19,7 +19,7 @@ class TestStaleOAuthTokenDetection:
         valid Claude Code credentials anywhere. The flow MUST offer re-auth
         instead of silently skipping to model selection.
         """
-        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        monkeypatch.setenv("ARGUS_HOME", str(tmp_path))
 
         # Pre-load .env with an expired OAuth token (sk-ant- prefix = OAuth)
         save_env_value("ANTHROPIC_TOKEN", "sk-ant-oat-ExpiredToken00000")
@@ -70,7 +70,7 @@ class TestStaleOAuthTokenDetection:
         flagged as stale even when cc_creds are invalid. Regular API keys don't
         expire the same way OAuth tokens do.
         """
-        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        monkeypatch.setenv("ARGUS_HOME", str(tmp_path))
 
         # Regular API key — NOT an OAuth token
         save_env_value("ANTHROPIC_API_KEY", "sk-ant-api03-RegularPayPerTokenKey")
@@ -106,7 +106,7 @@ class TestStaleOAuthTokenDetection:
         When ANTHROPIC_TOKEN is OAuth and valid cc_creds with refresh exist,
         the flow should use existing credentials (no forced re-auth).
         """
-        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        monkeypatch.setenv("ARGUS_HOME", str(tmp_path))
 
         save_env_value("ANTHROPIC_TOKEN", "sk-ant-oat-GoodOAuthToken")
         save_env_value("ANTHROPIC_API_KEY", "")

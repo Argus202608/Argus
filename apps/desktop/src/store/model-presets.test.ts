@@ -32,7 +32,12 @@ describe('model presets', () => {
     await applyModelPreset({ effort: 'high' }, { failMessage: 'x', request, sessionId: 's1' })
     await applyModelPreset({}, { failMessage: 'x', request, sessionId: 's1' })
 
-    expect(calls).toEqual([{ method: 'config.set', params: { key: 'reasoning', session_id: 's1', value: 'high' } }])
+    // scope:"session" is required: a global write neither reaches the
+    // already-built agent nor survives the next start (sync_project_config
+    // copies the project config over HERMES_HOME).
+    expect(calls).toEqual([
+      { method: 'config.set', params: { key: 'reasoning', scope: 'session', session_id: 's1', value: 'high' } }
+    ])
   })
 
   it('no-ops without a session so selecting a model cannot mutate global config', async () => {

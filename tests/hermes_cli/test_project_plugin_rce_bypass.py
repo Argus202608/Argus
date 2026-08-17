@@ -1,12 +1,12 @@
 """Regression coverage for GHSA-5qr3-c538-wm9j (#29156) — Remote Code
-Execution via the ``HERMES_ENABLE_PROJECT_PLUGINS`` bypass in the web
+Execution via the ``ARGUS_ENABLE_PROJECT_PLUGINS`` bypass in the web
 server's dashboard plugin loader.
 
 Two primitives combined into the original advisory chain:
 
 1. ``hermes_cli.web_server._discover_dashboard_plugins`` opted into
-   the untrusted ``./.hermes/plugins/`` source via
-   ``os.environ.get("HERMES_ENABLE_PROJECT_PLUGINS")`` — truthy for
+   the untrusted ``./.argus/plugins/`` source via
+   ``os.environ.get("ARGUS_ENABLE_PROJECT_PLUGINS")`` — truthy for
    any non-empty string, so ``=0`` / ``=false`` / ``=no`` (all of
    which the agent loader treats as off, and which operators set to
    *disable* project plugins) silently *enabled* the source.
@@ -61,7 +61,7 @@ def _write_plugin_manifest(root: Path, name: str, manifest: dict) -> Path:
 
 
 # ---------------------------------------------------------------------------
-# Layer 1 — HERMES_ENABLE_PROJECT_PLUGINS env gate uses truthy semantics.
+# Layer 1 — ARGUS_ENABLE_PROJECT_PLUGINS env gate uses truthy semantics.
 # ---------------------------------------------------------------------------
 
 
@@ -74,13 +74,13 @@ class TestProjectPluginsEnvGate:
     def project_plugin(self, tmp_path, monkeypatch):
         """Plant a project-source plugin under CWD's ``.hermes/plugins``
         and isolate the user-plugins dir to an empty tmp tree."""
-        monkeypatch.setenv("HERMES_HOME", str(tmp_path / "home"))
+        monkeypatch.setenv("ARGUS_HOME", str(tmp_path / "home"))
         (tmp_path / "home").mkdir()
         cwd = tmp_path / "evil-repo"
         cwd.mkdir()
         monkeypatch.chdir(cwd)
         _write_plugin_manifest(
-            cwd / ".hermes" / "plugins",
+            cwd / ".argus" / "plugins",
             "evil",
             {
                 "name": "evil",
@@ -95,14 +95,14 @@ class TestProjectPluginsEnvGate:
         self, project_plugin, monkeypatch, value
     ):
         if value == "":
-            monkeypatch.delenv("HERMES_ENABLE_PROJECT_PLUGINS", raising=False)
+            monkeypatch.delenv("ARGUS_ENABLE_PROJECT_PLUGINS", raising=False)
         else:
-            monkeypatch.setenv("HERMES_ENABLE_PROJECT_PLUGINS", value)
+            monkeypatch.setenv("ARGUS_ENABLE_PROJECT_PLUGINS", value)
 
         plugins = web_server._get_dashboard_plugins(force_rescan=True)
         names = {p["name"] for p in plugins}
         assert "evil" not in names, (
-            f"HERMES_ENABLE_PROJECT_PLUGINS={value!r} must NOT enable the "
+            f"ARGUS_ENABLE_PROJECT_PLUGINS={value!r} must NOT enable the "
             "project source — that's the GHSA-5qr3-c538-wm9j env bypass."
         )
 
@@ -110,7 +110,7 @@ class TestProjectPluginsEnvGate:
     def test_truthy_values_enable_project_plugins(
         self, project_plugin, monkeypatch, value
     ):
-        monkeypatch.setenv("HERMES_ENABLE_PROJECT_PLUGINS", value)
+        monkeypatch.setenv("ARGUS_ENABLE_PROJECT_PLUGINS", value)
         plugins = web_server._get_dashboard_plugins(force_rescan=True)
         evil = next((p for p in plugins if p["name"] == "evil"), None)
         assert evil is not None
@@ -184,8 +184,8 @@ class TestDiscoveryScrubsApiField:
 
     @pytest.fixture
     def user_plugin_factory(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
-        monkeypatch.delenv("HERMES_ENABLE_PROJECT_PLUGINS", raising=False)
+        monkeypatch.setenv("ARGUS_HOME", str(tmp_path))
+        monkeypatch.delenv("ARGUS_ENABLE_PROJECT_PLUGINS", raising=False)
 
         def _make(name: str, manifest: dict) -> None:
             _write_plugin_manifest(tmp_path / "plugins", name, manifest)
@@ -308,26 +308,26 @@ class TestMountApiRoutesRefusesUntrusted:
 class TestEndToEndPocBlocked:
     """Reproduces the original advisory PoC shape: untrusted CWD with a
     manifest pointing ``api`` at an attacker-chosen Python file, with
-    ``HERMES_ENABLE_PROJECT_PLUGINS=0`` (so the operator believed the
+    ``ARGUS_ENABLE_PROJECT_PLUGINS=0`` (so the operator believed the
     project source was disabled).  Post-fix, the importer must never
     be invoked for the payload path, regardless of how the bypass is
     framed (``=0`` truthy-string bypass, absolute path bypass,
     project-source bypass)."""
 
     def test_full_chain_blocked(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("HERMES_HOME", str(tmp_path / "home"))
+        monkeypatch.setenv("ARGUS_HOME", str(tmp_path / "home"))
         (tmp_path / "home").mkdir()
         cwd = tmp_path / "evil-repo"
         cwd.mkdir()
         monkeypatch.chdir(cwd)
         # The original bypass: operator sets the var to a "disabled"
         # string the web server pre-fix treated as enabled.
-        monkeypatch.setenv("HERMES_ENABLE_PROJECT_PLUGINS", "0")
+        monkeypatch.setenv("ARGUS_ENABLE_PROJECT_PLUGINS", "0")
         # Payload: absolute path inside a manifest dropped in CWD.
         payload_py = tmp_path / "payload.py"
         payload_py.write_text("OWNED = True\n")
         _write_plugin_manifest(
-            cwd / ".hermes" / "plugins",
+            cwd / ".argus" / "plugins",
             "evil",
             {
                 "name": "evil",

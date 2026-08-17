@@ -1,3 +1,5 @@
+import { translateNow } from '@/i18n'
+import { RECALL_NO_CLUES } from '@/lib/mm-sentinels'
 import type { MmTrajectoryEntry, MmTrajectoryFrame } from './trajectory-grouping'
 
 export type QueryWorkerStatus = 'cancelled' | 'complete' | 'error' | 'running'
@@ -303,7 +305,7 @@ export function queryWorkerStepFromTrajectory(entry: MmTrajectoryEntry): QueryWo
   if (channel === 'search' || outerPhase === 'search_done') {worker = 'SearchWorker'}
 
   if (outerPhase === 'started') {
-    title = `接手问题并锁定提问时刻 · 冻结输入帧 ${Number(payload.n_frames || rawFrames.length)}`
+    title = translateNow('multimodal.recall.started', Number(payload.n_frames || rawFrames.length))
     const askTs = finiteNumber(payload.ask_ts)
 
     if (askTs !== undefined) {metrics.push(`ask_ts ${askTs.toFixed(1)}s`)}
@@ -327,19 +329,19 @@ export function queryWorkerStepFromTrajectory(entry: MmTrajectoryEntry): QueryWo
 
     status = ocrState === 'error' || ocrState === 'timeout' ? 'error' : 'complete'
     title = ocrState === 'available'
-      ? `OCR 辅助文字 · ${ocrRecordCount} 条`
+      ? translateNow('multimodal.ocr.helperAvailable', ocrRecordCount)
       : ocrState === 'skipped'
-        ? 'OCR 辅助文字 · 已跳过'
+        ? translateNow('multimodal.ocr.helperSkipped')
         : ocrState === 'timeout'
-          ? 'OCR 辅助文字 · 超时'
+          ? translateNow('multimodal.ocr.helperTimeout')
           : ocrState === 'error'
-            ? 'OCR 辅助文字 · 提取失败'
-            : 'OCR 辅助文字 · 未识别到文字'
+            ? translateNow('multimodal.ocr.helperError')
+            : translateNow('multimodal.ocr.helperEmpty')
     detail = reason
 
     if (ocrElapsedSec !== undefined) {metrics.push(`${ocrElapsedSec.toFixed(2)}s`)}
   } else if (outerPhase === 'delegate_start') {
-    title = '开始分析，准备决定 Recall / Search'
+    title = translateNow('multimodal.recall.analysisStart')
   } else if (outerPhase === 'router_react') {
     const searchCalls = Array.isArray(event.tool_calls) ? event.tool_calls.map(value => normalizeToolCall(value, 'search tool')).filter(Boolean) as QueryWorkerToolCall[] : []
 
@@ -350,13 +352,13 @@ export function queryWorkerStepFromTrajectory(entry: MmTrajectoryEntry): QueryWo
     toolCalls = [...searchCalls, ...recallCalls]
     callState = 'planned'
     title = toolCalls.length
-      ? `完成一轮规划${recallCalls.length ? ` · Recall ${recallCalls.length}` : ''}${searchCalls.length ? ` · Search ${searchCalls.length}` : ''}`
-      : '完成一轮规划 · 本轮未调用 Recall / Search'
+      ? translateNow('multimodal.recall.planRound', recallCalls.length, searchCalls.length)
+      : translateNow('multimodal.recall.planRoundNoTools')
     detail = cleanString(event.decision_summary || event.useful_info)
   } else if (outerPhase === 'recall_skipped') {
     title = event.reason === 'retry_limit_after_two_failures'
-      ? '停止重试 Recall · 相同任务已连续失败 2 次'
-      : '跳过重复 Recall · 已用本次分析的召回结果'
+      ? translateNow('multimodal.recall.retryLimitStop')
+      : translateNow('multimodal.recall.skipDuplicate')
     detail = cleanString(event.brief || event.reason)
   } else if (outerPhase === 'bg_progress') {
     const fallbackName = channel === 'search' ? 'text_search' : 'recall_memory'
@@ -368,82 +370,86 @@ export function queryWorkerStepFromTrajectory(entry: MmTrajectoryEntry): QueryWo
       if (call) {toolCalls = [call]}
       callState = 'called'
       title = innerPhase === 'start'
-        ? 'Search 开始检索'
-        : `Search 实际调用 · ${call?.name || fallbackName}`
+        ? translateNow('multimodal.recall.searchPhase', translateNow('multimodal.recall.searchStart'))
+        : translateNow('multimodal.recall.searchCall', call?.name || fallbackName)
     } else if (innerPhase === 'bg_progress') {
       if (call) {toolCalls = [call]}
       callState = 'called'
-      title = `Recall 实际调用 · ${call?.name || fallbackName}`
+      title = translateNow('multimodal.recall.recallCall', call?.name || fallbackName, round)
     } else if (innerPhase === 'start') {
-      title = '开始召回多模态记忆'
+      title = translateNow('multimodal.recall.startRecall')
 
       if (cleanString(event.model)) {metrics.push(`model ${cleanString(event.model)}`)}
     } else if (innerPhase === 'tool_obs') {
       const observations = Array.isArray(event.observations) ? event.observations : []
 
       toolResults = observations.map(value => normalizeToolResult(value)).filter(Boolean) as QueryWorkerToolResult[]
-      title = `Recall 第${round || '?'}轮读取记忆工具 · ${toolResults.length} 项结果`
+      title = translateNow('multimodal.recall.roundRead', round || '?', toolResults.length)
       const parallelElapsed = finiteNumber(event.parallel_elapsed_sec)
 
-      if (parallelElapsed !== undefined) {metrics.push(`并行读取 ${parallelElapsed.toFixed(2)}s`)}
+      if (parallelElapsed !== undefined) {
+        metrics.push(translateNow('multimodal.recall.parallelRead', parallelElapsed.toFixed(2)))
+      }
 
       if (Array.isArray(event.new_frame_ids) && event.new_frame_ids.length) {
-        metrics.push(`新证据帧 ${event.new_frame_ids.length}`)
+        metrics.push(translateNow('multimodal.recall.newEvidenceFrames', event.new_frame_ids.length))
       }
     } else if (innerPhase === 'distill') {
-      title = `Recall 第${round || '?'}轮提炼出有效线索`
+      title = translateNow('multimodal.recall.roundDistill', round || '?')
       detail = cleanString(event.clue)
     } else if (/^r\d+_decision$/.test(innerPhase) || /decision$/.test(innerPhase)) {
       const nextCalls = Array.isArray(event.next_tool_calls) ? event.next_tool_calls : []
 
       toolCalls = nextCalls.map(value => normalizeToolCall(value)).filter(Boolean) as QueryWorkerToolCall[]
       callState = toolCalls.length ? 'planned' : undefined
-      title = `Recall 第${round || '?'}轮决策 · ${
-        event.can_answer === true
-          ? '证据已足够'
-          : toolCalls.length
-            ? `继续检索 ${toolCalls.length} 个工具`
-            : '无后续工具'
-      }`
+      const verdict = event.can_answer === true
+        ? translateNow('multimodal.recall.decisionEnough')
+        : toolCalls.length
+          ? translateNow('multimodal.recall.decisionContinueTools', toolCalls.length)
+          : translateNow('multimodal.recall.decisionNoTools')
+
+      title = translateNow('multimodal.recall.roundDecision', round || '?', verdict)
       detail = cleanString(event.decision_summary || event.useful_info)
       const clues = finiteNumber(event.n_clues_so_far)
 
       metrics.push(`can_answer ${String(event.can_answer === true)}`)
 
-      if (clues) {metrics.push(`已有线索 ${clues}`)}
+      if (clues) {metrics.push(translateNow('multimodal.recall.cluesSoFar', clues))}
 
       if (event.useful_info && event.decision_summary) {
-        detail += `${detail ? '\n' : ''}证据摘要：${cleanString(event.useful_info)}`
+        detail += `${detail ? '\n' : ''}${translateNow('multimodal.recall.evidenceSummary', cleanString(event.useful_info))}`
       }
     } else if (innerPhase === 'tool_skipped') {
-      title = `Recall 第${round || '?'}轮跳过重复记忆读取`
+      title = translateNow('multimodal.recall.roundSkipDuplicate', round || '?')
       detail = cleanString(event.name || event.tool_name)
 
       if (call) {toolCalls = [call]}
     } else if (innerPhase === 'verify') {
-      title = `Recall 视觉复核 · 保留 ${Number(event.n_kept || 0)}/${Number(event.n_in || 0)} 帧`
-      detail = cleanString(event.visual_correction) || '未发现需要纠正的画面冲突'
+      title = translateNow('multimodal.recall.visualReview', Number(event.n_kept || 0), Number(event.n_in || 0))
+      detail = cleanString(event.visual_correction) || translateNow('multimodal.recall.noVisualConflict')
     } else if (innerPhase === 'fast_table') {
       status = 'complete'
       const result = normalizeToolResult(event, fallbackName)
 
       if (result) {toolResults = [result]}
-      title = `Recall 快速工具返回 · ${call?.name || fallbackName} · ${Number(event.findings_len || 0)} 字证据`
+      title = translateNow('multimodal.recall.quickTool', call?.name || fallbackName, Number(event.findings_len || 0))
       detail = cleanString(event.findings_preview || event.obs_summary)
     } else if (innerPhase === 'done') {
       status = 'complete'
       const found = Number(event.n_clues || 0) > 0 || Boolean(cleanString(event.findings_preview))
 
-      title = `Recall 完成 · ${found ? `${Number(event.n_clues || 0)} 条线索` : '未找到可靠线索'}`
+      title = found
+        ? translateNow('multimodal.recall.completeFound', Number(event.n_clues || 0))
+        : translateNow('multimodal.recall.completeNotFound')
       detail = cleanString(event.findings_preview)
     } else if (innerPhase === 'error') {
       status = 'error'
-      title = `Recall 请求失败${event.stage ? ` · ${String(event.stage)}` : ''}`
+      title = translateNow('multimodal.recall.failed', event.stage ? String(event.stage) : undefined)
       detail = cleanString(event.error)
 
       if (cleanString(event.model)) {metrics.push(`model ${cleanString(event.model)}`)}
     } else {
-      title = `Recall ${innerPhase}${round ? ` · 第${round}轮` : ''}`
+      title = translateNow('multimodal.recall.phase', innerPhase, round)
     }
   } else if (outerPhase === 'recall_done' || outerPhase === 'search_done') {
     status = 'complete'
@@ -451,27 +457,37 @@ export function queryWorkerStepFromTrajectory(entry: MmTrajectoryEntry): QueryWo
     const result = normalizeToolResult(event, fallbackName)
 
     if (result) {toolResults = [result]}
-    const recallFound = event.found !== false && cleanString(event.findings_preview) !== '(记忆里未找到相关线索)'
+    const recallFound = event.found !== false && cleanString(event.findings_preview) !== RECALL_NO_CLUES
 
     title = outerPhase === 'search_done'
-      ? `Search 返回 · ${Number(event.findings_len || 0)} 字证据`
-      : `Recall 返回 · ${recallFound ? `${Number(event.n_clues || 0)} 条线索` : '未找到可靠线索'}${rawFrames.length ? ` · ${rawFrames.length} 帧` : ''}`
+      ? translateNow('multimodal.recall.searchReturn', Number(event.findings_len || 0))
+      : recallFound
+        ? translateNow('multimodal.recall.returnFound', Number(event.n_clues || 0), rawFrames.length)
+        : translateNow('multimodal.recall.returnNotFound', rawFrames.length)
     detail = cleanString(event.findings_preview)
 
     if (event.cache_hit === true) {metrics.push('cache hit')}
   } else if (outerPhase === 'answer_ready') {
-    title = '证据已齐，组织最终答案'
+    title = translateNow('multimodal.recall.composingAnswer')
     detail = cleanString(event.text_preview)
   } else if (outerPhase === 'tool_error') {
     status = 'error'
-    title = `${channel === 'search' ? 'Search' : 'Recall'} 子任务失败`
+    title = translateNow(
+      'multimodal.recall.subtaskFailed',
+      channel === 'search' ? 'Search' : 'Recall',
+      cleanString(event.target) || 'unknown'
+    )
     detail = cleanString(event.findings || event.error)
     const call = normalizeToolCall(event, channel === 'search' ? 'text_search' : 'recall_memory')
 
     if (call) {toolCalls = [call]}
   } else if (TERMINAL_PHASES.has(outerPhase)) {
     status = outerPhase as QueryWorkerStatus
-    title = outerPhase === 'complete' ? '回答已完成并回填原问题' : outerPhase === 'cancelled' ? '任务已取消' : '任务执行失败'
+    title = outerPhase === 'complete'
+      ? translateNow('multimodal.recall.answerComplete')
+      : outerPhase === 'cancelled'
+        ? translateNow('multimodal.recall.taskCancelled')
+        : translateNow('multimodal.recall.taskFailed')
     detail = cleanString(payload.answer_preview || payload.error)
   } else {
     title = `${worker} · ${innerPhase}`

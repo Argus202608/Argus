@@ -8,9 +8,17 @@ import type { HermesConnection } from '@/global'
 const ensureGatewayForProfile = vi.fn(async () => undefined)
 const $gateway = atom<unknown>({ id: 'live-socket' })
 const stopCaptureAndNotify = vi.fn()
+const micLifecycle = {
+  intent: false,
+  stop: vi.fn(async () => undefined)
+}
 
 vi.mock('@/store/gateway', () => ({ $gateway, ensureGatewayForProfile }))
 vi.mock('@/store/multimodal-capture', () => ({ stopCaptureAndNotify }))
+vi.mock('@/store/multimodal-voice', () => ({
+  hasMicCaptureIntent: () => micLifecycle.intent,
+  stopMic: micLifecycle.stop
+}))
 vi.mock('@/hermes', () => ({
   getProfiles: vi.fn(async () => ({ profiles: [] })),
   setApiRequestProfile: vi.fn()
@@ -38,6 +46,8 @@ beforeEach(() => {
   getConnection.mockReset()
   ensureGatewayForProfile.mockClear()
   stopCaptureAndNotify.mockClear()
+  micLifecycle.intent = false
+  micLifecycle.stop.mockClear()
   $gateway.set({ id: 'live-socket' })
   $activeGatewayProfile.set('default')
   $connection.set(localConn())
@@ -111,5 +121,19 @@ describe('fresh profile-session ownership', () => {
 
     expect(stopCaptureAndNotify).toHaveBeenCalledTimes(1)
     expect(captureWasInvalidated).toEqual([true])
+  })
+
+  it('cancels an in-flight manual mic turn synchronously before publishing', () => {
+    micLifecycle.intent = true
+    const micWasInvalidated: boolean[] = []
+    const unlisten = $freshSessionRequest.listen(() => {
+      micWasInvalidated.push(micLifecycle.stop.mock.calls.length > 0)
+    })
+
+    requestFreshSession()
+    unlisten()
+
+    expect(micLifecycle.stop).toHaveBeenCalledTimes(1)
+    expect(micWasInvalidated).toEqual([true])
   })
 })

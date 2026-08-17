@@ -544,8 +544,8 @@ class Config:
     inflight_brief_ttl: float = 30.0
 
     # ---- STT (ASR) ----
-    # ★ Qwen3-ASR (老 ASR): 用户对 agent 说话用 (单 speaker, 要快).
-    # 端点/密钥不硬编码 —— 通过用户 config.yaml 的 multimodal.asr_* 覆盖。
+    # ★ Qwen3-ASR (老 ASR): 用户对 agent 说话用 (单 speaker, 要快). 不动.
+    # 端点/密钥不硬编码 —— 通过 ~/.argus/config.yaml 的 multimodal.asr_* 覆盖。
     # 兼容各类云 ASR:
     #   * 自托管服务: multipart file → {"text": ...}, 可不鉴权。
     #   * OpenAI 兼容 (/v1/audio/transcriptions, Groq, Azure OpenAI, 硅基流动等):

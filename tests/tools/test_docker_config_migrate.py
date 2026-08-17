@@ -27,8 +27,8 @@ def _run_migration(hermes_home: Path, **env_overrides: str) -> subprocess.Comple
     env = os.environ.copy()
     env.update(
         {
-            "HERMES_HOME": str(hermes_home),
-            "HERMES_SKIP_CHMOD": "1",
+            "ARGUS_HOME": str(hermes_home),
+            "ARGUS_SKIP_CHMOD": "1",
             "PYTHONPATH": str(REPO_ROOT),
         }
     )
@@ -126,7 +126,7 @@ def test_docker_config_migrate_does_not_rewrite_invalid_yaml(tmp_path: Path) -> 
 
     assert proc.returncode == 0, proc.stderr
     assert "Migrating config schema" not in proc.stdout
-    assert "hermes config:" in proc.stderr
+    assert "argus config:" in proc.stderr
     assert config_path.read_text(encoding="utf-8") == original
     assert not list(tmp_path.glob("*.bak-*"))
 
@@ -136,7 +136,7 @@ def test_docker_config_migrate_skip_env_leaves_config_unchanged(tmp_path: Path) 
     original = yaml.safe_dump({"_config_version": 11})
     config_path.write_text(original, encoding="utf-8")
 
-    proc = _run_migration(tmp_path, HERMES_SKIP_CONFIG_MIGRATION="1")
+    proc = _run_migration(tmp_path, ARGUS_SKIP_CONFIG_MIGRATION="1")
 
     assert proc.returncode == 0, proc.stderr
     assert "skipping config migration" in proc.stdout

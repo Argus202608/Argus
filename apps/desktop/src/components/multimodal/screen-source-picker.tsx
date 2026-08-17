@@ -26,6 +26,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Switch } from '@/components/ui/switch'
+import { useI18n } from '@/i18n'
 import { cn } from '@/lib/utils'
 
 // ── Module-scoped picker state ────────────────────────────────────────────
@@ -79,6 +80,7 @@ interface SourceItem {
 }
 
 export function ScreenSourcePickerHost(): React.JSX.Element | null {
+  const { t } = useI18n()
   const { open } = useStore($picker)
   const [sources, setSources] = useState<SourceItem[]>([])
   const [loading, setLoading] = useState(false)
@@ -148,24 +150,24 @@ export function ScreenSourcePickerHost(): React.JSX.Element | null {
     >
       <DialogContent className="max-w-4xl sm:max-w-4xl">
         <DialogHeader>
-          <DialogTitle>选择要共享的窗口或屏幕</DialogTitle>
+          <DialogTitle>{t.multimodal.screenPicker.title}</DialogTitle>
         </DialogHeader>
         {loading ? (
           <div className="p-6 text-center text-sm text-(--ui-text-tertiary)">
-            正在读取窗口列表…
+            {t.multimodal.screenPicker.loading}
           </div>
         ) : error ? (
           <div className="p-4 text-sm text-red-500 whitespace-pre-wrap">
             {error}
             {error.toLowerCase().includes('failed to get sources') && (
               <div className="mt-2 text-(--ui-text-tertiary)">
-                macOS 上首次使用需在【系统设置 → 隐私与安全 → 屏幕录制】给 Argus 授权后重启 app。
+                {t.multimodal.screenPicker.macPermission}
               </div>
             )}
           </div>
         ) : sources.length === 0 ? (
           <div className="p-6 text-center text-sm text-(--ui-text-tertiary)">
-            未发现可共享的源。
+            {t.multimodal.screenPicker.noSources}
           </div>
         ) : (
           <div className="flex flex-col gap-3">
@@ -174,8 +176,8 @@ export function ScreenSourcePickerHost(): React.JSX.Element | null {
             <div className="flex items-center gap-1 border-b border-(--ui-stroke-tertiary)">
               {(
                 [
-                  { key: 'screen', label: '整个屏幕', count: screens.length },
-                  { key: 'window', label: '窗口', count: windows.length }
+                  { key: 'screen', label: t.multimodal.screenPicker.tabScreen, count: screens.length },
+                  { key: 'window', label: t.multimodal.screenPicker.tabWindow, count: windows.length }
                 ] as const
               )
                 .filter(t => t.count > 0)
@@ -229,8 +231,8 @@ export function ScreenSourcePickerHost(): React.JSX.Element | null {
             htmlFor="share-audio-switch"
             title={
               systemAudioSupported
-                ? '开启后随共享同时捕获系统音频（Loopback）'
-                : '当前系统版本没有可用的屏幕共享系统音频通道'
+                ? t.multimodal.screenPicker.shareAudioEnabled
+                : t.multimodal.screenPicker.shareAudioDisabled
             }
           >
             <Switch
@@ -240,17 +242,17 @@ export function ScreenSourcePickerHost(): React.JSX.Element | null {
               onCheckedChange={setShareAudio}
               size="xs"
             />
-            <span>同时分享音频</span>
+            <span>{t.multimodal.screenPicker.shareAudioLabel}</span>
             {!systemAudioSupported && (
-              <span className="text-[0.6875rem]">（需 Windows 或 macOS 13+）</span>
+              <span className="text-[0.6875rem]">{t.multimodal.screenPicker.shareAudioNote}</span>
             )}
           </label>
           <div className="flex gap-2">
             <Button onClick={handleCancel} variant="ghost">
-              取消
+              {t.multimodal.screenPicker.cancel}
             </Button>
             <Button disabled={!selectedId} onClick={handleConfirm}>
-              开始共享
+              {t.multimodal.screenPicker.startShare}
             </Button>
           </div>
         </div>
@@ -272,6 +274,7 @@ function SourceGrid({
   onPick,
   selectedId
 }: SourceGridProps): React.JSX.Element {
+  const { t } = useI18n()
   return (
     // Tailwind 编译产物里没有 plain `grid-cols-3`, 所以关键布局(display: grid +
     // template-columns)走 inline style 100% 兜底; 其余仍走 Tailwind class。
@@ -283,7 +286,7 @@ function SourceGrid({
       }}
     >
       {items.map(s => {
-        const label = s.name || '(无标题)'
+        const label = s.name || t.multimodal.screenPicker.noTitle
         const active = selectedId === s.id
         return (
           <button
@@ -326,7 +329,7 @@ function SourceGrid({
                 />
               ) : (
                 <div className="flex h-full w-full items-center justify-center text-sm text-(--ui-text-tertiary)">
-                  无预览
+                  {t.multimodal.screenPicker.noPreview}
                 </div>
               )}
             </div>

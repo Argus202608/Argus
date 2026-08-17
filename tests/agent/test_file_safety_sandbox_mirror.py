@@ -2,7 +2,7 @@
 
 The guard fires when a tool tries to write into the per-task mirror
 directory created by a non-local terminal backend (Docker, Daytona, etc.).
-Those paths look like ``…/sandboxes/<backend>/<task>/home/.hermes/…`` and
+Those paths look like ``…/sandboxes/<backend>/<task>/home/.argus/…`` and
 they accumulate divergent copies of authoritative profile state (SOUL.md,
 config.yaml, memories/*.md) because the host Hermes process never reads
 them. Soft guard — defense in depth, NOT a security boundary.
@@ -32,7 +32,7 @@ class TestClassifySandboxMirrorTarget:
         target = (
             tmp_path
             / "profiles" / "group1"
-            / "sandboxes" / "docker" / "default" / "home" / ".hermes"
+            / "sandboxes" / "docker" / "default" / "home" / ".argus"
             / "profiles" / "group1" / "SOUL.md"
         )
         target.parent.mkdir(parents=True)
@@ -42,7 +42,7 @@ class TestClassifySandboxMirrorTarget:
         assert result is not None
         assert result["target_path"] == str(target.resolve())
         assert result["mirror_root"].endswith(
-            "sandboxes/docker/default/home/.hermes"
+            "sandboxes/docker/default/home/.argus"
         )
         assert result["inner_path"] == "profiles/group1/SOUL.md"
 
@@ -60,7 +60,7 @@ class TestClassifySandboxMirrorTarget:
 
         target = (
             tmp_path
-            / "sandboxes" / backend / "task-42" / "home" / ".hermes"
+            / "sandboxes" / backend / "task-42" / "home" / ".argus"
             / Path(inner)
         )
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -75,7 +75,7 @@ class TestClassifySandboxMirrorTarget:
         """A plain Hermes path is not a mirror."""
         from agent.file_safety import classify_sandbox_mirror_target
 
-        target = tmp_path / ".hermes" / "profiles" / "group1" / "SOUL.md"
+        target = tmp_path / ".argus" / "profiles" / "group1" / "SOUL.md"
         target.parent.mkdir(parents=True)
         target.write_text("# real SOUL\n")
 
@@ -109,7 +109,7 @@ class TestClassifySandboxMirrorTarget:
         assert classify_sandbox_mirror_target(str(target)) is None
 
     def test_truncated_sandbox_path_returns_none(self, tmp_path):
-        """``…/sandboxes/<backend>/<task>`` without ``home/.hermes/<thing>`` is not a mirror."""
+        """``…/sandboxes/<backend>/<task>`` without ``home/.argus/<thing>`` is not a mirror."""
         from agent.file_safety import classify_sandbox_mirror_target
 
         target = tmp_path / "sandboxes" / "docker" / "task-42"
@@ -125,7 +125,7 @@ class TestClassifySandboxMirrorTarget:
         target = (
             tmp_path
             / "profiles" / "group1"
-            / "sandboxes" / "docker" / "default" / "home" / ".hermes"
+            / "sandboxes" / "docker" / "default" / "home" / ".argus"
             / "profiles" / "group1" / "SOUL.md"
         )
         # Parent directory exists so .resolve() doesn't strip the tail
@@ -147,7 +147,7 @@ class TestGetSandboxMirrorWarning:
     def test_non_mirror_returns_none(self, tmp_path):
         from agent.file_safety import get_sandbox_mirror_warning
 
-        target = tmp_path / ".hermes" / "profiles" / "group1" / "SOUL.md"
+        target = tmp_path / ".argus" / "profiles" / "group1" / "SOUL.md"
         target.parent.mkdir(parents=True)
         target.write_text("# real SOUL\n")
 
@@ -159,7 +159,7 @@ class TestGetSandboxMirrorWarning:
         target = (
             tmp_path
             / "profiles" / "group1"
-            / "sandboxes" / "docker" / "default" / "home" / ".hermes"
+            / "sandboxes" / "docker" / "default" / "home" / ".argus"
             / "profiles" / "group1" / "SOUL.md"
         )
         target.parent.mkdir(parents=True)
@@ -168,7 +168,7 @@ class TestGetSandboxMirrorWarning:
         warn = get_sandbox_mirror_warning(str(target))
         assert warn is not None
         # Must name the mirror root so the user can locate the sandbox.
-        assert "sandboxes/docker/default/home/.hermes" in warn
+        assert "sandboxes/docker/default/home/.argus" in warn
         # Must hint at what the agent likely meant.
         assert "profiles/group1/SOUL.md" in warn
         # Must name the bypass kwarg shared with the cross-profile guard.
@@ -179,7 +179,7 @@ class TestGetSandboxMirrorWarning:
 
         target = (
             tmp_path
-            / "sandboxes" / "docker" / "t" / "home" / ".hermes"
+            / "sandboxes" / "docker" / "t" / "home" / ".argus"
             / "profiles" / "g" / "SOUL.md"
         )
         target.parent.mkdir(parents=True)
@@ -210,7 +210,7 @@ class TestSandboxMirrorIsOrthogonalToCrossProfile:
         target = (
             tmp_path
             / "profiles" / "group1"
-            / "sandboxes" / "docker" / "default" / "home" / ".hermes"
+            / "sandboxes" / "docker" / "default" / "home" / ".argus"
             / "profiles" / "group1" / "SOUL.md"
         )
         target.parent.mkdir(parents=True)

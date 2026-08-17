@@ -3,6 +3,9 @@ import { memo, useEffect, useMemo, useState } from 'react'
 
 import { CompactMarkdown } from '@/components/chat/compact-markdown'
 import { Switch } from '@/components/ui/switch'
+import { useI18n } from '@/i18n'
+import type { Translations } from '@/i18n'
+import { isSynthSaw } from '@/lib/mm-sentinels'
 import {
   $mmBgItems,
   $mmMonitorAlerts,
@@ -22,10 +25,12 @@ export function visibleWatchers(watchers: MmWatcher[]): MmWatcher[] {
   return watchers.filter(watcher => watcher.status !== 'deleted')
 }
 
+type WatcherState = 'interrupted' | 'running' | 'stopping' | 'done'
+
 export function watcherPresentation(watcher: MmWatcher): {
   canToggle: boolean
   running: boolean
-  stateLabel: '已中断' | '已完成' | '正在停止' | '进行中'
+  state: WatcherState
 } {
   const status = String(watcher.status || 'interrupted')
   const running = status === 'running'
@@ -35,7 +40,20 @@ export function watcherPresentation(watcher: MmWatcher): {
   return {
     canToggle: !done && !stopping && status !== 'deleted',
     running,
-    stateLabel: running ? '进行中' : done ? '已完成' : stopping ? '正在停止' : '已中断'
+    state: running ? 'running' : done ? 'done' : stopping ? 'stopping' : 'interrupted'
+  }
+}
+
+function watcherStateLabel(t: Translations, state: WatcherState): string {
+  switch (state) {
+    case 'running':
+      return t.multimodal.watcher.inProgress
+    case 'done':
+      return t.multimodal.watcher.completed
+    case 'stopping':
+      return t.multimodal.watcher.stopping
+    default:
+      return t.multimodal.watcher.interrupted
   }
 }
 
@@ -86,11 +104,12 @@ function fmtTs(s?: number): string {
  *  🔧 工具 → ⚠️ 失败 → 🔎/🧩 检索 → 🖼 crops → 📝 就绪. Foldable (req ④).
  *  ★ memo: 配合 store 的 clone-on-write (只有变化的段换新引用), 未变的段 memo 命中、
  *    不重渲染 → 长深度分析流式时不再整列段重渲 (对齐 web)。 */
-const _SYNTH_SAW = new Set(['可直接解读本段画面', '继续观察本段画面'])
 const SegmentCard = memo(function SegmentCard({ s, defaultOpen }: { s: DeepSegment; defaultOpen?: boolean }) {
+  const { t } = useI18n()
+  const da = t.multimodal.deepAnalysis
   const range = s.tsRange ? ` ${fmtTs(s.tsRange[0])}–${fmtTs(s.tsRange[1])}` : ''
-  // 真实描述: 排除后端合成的占位句 (对齐 web _SYNTH_SAW)。
-  const desc = s.saw && !_SYNTH_SAW.has(s.saw.trim()) ? s.saw : ''
+  // 真实描述: 排除后端合成的占位句 (isSynthSaw, 见 lib/mm-sentinels)。
+  const desc = s.saw && !isSynthSaw(s.saw) ? s.saw : ''
   const empty = !desc && s.lookups.length === 0 && !s.ready && !(s.crops && s.crops.length)
     && !(s.toolCalls && s.toolCalls.length) && !(s.toolErrors && s.toolErrors.length)
   const [open, setOpen] = useState(!!defaultOpen)
@@ -104,7 +123,7 @@ const SegmentCard = memo(function SegmentCard({ s, defaultOpen }: { s: DeepSegme
         className="flex w-full items-center gap-1.5 text-left text-[0.6875rem] font-semibold text-(--ui-text-tertiary)"
       >
         <span className="shrink-0">{open ? '▾' : '▸'}</span>
-        <span className="shrink-0">🎬 第 {s.seg} 段</span>
+        <span className="shrink-0">{da.segment(s.seg)}</span>
         {range && <span className="shrink-0 font-normal text-(--ui-text-tertiary) tabular-nums">{range}</span>}
         {s.scene && (
           <span className="ml-0.5 truncate rounded bg-(--ui-purple)/15 px-1.5 py-0.5 font-normal text-(--ui-text-secondary)">
@@ -116,14 +135,14 @@ const SegmentCard = memo(function SegmentCard({ s, defaultOpen }: { s: DeepSegme
       {desc ? (
         <div className={`${cap} break-words text-(--ui-text-secondary)`}>{desc}</div>
       ) : empty ? (
-        <div className={`${cap} text-(--ui-text-tertiary)`}>⏳ 正在分析这段画面…</div>
+        <div className={`${cap} text-(--ui-text-tertiary)`}>{da.analyzing}</div>
       ) : null}
       {/* 💭 思考: 折叠, 思考中(未 ready)图标脉冲。始终展示(不锁在 open 里)。 */}
       {s.thinking && (
         <details className={`${cap} text-(--ui-text-tertiary)`}>
           <summary className="flex cursor-pointer list-none select-none items-center gap-1">
             <span className={s.ready ? '' : 'animate-pulse'}>💭</span>
-            <span>思考过程{!s.ready && '…'}</span>
+            <span>{s.ready ? da.thinking : da.thinkingInProgress}</span>
           </summary>
           <div className="mt-1 whitespace-pre-wrap break-words rounded bg-(--ui-purple)/5 px-1.5 py-1">{s.thinking}</div>
         </details>
@@ -131,18 +150,17 @@ const SegmentCard = memo(function SegmentCard({ s, defaultOpen }: { s: DeepSegme
       {/* 🔧 工具 / ⚠️ 失败 / 🔎 检索: 始终展示 (过程事实, 不锁在 open 里)。 */}
       {s.toolCalls?.map((c, i) => (
         <div key={`tc${i}`} className={`${cap} break-words text-(--ui-blue)`}>
-          🔧 调用 {c.name}{c.arg ? `(${c.arg})` : ''}
+          {da.toolCall(c.name, c.arg)}
         </div>
       ))}
       {s.toolErrors?.map((e, i) => (
         <div key={`te${i}`} className={`${cap} break-words text-(--ui-red)`}>
-          ⚠️ {e.name} 调用失败:{e.error}
+          {da.toolFailed(e.name, e.error)}
         </div>
       ))}
       {s.lookups.map((l, i) => (
         <div key={i} className={`${cap} break-words text-(--ui-text-secondary)`}>
-          {l.kind === 'search' ? '🔎 搜索' : '🧩 记忆'}「{l.query}」
-          {l.result ? ` → ${l.result}` : '…'}
+          {da.lookupLine(l.kind, l.query, l.result)}
         </div>
       ))}
       {/* 折叠区: 占空间的重内容 (crops 缩略图 + 完整 markdown 解读)。 */}
@@ -168,7 +186,7 @@ const SegmentCard = memo(function SegmentCard({ s, defaultOpen }: { s: DeepSegme
               </div>
             ) : (
               <span className="whitespace-pre-wrap text-(--ui-text-tertiary)">
-                📝 本段无独立解读，内容已并入下方报告
+                {da.noInterpretation}
               </span>
             )}
           </div>
@@ -179,25 +197,27 @@ const SegmentCard = memo(function SegmentCard({ s, defaultOpen }: { s: DeepSegme
 })
 
 function DeepWindow({ item }: { item: DeepBgItem }) {
+  const { t } = useI18n()
+  const da = t.multimodal.deepAnalysis
   const live = !item.done
   const label = item.label || ''
 
   // Collapsed preview: newest segment's most-informative line so a folded window
   // is never blank.
   const lastSeg = item.segments[item.segments.length - 1]
-  const lastDesc = lastSeg?.saw && !_SYNTH_SAW.has(lastSeg.saw.trim()) ? lastSeg.saw : ''
-  const wSeg = item.waiting && typeof item.waiting.seg === 'number' ? `第${item.waiting.seg}段 ` : ''
+  const lastDesc = lastSeg?.saw && !isSynthSaw(lastSeg.saw) ? lastSeg.saw : ''
+  const waitingSeg = item.waiting && typeof item.waiting.seg === 'number' ? item.waiting.seg : undefined
   const preview = item.waiting
-    ? (item.waiting.paused ? `⏳ ${wSeg}等待新画面…` : `⏳ ${wSeg}正在积累视频帧… (${item.waiting.have}/${item.waiting.need})`)
+    ? (item.waiting.paused ? da.previewWaiting(waitingSeg) : da.previewAccumulating(item.waiting.have, item.waiting.need, waitingSeg))
     : lastSeg
-      ? (lastDesc ? `👁 ${lastDesc}` : `🎬 第 ${lastSeg.seg} 段分析中…`)
+      ? (lastDesc ? da.previewSaw(lastDesc) : da.previewSegAnalyzing(lastSeg.seg))
       : ''
 
   const title = (
     <span className="flex min-w-0 flex-col gap-0.5">
       <span className="flex min-w-0 items-center gap-1.5">
         <DisclosureTitle live={live}>
-          🔬 深度分析{label ? ` · ${label}` : ''}
+          {label ? da.titleWithLabel(label) : `🔬 ${da.title}`}
         </DisclosureTitle>
       </span>
       {preview && (
@@ -216,7 +236,7 @@ function DeepWindow({ item }: { item: DeepBgItem }) {
         title={title}
         trailing={
           <span className="text-[length:var(--conversation-caption-font-size)] text-(--ui-text-tertiary)">
-            {live ? '进行中' : '已完成'}
+            {live ? da.inProgress : da.completed}
           </span>
         }
       >
@@ -230,7 +250,7 @@ function DeepWindow({ item }: { item: DeepBgItem }) {
               <div className="flex items-center gap-1.5 text-[length:var(--conversation-caption-font-size)] text-(--ui-text-tertiary)">
                 <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-(--ui-purple)/60" />
                 <span>
-                  {typeof item.waiting.seg === 'number' ? `第${item.waiting.seg}段 ` : ''}等待新画面…
+                  {typeof item.waiting.seg === 'number' ? da.waitingFramesSeg(item.waiting.seg) : da.waitingFrames}
                 </span>
               </div>
             ) : (
@@ -242,9 +262,11 @@ function DeepWindow({ item }: { item: DeepBgItem }) {
                   <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-(--ui-purple)" />
                 </span>
                 <span>
-                  {typeof item.waiting.seg === 'number' ? `第${item.waiting.seg}段 ` : ''}攒帧中… {item.waiting.have}/{item.waiting.need}
+                  {typeof item.waiting.seg === 'number'
+                    ? da.accumulatingSeg(item.waiting.seg, item.waiting.have, item.waiting.need)
+                    : da.accumulating(item.waiting.have, item.waiting.need)}
                   {typeof item.waiting.ttlRemaining === 'number' && (
-                    <span className="ml-1 text-(--ui-text-tertiary)">· ⏱ 余 {Math.ceil(item.waiting.ttlRemaining)}s</span>
+                    <span className="ml-1 text-(--ui-text-tertiary)">{da.ttlRemaining(Math.ceil(item.waiting.ttlRemaining))}</span>
                   )}
                 </span>
               </div>
@@ -275,7 +297,7 @@ function DeepWindow({ item }: { item: DeepBgItem }) {
           {item.finalReport && (
             <div className="rounded-md border border-(--ui-purple) bg-(--ui-chat-surface-background) px-2.5 py-2">
               <div className="mb-1 text-[length:var(--conversation-caption-font-size)] font-medium text-(--ui-purple)">
-                📋 最终报告
+                {da.finalReport}
               </div>
               {/* 最终报告走 CompactMarkdown (对齐 web: 表格/latex/代码渲染)。 */}
               <div className="text-[length:var(--conversation-body-font-size)] text-(--ui-text-primary)">
@@ -290,27 +312,29 @@ function DeepWindow({ item }: { item: DeepBgItem }) {
 }
 
 function MonitorList() {
+  const { t } = useI18n()
+  const mo = t.multimodal.monitor
   const monitors = useStore($mmMonitors)
   return (
     <section className="rounded-lg border border-(--ui-stroke-secondary) border-l-2 border-l-(--ui-yellow) bg-(--ui-chat-surface-background) p-2.5 text-xs">
       <div className="mb-1.5 flex items-center gap-1.5 font-medium text-(--ui-yellow)">
-        👁 监控 <span className="text-[10px] text-(--ui-text-tertiary)">{monitors.length}</span>
+        👁 {mo.title} <span className="text-[10px] text-(--ui-text-tertiary)">{monitors.length}</span>
       </div>
       <ul className="flex flex-col gap-1.5">
         {monitors.map(m => {
           // Legacy rows predate trigger_mode and behaved continuously.
-          const modeLabel = m.trigger_mode === 'once' ? '单次' : '持续'
+          const modeLabel = m.trigger_mode === 'once' ? mo.once : mo.continuous
           const done = m.status === 'done' || m.status === 'complete'
           const deleted = m.status === 'deleted'
           const running = !done && !deleted && m.status !== 'interrupted' && m.enabled !== false
           const canToggle = !done && !deleted
-          const stateLabel = done ? '已完成' : running ? '进行中' : '已中断'
+          const stateLabel = done ? mo.completed : running ? mo.inProgress : mo.interrupted
           return (
             <li key={m.monitor_id} className="flex items-center justify-between gap-2">
               {/* ★ 与 web 对齐: 单行 label · 状态 · #id (点分隔)。label 可截断,
                   状态/id shrink-0 不被挤掉。 */}
               <div className="flex min-w-0 items-baseline gap-1">
-                <span className="truncate text-(--ui-text-primary)">{m.label || m.monitor_query || m.brief || '监控'}</span>
+                <span className="truncate text-(--ui-text-primary)">{m.label || m.monitor_query || m.brief || mo.fallbackLabel}</span>
                 <span className="shrink-0 rounded border border-current/20 px-1 text-[9px] text-(--ui-text-tertiary)">{modeLabel}</span>
                 <span className="shrink-0 text-[10px] text-(--ui-text-tertiary)">· {stateLabel}</span>
                 <span className="shrink-0 font-mono text-[10px] text-(--ui-text-tertiary)">· #{m.monitor_id}</span>
@@ -318,7 +342,7 @@ function MonitorList() {
               <Switch
                 checked={running}
                 disabled={!canToggle}
-                title={done ? '单次监控已完成；如需再次等待，请新建监控' : undefined}
+                title={done ? mo.completedOnceHint : undefined}
                 onCheckedChange={v => canToggle && void toggleMonitor(m.monitor_id, v)}
               />
             </li>
@@ -330,15 +354,18 @@ function MonitorList() {
 }
 
 function WatcherList({ watchers }: { watchers: MmWatcher[] }) {
+  const { t } = useI18n()
+  const w = t.multimodal.watcher
   return (
     <section className="rounded-lg border border-(--ui-stroke-secondary) border-l-2 border-l-(--ui-purple) bg-(--ui-chat-surface-background) p-2.5 text-xs">
       <div className="mb-1.5 flex items-center gap-1.5 font-medium text-(--ui-purple)">
-        🔬 深度研究 <span className="text-[10px] text-(--ui-text-tertiary)">{watchers.length}</span>
+        🔬 {w.title} <span className="text-[10px] text-(--ui-text-tertiary)">{watchers.length}</span>
       </div>
       <ul className="flex flex-col gap-1.5">
         {watchers.map(r => {
-          const { canToggle, running, stateLabel } = watcherPresentation(r)
-          const label = r.label || r.task_instruction || '深度研究'
+          const { canToggle, running, state } = watcherPresentation(r)
+          const stateLabel = watcherStateLabel(t, state)
+          const label = r.label || r.task_instruction || w.fallbackLabel
           return (
             <li className="flex items-center justify-between gap-2" key={r.watcher_id}>
               {/* ★ 与 web 对齐: 单行 label · 状态 · #id (点分隔)。 */}
@@ -348,15 +375,15 @@ function WatcherList({ watchers }: { watchers: MmWatcher[] }) {
                 <span className="shrink-0 font-mono text-[10px] text-(--ui-text-tertiary)">· #{r.watcher_id}</span>
               </div>
               <Switch
-                aria-label={`${label}：${stateLabel}`}
+                aria-label={w.switchLabel(label, stateLabel)}
                 checked={running}
                 disabled={!canToggle}
                 onCheckedChange={v => canToggle && void toggleWatcher(r.watcher_id, v)}
                 title={
-                  stateLabel === '已完成'
-                    ? '深度研究已完成；如需再次分析，请新建任务'
-                    : stateLabel === '正在停止'
-                      ? '正在等待当前轮次收尾'
+                  state === 'done'
+                    ? w.completedHint
+                    : state === 'stopping'
+                      ? w.stoppingHint
                       : undefined
                 }
               />
@@ -386,6 +413,8 @@ function fmtClock(ms?: number): string {
  *  visible; older ones fold behind an expander so a chatty monitor doesn't
  *  swallow the right rail. */
 function MonitorAlertsPanel() {
+  const { t } = useI18n()
+  const mo = t.multimodal.monitor
   const alertsByMonitor = useStore($mmMonitorAlerts)
   const monitors = useStore($mmMonitors)
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
@@ -399,14 +428,14 @@ function MonitorAlertsPanel() {
   }
   const monitorLabel = (mid: string): string => {
     const m = monitors.find(x => x.monitor_id === mid)
-    return (m?.label || m?.monitor_query || m?.brief || '监控').slice(0, 40)
+    return (m?.label || m?.monitor_query || m?.brief || mo.fallbackLabel).slice(0, 40)
   }
   const entries = Object.entries(alertsByMonitor).filter(([, list]) => list && list.length > 0)
   if (entries.length === 0) return null
   return (
     <section className="rounded-lg border border-(--ui-stroke-secondary) border-l-2 border-l-(--ui-yellow) bg-(--ui-chat-surface-background) p-2.5 text-xs">
       <div className="mb-1.5 flex items-center gap-1.5 font-medium text-(--ui-yellow)">
-        👁 监控命中 <span className="text-[10px] text-(--ui-text-tertiary)">{entries.length}</span>
+        👁 {mo.alertsTitle} <span className="text-[10px] text-(--ui-text-tertiary)">{entries.length}</span>
       </div>
       <div className="flex flex-col gap-2">
         {entries.map(([mid, list]) => {
@@ -423,7 +452,7 @@ function MonitorAlertsPanel() {
                     onClick={() => toggle(mid)}
                     className="ml-auto shrink-0 rounded px-1.5 py-px hover:text-(--ui-yellow)"
                   >
-                    {isExpanded ? '▾ 收起' : `▸ 展开更多 (${hiddenCount})`}
+                    {isExpanded ? mo.collapse : mo.expandMore(hiddenCount)}
                   </button>
                 )}
               </div>

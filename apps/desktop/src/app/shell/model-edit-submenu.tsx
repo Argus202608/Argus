@@ -128,7 +128,19 @@ export function ModelEditSubmenu({
     }
 
     try {
-      await requestGateway('config.set', { key: 'reasoning', session_id: activeSessionId, value: next })
+      // scope:"session" — apply to THIS session's live agent (effective next
+      // turn, persisted with the session). Without it the gateway writes
+      // agent.reasoning_effort into config.yaml, which (a) never reaches the
+      // already-built agent and (b) is erased on the next start when
+      // sync_project_config copies the project config over HERMES_HOME. The
+      // model's global preset is already recorded above via setModelPreset, so
+      // the config write bought nothing.
+      await requestGateway('config.set', {
+        key: 'reasoning',
+        scope: 'session',
+        session_id: activeSessionId,
+        value: next
+      })
     } catch (err) {
       setCurrentReasoningEffort(effort)
       setModelPreset(provider, model, { effort })

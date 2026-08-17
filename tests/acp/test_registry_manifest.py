@@ -20,8 +20,22 @@ def _manifest() -> dict:
 
 
 def _pyproject_version() -> str:
+    return _pyproject()["version"]
+
+
+def _pyproject_name() -> str:
+    """Distribution name as published to PyPI.
+
+    Read from pyproject rather than hardcoded: the manifest previously pinned
+    the upstream ``hermes-agent`` name, which ``uvx`` cannot install for this
+    fork.
+    """
+    return _pyproject()["name"]
+
+
+def _pyproject() -> dict:
     data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    return data["project"]["version"]
+    return data["project"]
 
 
 def test_agent_json_matches_official_registry_required_fields():
@@ -47,7 +61,7 @@ def test_agent_json_uses_uvx_distribution_without_local_command_fields():
     # Schema allows {package, args, env}; we use {package, args}.
     assert set(uvx) <= {"package", "args", "env"}
     assert "package" in uvx
-    assert uvx["package"] == f"mm-argus[acp]=={data['version']}"
+    assert uvx["package"] == f"{_pyproject_name()}[acp]=={data['version']}"
     assert uvx["args"] == ["hermes-acp"]
     # Old command-shape fields must not leak back in.
     assert "type" not in data["distribution"]
@@ -62,7 +76,7 @@ def test_agent_json_pins_uvx_package_to_pyproject_version():
     """The registry CI rejects ``@latest`` and floating pins; the manifest must
     always reference the exact PyPI version listed in pyproject.toml."""
     assert _manifest()["distribution"]["uvx"]["package"] == (
-        f"mm-argus[acp]=={_pyproject_version()}"
+        f"{_pyproject_name()}[acp]=={_pyproject_version()}"
     )
 
 

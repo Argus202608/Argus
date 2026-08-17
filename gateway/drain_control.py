@@ -86,7 +86,7 @@ def current_instantiation_epoch() -> str:
       | Fly microVM reboot (auto-upd.) | changes | changes    | NEW    | reject |
       | plain ``docker restart``       | same    | changes    | NEW    | reject |
       | s6 respawn of the gateway only | same    | same       | SAME   | honour |
-      | host ``hermes gateway restart``| same    | same(init) | SAME   | honour |
+      | host ``argus gateway restart``| same    | same(init) | SAME   | honour |
 
     The last row is intentional: a host install has no durable-volume drain
     bug, and honouring a drain across a deliberate process restart is the

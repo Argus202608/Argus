@@ -28,7 +28,7 @@ def _resolve_requests_verify() -> bool | str:
     """Resolve SSL verify setting for `requests` calls from env vars.
 
     The `requests` library only honours REQUESTS_CA_BUNDLE / CURL_CA_BUNDLE
-    by default. Hermes also honours HERMES_CA_BUNDLE (its own convention)
+    by default. Hermes also honours ARGUS_CA_BUNDLE (its own convention)
     and SSL_CERT_FILE (used by the stdlib `ssl` module and by httpx), so
     that a single env var can cover both `requests` and `httpx` callsites
     inside the same process.
@@ -36,7 +36,7 @@ def _resolve_requests_verify() -> bool | str:
     Returns either a filesystem path to a CA bundle, or True to defer to
     the requests default (certifi).
     """
-    for env_var in ("HERMES_CA_BUNDLE", "REQUESTS_CA_BUNDLE", "SSL_CERT_FILE"):
+    for env_var in ("ARGUS_CA_BUNDLE", "REQUESTS_CA_BUNDLE", "SSL_CERT_FILE"):
         val = os.getenv(env_var)
         if val and os.path.isfile(val):
             return val
@@ -420,7 +420,14 @@ _URL_TO_PROVIDER: Dict[str, str] = {
     "api.stepfun.ai": "stepfun",
     "api.stepfun.com": "stepfun",
     "api.arcee.ai": "arcee",
-    "api.minimax": "minimax",
+    # ★ Both MiniMax regions, spelled out. This was a single bare
+    #   ``"api.minimax": "minimax"`` entry, and because lookup is a SUBSTRING
+    #   match it also swallowed the China host ``api.minimaxi.com`` — which is a
+    #   different provider (``minimax-cn``) reading a different credential
+    #   (``MINIMAX_CN_API_KEY`` vs ``MINIMAX_API_KEY``). China-region users were
+    #   silently resolved to the international profile.
+    "api.minimax.io": "minimax",
+    "api.minimaxi.com": "minimax-cn",
     "dashscope.aliyuncs.com": "alibaba",
     "dashscope-intl.aliyuncs.com": "alibaba",
     "portal.qwen.ai": "qwen-oauth",
@@ -461,19 +468,35 @@ except Exception:
 
 
 def _infer_provider_from_url(base_url: str) -> Optional[str]:
-    """Infer the models.dev provider name from a base URL.
+    """Infer the provider name from a base URL, by hostname.
 
-    This allows context length resolution via models.dev for custom endpoints
-    like DashScope (Alibaba), Z.AI, Kimi, etc. without requiring the user to
-    explicitly set the provider name in config.
+    Used for context-length resolution AND (via
+    ``providers.resolve_provider_profile``) to recover a vendor's request quirks
+    when its endpoint was hand-configured as ``custom``. So a wrong answer here
+    picks the wrong credentials and the wrong wire format — it is matched
+    strictly.
+
+    ★ Matching used to be ``if url_part in host``, a plain substring test, which
+      is the false-positive class ``utils.base_url_host_matches`` exists to
+      prevent. Two consequences, both real:
+        * ``api.minimaxi.com`` (MiniMax China) matched the entry for
+          ``api.minimax``, resolving to the INTERNATIONAL provider and its
+          ``MINIMAX_API_KEY`` instead of ``MINIMAX_CN_API_KEY``.
+        * lookalike hosts matched outright: ``api.openai.com.evil.example`` read
+          as OpenAI, ``myopenrouter.ai`` as OpenRouter, ``ollama.com.cn`` as
+          Ollama Cloud.
+      Now a key matches only the host itself or a subdomain of it.
+
+    Longest key first, so a more specific host wins regardless of dict order
+    (e.g. ``dashscope-intl.aliyuncs.com`` before ``aliyuncs.com``).
     """
     normalized = _normalize_base_url(base_url)
     if not normalized:
         return None
-    parsed = urlparse(normalized if "://" in normalized else f"https://{normalized}")
-    host = parsed.netloc.lower() or parsed.path.lower()
-    for url_part, provider in _URL_TO_PROVIDER.items():
-        if url_part in host:
+    for url_part, provider in sorted(
+        _URL_TO_PROVIDER.items(), key=lambda kv: len(kv[0]), reverse=True
+    ):
+        if base_url_host_matches(normalized, url_part):
             return provider
     return None
 

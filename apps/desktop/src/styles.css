@@ -1394,13 +1394,9 @@ code {
   height: 0.875rem;
 }
 
-/* Live thinking preview window. Pairs with the ResizeObserver in
-   ThinkingDisclosure that pins scrollTop to the bottom — older lines fade
-   into the top mask while the latest tokens settle in below. */
-.thinking-preview {
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 28%, black 100%);
-  mask-image: linear-gradient(to bottom, transparent 0%, black 28%, black 100%);
-}
+/* (`.thinking-preview` 已删除: 它是旧 ThinkingDisclosure 的"流式期自动展开、底部跟随
+   滚动 + 顶部渐隐遮罩"预览窗样式。现在 reasoning 走过程框里的 ReasoningInlineItem,
+   全程默认折叠、不自动展开, 也就没有需要跟随滚动的预览窗了。) */
 
 @keyframes code-card-stream-enter {
   from {

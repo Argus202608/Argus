@@ -41,7 +41,7 @@ class TestOldFilterBrokenOnWindows:
 
     def test_old_filter_works_on_unix_path(self):
         """Old filter works fine on Unix paths (the original platform)."""
-        unix_path = "/home/user/.hermes/skills/.hub/quarantine/evil-skill/SKILL.md"
+        unix_path = "/home/user/.argus/skills/.hub/quarantine/evil-skill/SKILL.md"
         assert _old_filter_matches(unix_path) is True
 
 
@@ -50,32 +50,32 @@ class TestNewFilterCrossPlatform:
 
     def test_hub_quarantine_filtered(self, tmp_path):
         """A SKILL.md inside .hub/quarantine/ must be filtered out."""
-        p = tmp_path / ".hermes" / "skills" / ".hub" / "quarantine" / "evil" / "SKILL.md"
+        p = tmp_path / ".argus" / "skills" / ".hub" / "quarantine" / "evil" / "SKILL.md"
         assert _new_filter_matches(p) is True
 
     def test_git_dir_filtered(self, tmp_path):
         """A SKILL.md inside .git/ must be filtered out."""
-        p = tmp_path / ".hermes" / "skills" / ".git" / "hooks" / "SKILL.md"
+        p = tmp_path / ".argus" / "skills" / ".git" / "hooks" / "SKILL.md"
         assert _new_filter_matches(p) is True
 
     def test_github_dir_filtered(self, tmp_path):
         """A SKILL.md inside .github/ must be filtered out."""
-        p = tmp_path / ".hermes" / "skills" / ".github" / "workflows" / "SKILL.md"
+        p = tmp_path / ".argus" / "skills" / ".github" / "workflows" / "SKILL.md"
         assert _new_filter_matches(p) is True
 
     def test_normal_skill_not_filtered(self, tmp_path):
         """A regular skill SKILL.md must NOT be filtered out."""
-        p = tmp_path / ".hermes" / "skills" / "my-cool-skill" / "SKILL.md"
+        p = tmp_path / ".argus" / "skills" / "my-cool-skill" / "SKILL.md"
         assert _new_filter_matches(p) is False
 
     def test_nested_skill_not_filtered(self, tmp_path):
         """A deeply nested regular skill must NOT be filtered out."""
-        p = tmp_path / ".hermes" / "skills" / "org" / "deep-skill" / "SKILL.md"
+        p = tmp_path / ".argus" / "skills" / "org" / "deep-skill" / "SKILL.md"
         assert _new_filter_matches(p) is False
 
     def test_dot_prefix_not_false_positive(self, tmp_path):
         """A skill dir starting with dot but not in the filter list passes."""
-        p = tmp_path / ".hermes" / "skills" / ".my-hidden-skill" / "SKILL.md"
+        p = tmp_path / ".argus" / "skills" / ".my-hidden-skill" / "SKILL.md"
         assert _new_filter_matches(p) is False
 
 

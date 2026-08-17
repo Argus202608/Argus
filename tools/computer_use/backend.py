@@ -152,8 +152,16 @@ class ComputerUseBackend(ABC):
         """Return running apps with bundle IDs, PIDs, window counts."""
 
     @abstractmethod
-    def focus_app(self, app: str, raise_window: bool = False) -> ActionResult:
-        """Route input to `app` (by name or bundle ID). Default: focus without raise."""
+    def focus_app(self, app: str, raise_window: bool = True) -> ActionResult:
+        """Route input to `app` (by name or bundle ID). Default: raise the
+        window to the front so subsequent capture/click actually see it.
+
+        The old default was ``False`` (pure input routing, no window raise),
+        but agents consistently forgot to flip it and then wondered why
+        capture returned a blank 0x0 frame — because the target window was
+        minimized / off-screen / behind other windows. ``True`` is the
+        useful-most-of-the-time default; pass ``False`` explicitly for the
+        rare background-input case."""
 
     # ── Native-value mutation ────────────────────────────────────────
     @abstractmethod

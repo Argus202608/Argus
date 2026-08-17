@@ -55,10 +55,10 @@ def _resolve_log_path() -> Path:
     """``$HERMES_HOME/logs/dashboard-auth.log`` with the standard fallback.
 
     Mirrors ``hermes_constants.get_hermes_home`` semantics: env var wins,
-    else ``~/.hermes``. A local copy avoids an import cycle with the
+    else ``~/.argus``. A local copy avoids an import cycle with the
     middleware which lives below ``hermes_cli``.
     """
-    home = os.environ.get("HERMES_HOME") or str(Path.home() / ".hermes")
+    home = os.environ.get("ARGUS_HOME") or str(Path.home() / ".argus")
     return Path(home) / "logs" / "dashboard-auth.log"
 
 

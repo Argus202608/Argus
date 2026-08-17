@@ -840,9 +840,9 @@ class TestPluginRegister:
     @pytest.fixture(autouse=True)
     def clear_env(self, monkeypatch):
         for var in (
-            "HERMES_DASHBOARD_OIDC_ISSUER",
-            "HERMES_DASHBOARD_OIDC_CLIENT_ID",
-            "HERMES_DASHBOARD_OIDC_SCOPES",
+            "ARGUS_DASHBOARD_OIDC_ISSUER",
+            "ARGUS_DASHBOARD_OIDC_CLIENT_ID",
+            "ARGUS_DASHBOARD_OIDC_SCOPES",
         ):
             monkeypatch.delenv(var, raising=False)
 
@@ -861,20 +861,20 @@ class TestPluginRegister:
         ctx = MagicMock()
         oidc_plugin.register(ctx)
         ctx.register_dashboard_auth_provider.assert_not_called()
-        assert "HERMES_DASHBOARD_OIDC_ISSUER" in oidc_plugin.LAST_SKIP_REASON
+        assert "ARGUS_DASHBOARD_OIDC_ISSUER" in oidc_plugin.LAST_SKIP_REASON
         assert "self_hosted" in oidc_plugin.LAST_SKIP_REASON
 
     def test_skips_when_only_issuer_set(self, patch_config, monkeypatch):
         patch_config(None)
-        monkeypatch.setenv("HERMES_DASHBOARD_OIDC_ISSUER", _ISSUER)
+        monkeypatch.setenv("ARGUS_DASHBOARD_OIDC_ISSUER", _ISSUER)
         ctx = MagicMock()
         oidc_plugin.register(ctx)
         ctx.register_dashboard_auth_provider.assert_not_called()
 
     def test_registers_from_env(self, patch_config, monkeypatch):
         patch_config(None)
-        monkeypatch.setenv("HERMES_DASHBOARD_OIDC_ISSUER", _ISSUER)
-        monkeypatch.setenv("HERMES_DASHBOARD_OIDC_CLIENT_ID", _CLIENT_ID)
+        monkeypatch.setenv("ARGUS_DASHBOARD_OIDC_ISSUER", _ISSUER)
+        monkeypatch.setenv("ARGUS_DASHBOARD_OIDC_CLIENT_ID", _CLIENT_ID)
         ctx = MagicMock()
         oidc_plugin.register(ctx)
         ctx.register_dashboard_auth_provider.assert_called_once()
@@ -905,8 +905,8 @@ class TestPluginRegister:
                 }
             }
         )
-        monkeypatch.setenv("HERMES_DASHBOARD_OIDC_ISSUER", _ISSUER)
-        monkeypatch.setenv("HERMES_DASHBOARD_OIDC_CLIENT_ID", _CLIENT_ID)
+        monkeypatch.setenv("ARGUS_DASHBOARD_OIDC_ISSUER", _ISSUER)
+        monkeypatch.setenv("ARGUS_DASHBOARD_OIDC_CLIENT_ID", _CLIENT_ID)
         ctx = MagicMock()
         oidc_plugin.register(ctx)
         registered = ctx.register_dashboard_auth_provider.call_args.args[0]
@@ -917,8 +917,8 @@ class TestPluginRegister:
         patch_config(
             {"self_hosted": {"issuer": _ISSUER, "client_id": _CLIENT_ID}}
         )
-        monkeypatch.setenv("HERMES_DASHBOARD_OIDC_ISSUER", "")
-        monkeypatch.setenv("HERMES_DASHBOARD_OIDC_CLIENT_ID", "")
+        monkeypatch.setenv("ARGUS_DASHBOARD_OIDC_ISSUER", "")
+        monkeypatch.setenv("ARGUS_DASHBOARD_OIDC_CLIENT_ID", "")
         ctx = MagicMock()
         oidc_plugin.register(ctx)
         ctx.register_dashboard_auth_provider.assert_called_once()
@@ -961,9 +961,9 @@ class TestPluginRegister:
     def test_non_https_issuer_skips_with_reason(self, patch_config, monkeypatch):
         patch_config(None)
         monkeypatch.setenv(
-            "HERMES_DASHBOARD_OIDC_ISSUER", "http://insecure.example"
+            "ARGUS_DASHBOARD_OIDC_ISSUER", "http://insecure.example"
         )
-        monkeypatch.setenv("HERMES_DASHBOARD_OIDC_CLIENT_ID", _CLIENT_ID)
+        monkeypatch.setenv("ARGUS_DASHBOARD_OIDC_CLIENT_ID", _CLIENT_ID)
         ctx = MagicMock()
         oidc_plugin.register(ctx)
         ctx.register_dashboard_auth_provider.assert_not_called()

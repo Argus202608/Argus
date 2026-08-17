@@ -59,8 +59,8 @@ export type PetOverlayControl =
 
 // Persisted across restarts: was the pet popped out, and where on the desktop
 // did the user leave it. Keyed v1; bump if the bounds shape ever changes.
-const OVERLAY_ACTIVE_KEY = 'hermes.desktop.pet-overlay-active.v1'
-const OVERLAY_BOUNDS_KEY = 'hermes.desktop.pet-overlay-bounds.v1'
+const OVERLAY_ACTIVE_KEY = 'argus.desktop.pet-overlay-active.v1'
+const OVERLAY_BOUNDS_KEY = 'argus.desktop.pet-overlay-bounds.v1'
 
 export const $petOverlayActive = atom(storedBoolean(OVERLAY_ACTIVE_KEY, false))
 

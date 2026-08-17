@@ -16,13 +16,14 @@ export interface EphemeralControlFields {
   ephemeral?: unknown;
 }
 
+export type MonitorStatusToken = "active" | "done" | "interrupted";
+
 export interface MonitorPresentation {
   active: boolean;
   done: boolean;
   canToggle: boolean;
   mode: MonitorTriggerMode;
-  modeLabel: "单次" | "持续";
-  statusLabel: "进行中" | "已完成" | "已中断";
+  statusToken: MonitorStatusToken;
 }
 
 /**
@@ -42,8 +43,7 @@ export function monitorPresentation(monitor: MonitorRegistryItem): MonitorPresen
     done,
     canToggle: !done && !deleted,
     mode,
-    modeLabel: mode === "once" ? "单次" : "持续",
-    statusLabel: done ? "已完成" : active ? "进行中" : "已中断",
+    statusToken: done ? "done" : active ? "active" : "interrupted",
   };
 }
 

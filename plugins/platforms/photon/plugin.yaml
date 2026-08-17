@@ -13,9 +13,9 @@ description: >
 
   The plugin ships with a `hermes photon` CLI for the one-time device
   login + project + user setup. Runtime credentials are written to
-  ``~/.hermes/.env`` (``PHOTON_PROJECT_ID`` = the Spectrum project id,
+  ``~/.argus/.env`` (``PHOTON_PROJECT_ID`` = the Spectrum project id,
   ``PHOTON_PROJECT_SECRET``) like every other channel, with management
-  metadata (device token, dashboard project id) in ``~/.hermes/auth.json``.
+  metadata (device token, dashboard project id) in ``~/.argus/auth.json``.
   Photon's free shared-line model lets users get started without a paid plan.
 author: NousResearch
 requires_env:

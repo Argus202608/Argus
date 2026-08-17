@@ -33,8 +33,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 # Force-isolate the test environment BEFORE any hermes imports.
-ORIGINAL_HOME = os.environ.get("HERMES_HOME")
-ORIGINAL_AUTH = Path.home() / ".hermes" / "auth.json"
+ORIGINAL_HOME = os.environ.get("ARGUS_HOME")
+ORIGINAL_AUTH = Path.home() / ".argus" / "auth.json"
 
 _THIS_DIR = Path(__file__).resolve().parent
 _WORKTREE_ROOT = _THIS_DIR.parent
@@ -249,13 +249,13 @@ SCENARIOS: List[Dict[str, Any]] = [
 
 
 def setup_isolated_home(enabled: bool) -> Path:
-    """Create a fresh ~/.hermes/ for one test, copying minimal credentials.
+    """Create a fresh ~/.argus/ for one test, copying minimal credentials.
 
-    Also reads OPENROUTER_API_KEY from the user's real ``~/.hermes/.env`` so
+    Also reads OPENROUTER_API_KEY from the user's real ``~/.argus/.env`` so
     the agent can authenticate against OpenRouter inside the isolated home.
     """
     home_dir = Path(tempfile.mkdtemp(prefix="hermes_ts_live_"))
-    hermes_home = home_dir / ".hermes"
+    hermes_home = home_dir / ".argus"
     hermes_home.mkdir(parents=True)
 
     if ORIGINAL_AUTH.exists():
@@ -263,7 +263,7 @@ def setup_isolated_home(enabled: bool) -> Path:
 
     # Copy .env so OPENROUTER_API_KEY (or others) are visible to the agent
     # running inside the isolated home.
-    real_env_file = Path.home() / ".hermes" / ".env"
+    real_env_file = Path.home() / ".argus" / ".env"
     if real_env_file.exists():
         shutil.copy(real_env_file, hermes_home / ".env")
         # Also load the real user env into this process so the provider
@@ -273,7 +273,7 @@ def setup_isolated_home(enabled: bool) -> Path:
         # this module, which both avoids a hand-rolled parser bug and keeps
         # static analysis from tainting the transcript records with the key.
         from hermes_cli.env_loader import load_hermes_dotenv
-        load_hermes_dotenv(hermes_home=str(Path.home() / ".hermes"))
+        load_hermes_dotenv(hermes_home=str(Path.home() / ".argus"))
 
     cfg = {
         "model": {
@@ -353,7 +353,7 @@ def run_one_scenario(scenario: Dict[str, Any], enabled: bool, out_dir: Path) -> 
     """Run one (scenario, enabled) combination. Returns the recorded transcript."""
     reset_module_state()
     home = setup_isolated_home(enabled=enabled)
-    os.environ["HERMES_HOME"] = str(home)
+    os.environ["ARGUS_HOME"] = str(home)
 
     # Pre-create the test file used by scenario D.
     Path("/tmp/livetest").mkdir(exist_ok=True)
@@ -540,9 +540,9 @@ def main():
 
     # Restore original HERMES_HOME
     if ORIGINAL_HOME is not None:
-        os.environ["HERMES_HOME"] = ORIGINAL_HOME
+        os.environ["ARGUS_HOME"] = ORIGINAL_HOME
     else:
-        os.environ.pop("HERMES_HOME", None)
+        os.environ.pop("ARGUS_HOME", None)
 
 
 if __name__ == "__main__":

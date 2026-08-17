@@ -51,7 +51,7 @@ class TestNonInteractiveSetup:
         mock_run_setup.assert_called_once_with(args)
 
     def test_cmd_setup_defers_no_tty_handling_to_setup_wizard(self):
-        """Bare `hermes setup` should reach setup.py, which prints headless guidance."""
+        """Bare `argus setup` should reach setup.py, which prints headless guidance."""
         from hermes_cli.main import cmd_setup
 
         args = _make_setup_args(non_interactive=False)
@@ -74,14 +74,14 @@ class TestNonInteractiveSetup:
         with (
             patch("hermes_cli.setup.ensure_hermes_home"),
             patch("hermes_cli.setup.load_config", return_value={}),
-            patch("hermes_cli.setup.get_hermes_home", return_value="/tmp/.hermes"),
+            patch("hermes_cli.setup.get_hermes_home", return_value="/tmp/.argus"),
             patch("hermes_cli.auth.get_active_provider", side_effect=AssertionError("wizard continued")),
             patch("builtins.input", side_effect=AssertionError("input should not be called")),
         ):
             run_setup_wizard(args)
 
         out = capsys.readouterr().out
-        assert "hermes config set model.provider custom" in out
+        assert "argus config set model.provider custom" in out
 
     def test_no_tty_skips_wizard(self, capsys):
         """When stdin has no TTY, the setup wizard should print guidance and return."""
@@ -92,7 +92,7 @@ class TestNonInteractiveSetup:
         with (
             patch("hermes_cli.setup.ensure_hermes_home"),
             patch("hermes_cli.setup.load_config", return_value={}),
-            patch("hermes_cli.setup.get_hermes_home", return_value="/tmp/.hermes"),
+            patch("hermes_cli.setup.get_hermes_home", return_value="/tmp/.argus"),
             patch("hermes_cli.auth.get_active_provider", side_effect=AssertionError("wizard continued")),
             patch("sys.stdin") as mock_stdin,
             patch("builtins.input", side_effect=AssertionError("input should not be called")),
@@ -101,13 +101,13 @@ class TestNonInteractiveSetup:
             run_setup_wizard(args)
 
         out = capsys.readouterr().out
-        assert "hermes config set model.provider custom" in out
+        assert "argus config set model.provider custom" in out
 
     def test_reset_flag_rewrites_config_before_noninteractive_exit(self, tmp_path, monkeypatch, capsys):
         """--reset should rewrite config.yaml even when the wizard cannot run interactively."""
         from hermes_cli.setup import run_setup_wizard
 
-        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        monkeypatch.setenv("ARGUS_HOME", str(tmp_path))
         cfg = load_config()
         cfg["model"] = {"provider": "custom", "base_url": "http://localhost:8080/v1", "default": "llama3"}
         cfg["agent"]["max_turns"] = 12
@@ -142,10 +142,10 @@ class TestNonInteractiveSetup:
         assert exc.value.code == 1
         mock_setup.assert_not_called()
         out = capsys.readouterr().out
-        assert "hermes config set model.provider custom" in out
+        assert "argus config set model.provider custom" in out
 
     def test_main_accepts_tts_setup_section(self, monkeypatch):
-        """`hermes setup tts` should parse and dispatch like other setup sections."""
+        """`argus setup tts` should parse and dispatch like other setup sections."""
         from hermes_cli import main as main_mod
 
         received = {}

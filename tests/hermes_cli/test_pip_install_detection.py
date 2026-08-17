@@ -21,7 +21,7 @@ def test_git_install_detected_when_git_dir_exists(tmp_path):
 
 
 def test_managed_install_takes_precedence(tmp_path):
-    """When HERMES_MANAGED is set, that takes precedence over git detection."""
+    """When ARGUS_MANAGED is set, that takes precedence over git detection."""
     (tmp_path / ".git").mkdir()
     with patch("hermes_cli.config.get_managed_system", return_value="NixOS"), \
          patch("hermes_cli.config.get_hermes_home", return_value=tmp_path):
@@ -53,7 +53,7 @@ def test_code_scoped_stamp_wins_over_home_stamp(tmp_path):
 
     Models a host git install whose $HERMES_HOME is shared with (and stamped
     'docker' by) a co-located container. The code-scoped stamp must win so the
-    host install is correctly identified as 'git' and 'hermes update' works.
+    host install is correctly identified as 'git' and 'argus update' works.
     """
     code = tmp_path / "code"
     home = tmp_path / "home"
@@ -147,7 +147,7 @@ def test_container_without_stamp_is_not_docker(tmp_path):
     ``test_stamp_file_takes_precedence``; the published image -> ``docker``),
     so neither hits this path. An unsupported manual install dropped into a
     container has no stamp and was wrongly classified as the published Docker
-    image, so ``hermes update`` refused to run. With a ``.git`` checkout it
+    image, so ``argus update`` refused to run. With a ``.git`` checkout it
     must resolve to ``git``.
     """
     (tmp_path / ".git").mkdir()
@@ -178,7 +178,7 @@ def test_banner_warns_on_pip_install(tmp_path):
     from rich.console import Console
     from hermes_cli import banner
 
-    hh = tmp_path / ".hermes"
+    hh = tmp_path / ".argus"
     hh.mkdir()
     (hh / ".install_method").write_text("pip\n")
 
@@ -204,7 +204,7 @@ def test_banner_no_pip_warning_on_git_install(tmp_path):
     from rich.console import Console
     from hermes_cli import banner
 
-    hh = tmp_path / ".hermes"
+    hh = tmp_path / ".argus"
     hh.mkdir()
     (hh / ".install_method").write_text("git\n")
 

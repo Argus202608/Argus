@@ -1,8 +1,8 @@
-"""Regression test: `hermes dashboard --tui` must not hard-crash.
+"""Regression test: `argus dashboard --tui` must not hard-crash.
 
 Older Hermes desktop app shells (<= 0.15.x) spawn the backend as::
 
-    hermes dashboard --no-open --tui --host 127.0.0.1 --port <PORT>
+    argus dashboard --no-open --tui --host 127.0.0.1 --port <PORT>
 
 The ``--tui`` flag was removed from the ``dashboard`` subcommand in cae6b5486
 (embedded chat is always on now). When a user's CLI updates past that commit

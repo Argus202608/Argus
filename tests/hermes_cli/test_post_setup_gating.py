@@ -20,7 +20,7 @@ class TestPostSetupGate:
         provider-setup flow runs and triggers `_run_post_setup`."""
         from hermes_cli import tools_config
 
-        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        monkeypatch.setenv("ARGUS_HOME", str(tmp_path))
         monkeypatch.setattr(tools_config.shutil, "which", lambda name: None)
 
         assert tools_config._toolset_needs_configuration_prompt(
@@ -32,7 +32,7 @@ class TestPostSetupGate:
         so a re-save through `hermes tools` doesn't re-prompt the user."""
         from hermes_cli import tools_config
 
-        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        monkeypatch.setenv("ARGUS_HOME", str(tmp_path))
         monkeypatch.setattr(
             tools_config.shutil,
             "which",

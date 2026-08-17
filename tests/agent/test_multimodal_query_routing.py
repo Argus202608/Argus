@@ -28,9 +28,9 @@ def _isolated_hermes_home(monkeypatch, tmp_path):
     so logging/config setup is exercised without reading or writing the user's
     active profile.
     """
-    hermes_home = tmp_path / ".hermes"
+    hermes_home = tmp_path / ".argus"
     hermes_home.mkdir()
-    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+    monkeypatch.setenv("ARGUS_HOME", str(hermes_home))
     # Logging is unrelated to request routing and installs process-global file
     # handlers. Avoid leaking a handler that points at this per-test temporary
     # directory while keeping every schema/config/request-building import real.

@@ -70,6 +70,7 @@ vi.mock('./multimodal-capture', () => ({
 }))
 vi.mock('./multimodal-voice', () => ({
   $mmMicState: micState,
+  cancelManualMicOnDisconnect: vi.fn(),
   hasMicCaptureIntent: () => voice.intent || micState.get() !== 'idle',
   onAsrBuffer: vi.fn(),
   onAsrFinal: vi.fn(),

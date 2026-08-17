@@ -28,12 +28,12 @@ def test_default_spawn_pins_assignee_profile_cli_toolsets(monkeypatch, tmp_path)
     """Manual profile assignment should keep that profile's CLI tools.
 
     Regression guard for dispatcher-spawned workers that boot with
-    HERMES_KANBAN_TASK: the worker must not collapse to only kanban lifecycle
+    ARGUS_KANBAN_TASK: the worker must not collapse to only kanban lifecycle
     tools when the assigned profile's top-level ``toolsets`` is the default
     composite. The spawned CLI gets an explicit --toolsets pin resolved from
     platform_toolsets.cli; model_tools appends task-scoped kanban tools later.
     """
-    root = tmp_path / ".hermes"
+    root = tmp_path / ".argus"
     profile = root / "profiles" / "elias"
     profile.mkdir(parents=True)
     profile.joinpath("config.yaml").write_text(
@@ -57,7 +57,7 @@ agent:
         encoding="utf-8",
     )
     root.joinpath("config.yaml").write_text("toolsets:\n  - kanban\n", encoding="utf-8")
-    monkeypatch.setenv("HERMES_HOME", str(root))
+    monkeypatch.setenv("ARGUS_HOME", str(root))
 
     from hermes_cli import kanban_db as kb
 
@@ -81,8 +81,8 @@ agent:
     pid = kb._default_spawn(_make_task(kb, assignee="elias"), str(workspace))
 
     assert pid == 4242
-    assert captured["env"]["HERMES_HOME"] == str(profile)
-    assert captured["env"]["HERMES_KANBAN_TASK"] == "t_spawn_tools"
+    assert captured["env"]["ARGUS_HOME"] == str(profile)
+    assert captured["env"]["ARGUS_KANBAN_TASK"] == "t_spawn_tools"
     assert "--toolsets" in captured["cmd"]
     pinned = captured["cmd"][captured["cmd"].index("--toolsets") + 1].split(",")
     for required in ("terminal", "web", "file", "skills", "code_execution", "delegation"):
@@ -90,7 +90,7 @@ agent:
 
 
 def test_resolve_worker_cli_toolsets_uses_profile_home_not_parent_config(monkeypatch, tmp_path):
-    root = tmp_path / ".hermes"
+    root = tmp_path / ".argus"
     profile = root / "profiles" / "elias"
     profile.mkdir(parents=True)
     root.joinpath("config.yaml").write_text("platform_toolsets:\n  cli:\n    - kanban\n", encoding="utf-8")
@@ -105,7 +105,7 @@ toolsets:
 """.lstrip(),
         encoding="utf-8",
     )
-    monkeypatch.setenv("HERMES_HOME", str(root))
+    monkeypatch.setenv("ARGUS_HOME", str(root))
 
     from hermes_cli import kanban_db as kb
 

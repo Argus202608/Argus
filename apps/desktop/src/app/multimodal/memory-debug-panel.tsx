@@ -4,6 +4,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
+import { useI18n } from '@/i18n'
 import {
   getMultimodalMemoryDebugFrame,
   getMultimodalMemoryDebugSession,
@@ -263,6 +264,7 @@ function extractBox(block: unknown): null | number[] {
 }
 
 const OcrOverlayImage = memo(function OcrOverlayImage({ blocks, imageB64 }: { blocks: unknown[]; imageB64: string }) {
+  const { t } = useI18n()
   const [size, setSize] = useState<null | { height: number; width: number }>(null)
 
   const boxes = useMemo(() => {
@@ -290,7 +292,7 @@ const OcrOverlayImage = memo(function OcrOverlayImage({ blocks, imageB64 }: { bl
   if (!imageB64) {
     return (
       <div className="grid aspect-video place-items-center rounded border border-(--ui-stroke-secondary) bg-black text-xs text-(--ui-text-tertiary)">
-        没有帧图像
+        {t.multimodal.memoryDebug.noFrameImage}
       </div>
     )
   }
@@ -373,8 +375,9 @@ function EventCard({
   level: 'macro' | 'micro' | 'super'
   onFrame: (frameId: string) => void
 }) {
+  const { t } = useI18n()
   const title = event.label || event.action || event.id
-  const description = event.summary || event.description || '(暂无描述)'
+  const description = event.summary || event.description || t.multimodal.memoryDebug.noDescription
   const frames = event.frame_ids || []
   const entities = event.entity_names || event.key_entities || []
 
@@ -483,6 +486,7 @@ function TrajectoryEntryCard({ entry }: { entry: MmTrajectoryEntry }) {
 }
 
 function WorkerTrajectory({ group }: { group: MmTrajectoryWorkerGroup }) {
+  const { t } = useI18n()
   const [showAll, setShowAll] = useState(false)
   const newestFirst = [...group.entries].reverse()
   const visibleEntries = showAll ? newestFirst : newestFirst.slice(0, TRAJECTORY_WORKER_PREVIEW)
@@ -500,7 +504,7 @@ function WorkerTrajectory({ group }: { group: MmTrajectoryWorkerGroup }) {
       ))}
       {group.entries.length > TRAJECTORY_WORKER_PREVIEW && (
         <Button onClick={() => setShowAll(value => !value)} size="xs" variant="ghost">
-          {showAll ? '收起较早事件' : `显示全部 ${group.entries.length} 条`}
+          {showAll ? t.multimodal.memoryDebug.showEarlier : t.multimodal.memoryDebug.showAllEvents(group.entries.length)}
         </Button>
       )}
     </section>
@@ -544,6 +548,7 @@ function TrajectoryQuestion({
 }
 
 function BackgroundTrajectory({ groups }: { groups: MmTrajectoryWorkerGroup[] }) {
+  const { t } = useI18n()
   const [expanded, setExpanded] = useState(false)
 
   return (
@@ -553,7 +558,7 @@ function BackgroundTrajectory({ groups }: { groups: MmTrajectoryWorkerGroup[] })
       open={expanded}
     >
       <summary className="cursor-pointer list-none text-xs">
-        <span className="font-semibold text-amber-300">持续后台 / 未关联事件</span>
+        <span className="font-semibold text-amber-300">{t.multimodal.memoryDebug.backgroundTrajectory}</span>
         <span className="ml-2 text-(--ui-text-tertiary)">
           {groups.length} workers · {groups.reduce((total, group) => total + group.entries.length, 0)} events
         </span>
@@ -586,6 +591,8 @@ function MemoryDebugPanelScope({
   onOpenChange,
   open
 }: MemoryDebugPanelScopeProps) {
+  const { t } = useI18n()
+  const md = t.multimodal.memoryDebug
   const [tab, setTab] = useState<MemoryDebugTab>('memory')
   const [sessions, setSessions] = useState<MmMemoryDebugSessionSummary[]>([])
   const [selectedDb, setSelectedDb] = useState('')
@@ -960,13 +967,13 @@ function MemoryDebugPanelScope({
           <div className="flex items-center gap-2">
             <Bug className="size-4 text-emerald-400" />
             <div className="min-w-0 flex-1">
-              <SheetTitle>多模态 Memory Debug</SheetTitle>
+              <SheetTitle>{md.panelTitle}</SheetTitle>
               <SheetDescription className="truncate">
-                证据帧 · OCR · 实体 · 事件 · 演化 · Worker trajectory
+                {md.panelSubtitle}
               </SheetDescription>
             </div>
             <Button
-              aria-label="刷新 Memory Debug"
+              aria-label={md.refreshLabel}
               disabled={loading}
               onClick={refresh}
               size="icon-xs"
@@ -979,14 +986,14 @@ function MemoryDebugPanelScope({
 
         <div className="flex flex-wrap items-center gap-2 border-b border-(--ui-stroke-secondary) p-3">
           <select
-            aria-label="Memory 数据库"
+            aria-label={md.dbSelectLabel}
             className="min-w-0 flex-1 rounded border border-(--ui-stroke-secondary) bg-(--ui-bg-elevated) px-2 py-1.5 text-xs"
             onChange={event => {
               selectDatabase(event.target.value, true)
             }}
             value={selectedDb}
           >
-            <option value="">当前会话暂无 Memory 数据库</option>
+            <option value="">{md.noDbOption}</option>
             {sessions.map(session => (
               <option key={session.name} value={session.name}>
                 {session.name} · frames {session.counts.memory_frames || 0} · OCR {session.counts.screen_texts || 0}
@@ -996,19 +1003,19 @@ function MemoryDebugPanelScope({
           {(['memory', 'frame', 'search', 'debug'] as MemoryDebugTab[]).map(value => (
             <Button key={value} onClick={() => setTab(value)} size="xs" variant={tab === value ? 'secondary' : 'ghost'}>
               {value === 'memory'
-                ? '本次记忆'
+                ? md.tabMemory
                 : value === 'frame'
-                  ? '帧详情'
+                  ? md.tabFrame
                   : value === 'search'
-                    ? '搜索'
-                    : '高级 Debug'}
+                    ? md.tabSearch
+                    : md.tabDebug}
             </Button>
           ))}
         </div>
 
         {isOtherSession && (
           <div className="border-b border-amber-400/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-500">
-            当前正在手动查看其他会话的 Memory；不会写入或影响当前对话。
+            {md.otherSessionNotice}
           </div>
         )}
         {error && (
@@ -1020,7 +1027,7 @@ function MemoryDebugPanelScope({
         <div className="min-h-0 flex-1 overflow-y-auto p-3" data-testid="memory-debug-content">
           {!selectedDb && tab !== 'search' && tab !== 'debug' && (
             <EmptyState>
-              本会话尚未写入 Memory。开启摄像头或屏幕共享并产生观察后再刷新；也可以在上方手动选择历史数据库。
+              {md.noMemoryYet}
             </EmptyState>
           )}
 
@@ -1028,14 +1035,14 @@ function MemoryDebugPanelScope({
             <div className="space-y-5">
               <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
                 {[
-                  ['记忆帧', overview?.timeline.length || 0, counts.memory_frames || 0],
-                  ['实体', entities.length, counts.entities || 0],
+                  [md.statFrames, overview?.timeline.length || 0, counts.memory_frames || 0],
+                  [md.statEntities, entities.length, counts.entities || 0],
                   [
-                    '事件',
+                    md.statEvents,
                     eventCount,
                     (counts.micro_events || 0) + (counts.macro_events || 0) + (counts.super_events || 0)
                   ],
-                  ['演化记录', evolutionCount, (counts.entity_states || 0) + (counts.revision_log || 0)]
+                  [md.statEvolution, evolutionCount, (counts.entity_states || 0) + (counts.revision_log || 0)]
                 ].map(([label, shown, total]) => (
                   <div
                     className="rounded border border-(--ui-stroke-secondary) bg-(--ui-bg-elevated) p-3"
@@ -1044,7 +1051,7 @@ function MemoryDebugPanelScope({
                     <div className="text-[0.6875rem] text-(--ui-text-tertiary)">{label}</div>
                     <div className="mt-1 font-mono text-xl text-emerald-400">{shown}</div>
                     {Number(total) > Number(shown) && (
-                      <div className="text-[0.625rem] text-(--ui-text-tertiary)">库内共 {total}</div>
+                      <div className="text-[0.625rem] text-(--ui-text-tertiary)">{md.inDbTotal(total)}</div>
                     )}
                   </div>
                 ))}
@@ -1053,16 +1060,16 @@ function MemoryDebugPanelScope({
               <section className="space-y-2">
                 <div className="flex items-center justify-between gap-2">
                   <div>
-                    <h3 className="text-sm font-semibold">1. 本次留下了哪些帧</h3>
-                    <p className="text-xs text-(--ui-text-tertiary)">仅显示真正进入 memory_frames 的证据帧。</p>
+                    <h3 className="text-sm font-semibold">{md.section1Title}</h3>
+                    <p className="text-xs text-(--ui-text-tertiary)">{md.section1Hint}</p>
                   </div>
                   <Button onClick={() => setTab('frame')} size="xs" variant="outline">
                     <FileImage />
-                    查看全部与 OCR
+                    {md.viewAllAndOcr}
                   </Button>
                 </div>
                 {(overview?.timeline.length || 0) === 0 ? (
-                  <EmptyState>本次还没有写入记忆帧。</EmptyState>
+                  <EmptyState>{md.noFramesYet}</EmptyState>
                 ) : (
                   <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
                     {(overview?.timeline || [])
@@ -1101,11 +1108,11 @@ function MemoryDebugPanelScope({
 
               <section className="space-y-2">
                 <div>
-                  <h3 className="text-sm font-semibold">2. 本次有哪些实体</h3>
-                  <p className="text-xs text-(--ui-text-tertiary)">人物、物体、地点及其属性、别名和证据帧。</p>
+                  <h3 className="text-sm font-semibold">{md.section2Title}</h3>
+                  <p className="text-xs text-(--ui-text-tertiary)">{md.section2Hint}</p>
                 </div>
                 {entities.length === 0 ? (
-                  <EmptyState>尚未抽取出实体。</EmptyState>
+                  <EmptyState>{md.noEntities}</EmptyState>
                 ) : (
                   <div className="grid grid-cols-1 gap-2 lg:grid-cols-2">
                     {entities.map(entity => (
@@ -1119,10 +1126,10 @@ function MemoryDebugPanelScope({
                             {entity.type}
                           </span>
                           <span className="ml-2 font-semibold">{entity.name}</span>
-                          <span className="ml-2 text-(--ui-text-tertiary)">出现 {entity.seen_count} 次</span>
+                          <span className="ml-2 text-(--ui-text-tertiary)">{md.seenCount(entity.seen_count)}</span>
                         </summary>
                         {entity.aliases.length > 0 && (
-                          <div className="mt-2 text-(--ui-text-tertiary)">别名：{entity.aliases.join(' / ')}</div>
+                          <div className="mt-2 text-(--ui-text-tertiary)">{md.aliases(entity.aliases.join(' / '))}</div>
                         )}
                         <div className="mt-2 flex flex-wrap gap-1">
                           {Object.entries(entity.attributes || {}).map(([key, value]) => (
@@ -1153,13 +1160,13 @@ function MemoryDebugPanelScope({
 
               <section className="space-y-2">
                 <div>
-                  <h3 className="text-sm font-semibold">3. 本次发生了哪些事件</h3>
+                  <h3 className="text-sm font-semibold">{md.section3Title}</h3>
                   <p className="text-xs text-(--ui-text-tertiary)">
-                    micro 是局部观察，macro 是阶段总结，super 是跨阶段叙事。
+                    {md.section3Hint}
                   </p>
                 </div>
                 {eventCount === 0 ? (
-                  <EmptyState>尚未形成事件。</EmptyState>
+                  <EmptyState>{md.noEvents}</EmptyState>
                 ) : (
                   <div className="space-y-2">
                     {superEvents.map(event => (
@@ -1177,11 +1184,11 @@ function MemoryDebugPanelScope({
 
               <section className="space-y-2">
                 <div>
-                  <h3 className="text-sm font-semibold">4. 实体和事件如何演化</h3>
-                  <p className="text-xs text-(--ui-text-tertiary)">按时间展示状态变化和 Reviewer 修订。</p>
+                  <h3 className="text-sm font-semibold">{md.section4Title}</h3>
+                  <p className="text-xs text-(--ui-text-tertiary)">{md.section4Hint}</p>
                 </div>
                 {evolutionCount === 0 ? (
-                  <EmptyState>尚无演化或修订记录。</EmptyState>
+                  <EmptyState>{md.noEvolution}</EmptyState>
                 ) : (
                   <div className="space-y-2">
                     {entityStates.map(state => (
@@ -1213,7 +1220,7 @@ function MemoryDebugPanelScope({
                           <span className="ml-2 font-semibold">Reviewer: {revision.op}</span>
                         </summary>
                         <div className="mt-2 whitespace-pre-wrap">
-                          {revision.reason || revision.error || '(无说明)'}
+                          {revision.reason || revision.error || md.noExplanation}
                         </div>
                         <pre className="mt-2 max-h-48 overflow-auto rounded bg-black/20 p-2 text-[0.6875rem]">
                           {debugJson(revision.payload)}
@@ -1320,7 +1327,7 @@ function MemoryDebugPanelScope({
             <div className="space-y-3">
               <div className="flex gap-2">
                 <Input
-                  aria-label="搜索 Memory"
+                  aria-label={md.searchLabel}
                   className="min-w-0 flex-1"
                   onChange={event => setSearchQuery(event.target.value)}
                   onKeyDown={event => {
@@ -1328,7 +1335,7 @@ function MemoryDebugPanelScope({
                       void runSearch()
                     }
                   }}
-                  placeholder="搜索 OCR、表格、事件和语音"
+                  placeholder={md.searchPlaceholder}
                   value={searchQuery}
                 />
                 <select
@@ -1336,9 +1343,9 @@ function MemoryDebugPanelScope({
                   onChange={event => setSearchScope(event.target.value as SearchScope)}
                   value={searchScope}
                 >
-                  <option value="all">全部会话</option>
-                  <option value="today">今天</option>
-                  <option value="latest">所选数据库</option>
+                  <option value="all">{md.scopeAll}</option>
+                  <option value="today">{md.scopeToday}</option>
+                  <option value="latest">{md.scopeLatest}</option>
                 </select>
                 <Button
                   disabled={
@@ -1349,12 +1356,12 @@ function MemoryDebugPanelScope({
                   size="sm"
                 >
                   <Search />
-                  搜索
+                  {md.searchButton}
                 </Button>
               </div>
               <div className="space-y-2">
                 {searchResults.length === 0 ? (
-                  <EmptyState>输入关键词并点击搜索；搜索不会自动轮询。</EmptyState>
+                  <EmptyState>{md.searchEmpty}</EmptyState>
                 ) : (
                   searchResults.map((result, index) => (
                     <details
@@ -1395,7 +1402,7 @@ function MemoryDebugPanelScope({
               <section className="space-y-2">
                 <div className="sticky top-0 z-10 flex flex-wrap items-center gap-2 rounded border border-(--ui-stroke-secondary) bg-(--ui-sidebar-surface-background)/95 p-2 text-xs backdrop-blur">
                   <Activity className="size-3.5 text-cyan-400" />
-                  <span className="font-semibold">Worker trajectory · 按问题分组</span>
+                  <span className="font-semibold">{md.trajectoryGroupTitle}</span>
                   <span className="text-(--ui-text-tertiary)">
                     {visibleQuestions.length} questions · {visibleTrajectoryCount} events
                   </span>
@@ -1413,16 +1420,14 @@ function MemoryDebugPanelScope({
                   </select>
                 </div>
                 <p className="text-[0.6875rem] text-(--ui-text-tertiary)">
-                  只按明确的 parent/client/task 映射归属问题；没有可靠关联的持续 Memory/OCR/Reviewer
-                  事件不会按时间硬挂到最近问题。
+                  {md.trajectoryGroupHint}
                 </p>
                 {isOtherSession ? (
                   <EmptyState>
-                    历史 Memory 数据库没有持久化 live trajectory；为避免混淆，这里不会叠加当前会话的 Worker
-                    轨迹。切回当前会话数据库即可查看实时 Debug。
+                    {md.trajectoryOtherSession}
                   </EmptyState>
                 ) : visibleTrajectoryCount === 0 ? (
-                  <EmptyState>暂无 trajectory。开始采集、提问、Recall 或 Monitor 后会实时出现。</EmptyState>
+                  <EmptyState>{md.trajectoryEmpty}</EmptyState>
                 ) : (
                   <div className="space-y-2">
                     {[...visibleQuestions].reverse().map((question, index) => (
@@ -1469,7 +1474,7 @@ function MemoryDebugPanelScope({
                   </div>
                   <div className="space-y-2">
                     {(trace?.messages || []).length === 0 ? (
-                      <EmptyState>没有持久化的 Recall 消息。</EmptyState>
+                      <EmptyState>{md.noRecallMessages}</EmptyState>
                     ) : (
                       trace!.messages.map((message, index) => (
                         <details

@@ -33,7 +33,7 @@ def test_override_propagates_to_mcp_loop(tmp_path, monkeypatch, mcp_loop):
     profile_home = tmp_path / "profile-home"
     process_home.mkdir()
     profile_home.mkdir()
-    monkeypatch.setenv("HERMES_HOME", str(process_home))
+    monkeypatch.setenv("ARGUS_HOME", str(process_home))
 
     async def read_home():
         return str(get_hermes_home())
@@ -69,7 +69,7 @@ def test_oauth_token_paths_follow_override(tmp_path, monkeypatch, mcp_loop):
     profile_home = tmp_path / "profile-home"
     process_home.mkdir()
     profile_home.mkdir()
-    monkeypatch.setenv("HERMES_HOME", str(process_home))
+    monkeypatch.setenv("ARGUS_HOME", str(process_home))
 
     async def token_path():
         from tools.mcp_oauth import HermesTokenStorage
@@ -101,7 +101,7 @@ def test_concurrent_scopes_do_not_interfere(tmp_path, monkeypatch, mcp_loop):
     home_b = tmp_path / "profile-b"
     for h in (process_home, home_a, home_b):
         h.mkdir()
-    monkeypatch.setenv("HERMES_HOME", str(process_home))
+    monkeypatch.setenv("ARGUS_HOME", str(process_home))
 
     async def read_home():
         return str(get_hermes_home())

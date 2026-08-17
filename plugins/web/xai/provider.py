@@ -26,7 +26,7 @@ Optional knobs (under ``web.xai`` in ``config.yaml``)::
 
 Auth: reuses :func:`tools.xai_http.resolve_xai_http_credentials`, which
 prefers Hermes-managed xAI Grok OAuth (via ``hermes auth``) and falls back
-to ``XAI_API_KEY`` (resolved through ``~/.hermes/.env``, then
+to ``XAI_API_KEY`` (resolved through ``~/.argus/.env``, then
 ``os.environ``).
 """
 
@@ -132,7 +132,7 @@ class XAIWebSearchProvider(WebSearchProvider):
         deliberately *not* the same as :func:`resolve_xai_http_credentials`:
         it never triggers OAuth token refresh or acquires the auth-store
         lock. The ABC contract requires this method to be safe to call on
-        every ``hermes tools`` repaint and at tool-registration time.
+        every ``argus tools`` repaint and at tool-registration time.
         Token freshness / refresh is handled inside :meth:`search`.
         """
         return has_xai_credentials()
@@ -166,7 +166,7 @@ class XAIWebSearchProvider(WebSearchProvider):
             return {
                 "success": False,
                 "error": (
-                    "No xAI credentials found. Run `hermes auth` to sign in with "
+                    "No xAI credentials found. Run `argus auth` to sign in with "
                     "xAI Grok OAuth, or set XAI_API_KEY."
                 ),
             }

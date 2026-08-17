@@ -4,7 +4,7 @@ import { defaultBindings, KEYBIND_ACTION_IDS, keybindAction, type KeybindBinding
 import { canonicalizeCombo } from '@/lib/keybinds/combo'
 import { arraysEqual, persistString, storedString } from '@/lib/storage'
 
-const STORAGE_KEY = 'hermes.desktop.keybinds'
+const STORAGE_KEY = 'argus.desktop.keybinds'
 
 // Defaults overlaid with the user's stored overrides. Unknown / stale action ids
 // are dropped; actions added in a later release pick up their shipped default.

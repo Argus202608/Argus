@@ -166,7 +166,11 @@ describe('QueryMultimodalTool inline trajectory', () => {
 
     render(<ToolHistoryHarness message={message} />)
 
-    const history = screen.getByText(/1 tool call/i).closest('[data-slot="aui_tool-history-panel"]')
+    // The header now summarises what the batch DID (summarizeToolSteps) rather
+    // than printing a bare count — `query_multimodal` reads as a frame inspect.
+    const history = screen
+      .getByText(/Inspected 1 frame/i)
+      .closest('[data-slot="aui_tool-history-panel"]')
 
     expect(history).not.toBeNull()
     fireEvent.click(within(history as HTMLElement).getByRole('button'))

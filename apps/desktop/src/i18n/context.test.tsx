@@ -95,7 +95,9 @@ describe('I18nProvider', () => {
     expect(configClient.saveConfig).not.toHaveBeenCalled()
   })
 
-  it('loads zh-hant from display.language config', async () => {
+  // A config written before the zh-hant catalog was removed must still land on
+  // a Chinese UI, not silently revert to English.
+  it('folds a stored zh-TW preference into Simplified Chinese', async () => {
     const configClient: I18nConfigClient = {
       getConfig: vi.fn().mockResolvedValue({ display: { language: 'zh-TW' } }),
       saveConfig: vi.fn()
@@ -109,12 +111,14 @@ describe('I18nProvider', () => {
 
     await waitFor(() => expect(screen.getByTestId('loading').textContent).toBe('false'))
 
-    expect(screen.getByTestId('locale').textContent).toBe('zh-hant')
-    expect(screen.getByTestId('save').textContent).toBe('儲存')
+    expect(screen.getByTestId('locale').textContent).toBe('zh')
+    expect(screen.getByTestId('save').textContent).toBe('保存')
     expect(configClient.saveConfig).not.toHaveBeenCalled()
   })
 
-  it('loads ja from display.language config', async () => {
+  // Japanese was removed outright, so a stored ja preference is unsupported and
+  // must fall back to English rather than a half-translated Japanese UI.
+  it('falls back to English for a removed locale in config', async () => {
     const configClient: I18nConfigClient = {
       getConfig: vi.fn().mockResolvedValue({ display: { language: 'ja-JP' } }),
       saveConfig: vi.fn()
@@ -128,8 +132,8 @@ describe('I18nProvider', () => {
 
     await waitFor(() => expect(screen.getByTestId('loading').textContent).toBe('false'))
 
-    expect(screen.getByTestId('locale').textContent).toBe('ja')
-    expect(screen.getByTestId('save').textContent).toBe('保存')
+    expect(screen.getByTestId('locale').textContent).toBe('en')
+    expect(screen.getByTestId('save').textContent).toBe('Save')
     expect(configClient.saveConfig).not.toHaveBeenCalled()
   })
 
@@ -184,7 +188,7 @@ describe('I18nProvider', () => {
     })
   })
 
-  it('saves newly supported locales to display.language', async () => {
+  it('saves a locale switch to display.language, preserving other keys', async () => {
     const saveConfig = vi.fn().mockResolvedValue({ ok: true })
 
     const configClient: I18nConfigClient = {
@@ -197,7 +201,7 @@ describe('I18nProvider', () => {
 
     render(
       <I18nProvider configClient={configClient}>
-        <LanguageProbe target="ja" />
+        <LanguageProbe target="zh" />
       </I18nProvider>
     )
 
@@ -205,8 +209,8 @@ describe('I18nProvider', () => {
     fireEvent.click(screen.getByRole('button', { name: 'switch' }))
 
     await waitFor(() => expect(saveConfig).toHaveBeenCalledTimes(1))
-    expect(saveConfig).toHaveBeenCalledWith({ display: { language: 'ja', skin: 'mono' } })
-    expect(screen.getByTestId('locale').textContent).toBe('ja')
+    expect(saveConfig).toHaveBeenCalledWith({ display: { language: 'zh', skin: 'mono' } })
+    expect(screen.getByTestId('locale').textContent).toBe('zh')
   })
 
   it('rolls back the visible locale when saving fails', async () => {

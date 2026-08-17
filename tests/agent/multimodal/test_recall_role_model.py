@@ -238,7 +238,8 @@ class TestRecallAgentRoleModel(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(recall.mem_tools.call.call_count, 1)
-        self.assertEqual(result.findings, "(no relevant clues found in memory)")
+        from agent.multimodal._sentinels import RECALL_NO_CLUES
+        self.assertEqual(result.findings, RECALL_NO_CLUES)
         skipped = [event for event in events
                    if event.get("phase") == "tool_skipped"]
         self.assertEqual(len(skipped), 1)

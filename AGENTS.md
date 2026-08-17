@@ -816,7 +816,7 @@ plug into `agent/context_engine.py`; image-gen providers into
 `agent/image_gen_provider.py`. Reference / docs-companion plugins
 (`example-dashboard`, `strike-freedom-cockpit`, `plugin-llm-example`,
 `plugin-llm-async-example`) live in the
-[`argus-example-plugins`](https://github.com/NousResearch/argus-example-plugins)
+[`argus-example-plugins`](https://github.com/MMArgus-Team/Argus)
 companion repo, not in this tree.
 
 ---

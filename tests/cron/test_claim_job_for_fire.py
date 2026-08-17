@@ -13,7 +13,7 @@ import pytest
 @pytest.fixture
 def temp_home(tmp_path, monkeypatch):
     """Isolated HERMES_HOME so jobs.json doesn't touch the real store."""
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("ARGUS_HOME", str(tmp_path))
     # cron.jobs caches no home at import; get_hermes_home() reads the env live.
     yield tmp_path
 

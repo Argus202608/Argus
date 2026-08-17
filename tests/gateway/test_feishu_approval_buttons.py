@@ -810,8 +810,8 @@ class TestResolveUpdatePrompt:
     @pytest.mark.asyncio
     async def test_writes_response_file(self, tmp_path, monkeypatch):
         adapter = _make_adapter()
-        monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
-        (tmp_path / ".hermes").mkdir()
+        monkeypatch.setenv("ARGUS_HOME", str(tmp_path / ".argus"))
+        (tmp_path / ".argus").mkdir()
         adapter._update_prompt_state[1] = {
             "session_key": "sess-up-1",
             "message_id": "msg_up_003",
@@ -820,14 +820,14 @@ class TestResolveUpdatePrompt:
 
         await adapter._resolve_update_prompt(1, "y", "Alice")
 
-        assert (tmp_path / ".hermes" / ".update_response").read_text() == "y"
+        assert (tmp_path / ".argus" / ".update_response").read_text() == "y"
         assert 1 not in adapter._update_prompt_state
 
     @pytest.mark.asyncio
     async def test_overwrites_existing_response_file(self, tmp_path, monkeypatch):
         adapter = _make_adapter()
-        monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
-        home = tmp_path / ".hermes"
+        monkeypatch.setenv("ARGUS_HOME", str(tmp_path / ".argus"))
+        home = tmp_path / ".argus"
         home.mkdir()
         (home / ".update_response").write_text("n")
         adapter._update_prompt_state[2] = {
@@ -843,19 +843,19 @@ class TestResolveUpdatePrompt:
     @pytest.mark.asyncio
     async def test_unknown_prompt_id_drops_silently(self, tmp_path, monkeypatch):
         adapter = _make_adapter()
-        monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
-        (tmp_path / ".hermes").mkdir()
+        monkeypatch.setenv("ARGUS_HOME", str(tmp_path / ".argus"))
+        (tmp_path / ".argus").mkdir()
 
         await adapter._resolve_update_prompt(99, "n", "Nobody")
 
-        assert not (tmp_path / ".hermes" / ".update_response").exists()
+        assert not (tmp_path / ".argus" / ".update_response").exists()
 
     @pytest.mark.asyncio
     async def test_chat_mismatch_does_not_write_response_file(self, tmp_path, monkeypatch):
         adapter = _make_adapter()
         adapter._allowed_group_users = {"ou_bob"}
-        monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
-        (tmp_path / ".hermes").mkdir()
+        monkeypatch.setenv("ARGUS_HOME", str(tmp_path / ".argus"))
+        (tmp_path / ".argus").mkdir()
         adapter._update_prompt_state[10] = {
             "session_key": "sess-up-10",
             "message_id": "msg_up_010",
@@ -870,5 +870,5 @@ class TestResolveUpdatePrompt:
             chat_id="oc_wrong",
         )
 
-        assert not (tmp_path / ".hermes" / ".update_response").exists()
+        assert not (tmp_path / ".argus" / ".update_response").exists()
         assert 10 in adapter._update_prompt_state

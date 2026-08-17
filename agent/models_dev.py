@@ -10,7 +10,7 @@ of 4000+ models across 109+ providers.  Provides:
 
 Normal lookup resolution order (offline-first, never network-blocking):
   1. Fresh in-process cache
-  2. Fresh disk cache (~/.hermes/models_dev_cache.json)
+  2. Fresh disk cache (~/.argus/models_dev_cache.json)
   3. Stale in-process/disk cache, returned immediately + background refresh
   4. Bundled snapshot (ships with the package), returned immediately +
      background refresh
@@ -391,7 +391,7 @@ def fetch_models_dev(force_refresh: bool = False) -> Dict[str, Any]:
          start the same rate-limited background refresh. Repeated callers never
          retry the 15s network request on their foreground path.
 
-    When ``force_refresh=True`` (used by ``hermes config refresh``, the
+    When ``force_refresh=True`` (used by ``argus config refresh``, the
     \"refresh model catalog\" code path), stages 1-3 are skipped and the
     function performs a blocking network fetch, falling back to disk and then
     the bundled snapshot on failure. This is the ONLY path that intentionally

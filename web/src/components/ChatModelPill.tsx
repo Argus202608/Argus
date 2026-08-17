@@ -10,17 +10,39 @@
  *     Qwen enable_thinking。当前模型 capabilities.supports_reasoning 为 false
  *     时滑块整体置灰 (对齐 desktop 按 capabilities.reasoning 收起该控件)。
  *
- * 持久化仍走 config-api: model 走 api.setModelAssignment, effort 走
- * setReasoningEffort → agent.reasoning_effort。
+ * model 和 effort 现在是同一套【会话级】语义: 有 ChatSessionContext (即挂在一个
+ * 真实会话的 composer 上) 时分别走 setSessionModel / setSessionReasoningEffort
+ * → config.set{scope 或 --session}, 只改这个会话的活 agent + 会话行, 下一轮立即
+ * 生效, 不碰 config.yaml。没有会话时 (独立/无连接) 退回写 config.yaml 的 REST /
+ * setReasoningEffort —— 那只是【新会话】的默认值。
+ *
+ * ★ 为什么不能只写 config.yaml (这块以前一直"点了没反应"的原因):
+ *   1) agent 每会话只 build 一次, 之后每轮只读 agent.model / agent.reasoning_config
+ *      这些内存属性 (从不回读磁盘) → 写盘对活会话零影响;
+ *   2) HERMES_HOME/config.yaml 每次 dashboard 启动都被 git 里的项目 config.yaml
+ *      整体覆盖 (sync_project_config), 而项目配置没有 agent: 段 → 写进去的值重启
+ *      即消失, 读回来恒为 normalizeEffort 的兜底 "medium"。
+ *   ★ model 曾长期是这个 bug 的最后一块: effort 早已改走 session RPC, model 却还
+ *     留在 api.setModelAssignment (纯写盘) 上 —— 所以在会话里切模型对当前会话
+ *     无效, 只能靠"重启聊天"生效 (ChatSidebar 那个确认框就是为此存在的补丁)。
+ *     后端 config.set{key:"model"} 会调 agent.switch_model() 原地换 client 并
+ *     广播 session.info, 才是真正的热切换。
  */
 
 import { ChevronDown, Search } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 
 import { ThinkingSlider } from "@/components/ThinkingSlider";
+import { ChatSessionContext } from "@/contexts/chat-session-context";
 import { api } from "@/lib/api";
 import type { ModelOptionProvider } from "@/lib/api";
-import { getReasoningEffort, setReasoningEffort } from "@/lib/config-api";
+import {
+  getReasoningEffort,
+  setReasoningEffort,
+  setSessionModel,
+  setSessionReasoningEffort,
+  type SessionModelSwitchResult,
+} from "@/lib/config-api";
 import {
   effortShortLabel,
   normalizeEffort,
@@ -38,6 +60,12 @@ interface FlatEntry {
   model: string;
 }
 
+/** "confirm" ⇒ the switch was REJECTED pending the user's OK (expensive-model
+ *  guard), so it carries the target to retry. "warning" ⇒ it applied. */
+type ModelNotice =
+  | { kind: "confirm"; model: string; provider: string; text: string }
+  | { kind: "warning"; text: string };
+
 export function ChatModelPill({ className }: Props) {
   const [model, setModel] = useState<string>("");
   const [provider, setProvider] = useState<string>("");
@@ -51,25 +79,66 @@ export function ChatModelPill({ className }: Props) {
   const [providers, setProviders] = useState<ModelOptionProvider[]>([]);
   const [query, setQuery] = useState("");
   const [saving, setSaving] = useState(false);
+  const [modelNotice, setModelNotice] = useState<ModelNotice | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
+  // null when this pill isn't inside a chat (dashboard/standalone) → effort
+  // writes fall back to the global config default.
+  const chatSession = useContext(ChatSessionContext);
 
-  const refresh = useCallback(() => {
+  // ★ Deliberately does NOT re-read the effort: this runs again after every
+  // model switch, and the global config value is merely the NEW-session
+  // baseline — re-reading it would stomp the effort the user picked for this
+  // session back to the baseline (looking like the dial "reset itself").
+  //
+  // ★ `keepIdentity` exists for the same reason, one level up: /api/model/info
+  // reports what config.yaml says, which after a SESSION-scoped switch is
+  // deliberately still the old global default. Letting it write back would make
+  // a successful hot swap flicker to the previous model. After a switch we only
+  // want the capability probe (does this model support reasoning?), so the model
+  // identity we just applied is preserved. The live value is authoritative and
+  // arrives via `session.info` below.
+  const refresh = useCallback((keepIdentity = false) => {
     void api
       .getModelInfo()
       .then((r) => {
-        if (r?.model) setModel(String(r.model));
-        if (r?.provider) setProvider(String(r.provider));
+        if (!keepIdentity) {
+          if (r?.model) setModel(String(r.model));
+          if (r?.provider) setProvider(String(r.provider));
+        }
         setCanReason(r?.capabilities?.supports_reasoning !== false);
       })
       .catch(() => {
         /* keep last known */
       });
-    void getReasoningEffort().then((e) => setEffort(normalizeEffort(e)));
   }, []);
 
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  // The live session is the source of truth for the current model: the backend
+  // broadcasts `session.info` after agent.switch_model(), so a switch made
+  // anywhere (this pill, a /model slash command, the TUI) shows up here.
+  useEffect(() => {
+    const session = chatSession?.resolve();
+
+    if (!session) return;
+
+    return session.gw.on<{ model?: string; provider?: string }>(
+      "session.info",
+      (ev) => {
+        if (ev.payload?.model) setModel(String(ev.payload.model));
+        if (ev.payload?.provider) setProvider(String(ev.payload.provider));
+      },
+    );
+  }, [chatSession]);
+
+  // Seed the dial ONCE from the config baseline — the same value a brand-new
+  // session is built with. From here on this session's effort is owned by the
+  // user's clicks (each one applied to the live agent via the session RPC).
+  useEffect(() => {
+    void getReasoningEffort().then((e) => setEffort(normalizeEffort(e)));
+  }, []);
 
   useEffect(() => {
     if (!open) return;
@@ -97,49 +166,99 @@ export function ChatModelPill({ className }: Props) {
     };
   }, [open]);
 
+  // ★ 故意不做 `next === effort` 短路。以前有这一支, 而读回来的值又恒为兜底
+  //   "medium" —— 于是点 "Med" 这一档【连请求都不发】, 一个持久化 bug 长得跟
+  //   "控件坏了"完全一样, 极难排查。现在同档重复点击也真发一次 (幂等), 保留
+  //   saving 守卫防并发写。
   const applyEffort = useCallback(
     (next: string) => {
-      if (!VALID_EFFORTS.has(next) || next === effort || saving) return;
+      if (!VALID_EFFORTS.has(next) || saving) return;
       const prev = effort;
-      setEffort(next);
+      setEffort(next); // optimistic
       setSaving(true);
-      setReasoningEffort(next)
+      const session = chatSession?.resolve() ?? null;
+      const write = session
+        ? setSessionReasoningEffort(session.gw, session.sessionId, next)
+        : setReasoningEffort(next);
+      write
         .catch(() => setEffort(prev))
         .finally(() => setSaving(false));
     },
-    [effort, saving],
+    [chatSession, effort, saving],
   );
 
+  // Same session/global split as applyEffort above: a live session gets a hot
+  // swap that keeps the conversation; without one we're just setting the
+  // baseline for the next session, which is what REST is for.
   const applyModel = useCallback(
-    (nextProvider: string, nextModel: string) => {
-      if (nextModel === model && nextProvider === provider) {
+    (nextProvider: string, nextModel: string, confirmExpensive = false) => {
+      if (nextModel === model && nextProvider === provider && !confirmExpensive) {
         setOpen(false);
         return;
       }
       const prevModel = model;
       const prevProvider = provider;
+      const revert = () => {
+        setModel(prevModel);
+        setProvider(prevProvider);
+      };
+
       setModel(nextModel);
       setProvider(nextProvider);
       setOpen(false);
-      void api
-        .setModelAssignment({
-          scope: "main",
-          provider: nextProvider,
-          model: nextModel,
-        })
+      setModelNotice(null);
+
+      const session = chatSession?.resolve() ?? null;
+      // Normalized to one shape. The two endpoints differ in their replies —
+      // REST has no `warning` and names the applied model `model`, the session
+      // RPC calls it `value` — so map REST into the RPC's shape here rather
+      // than special-casing every read below.
+      const write: Promise<SessionModelSwitchResult> = session
+        ? setSessionModel(session.gw, session.sessionId, {
+            confirmExpensive,
+            model: nextModel,
+            provider: nextProvider,
+          })
+        : api
+            .setModelAssignment({
+              confirm_expensive_model: confirmExpensive,
+              scope: "main",
+              provider: nextProvider,
+              model: nextModel,
+            })
+            .then((r) => ({ ...r, value: r.model }));
+
+      void write
         .then((res) => {
+          // The expensive-model guard returns before the switch is applied, so
+          // the optimistic update must come back out.
           if (res?.confirm_required) {
-            setModel(prevModel);
-            setProvider(prevProvider);
+            revert();
+            setModelNotice({
+              kind: "confirm",
+              model: nextModel,
+              provider: nextProvider,
+              text: res.confirm_message || res.warning || "",
+            });
+            return;
           }
-          refresh();
+          // ★ The backend may have auto-corrected a near-miss name (a typo, or a
+          //   variant the endpoint doesn't serve: `glm-5v-turbo` → `glm-5-turbo`).
+          //   `value` is what the agent ACTUALLY switched to, so it wins over our
+          //   optimistic guess — otherwise the pill advertises a model that was
+          //   never selected.
+          if (res?.value && res.value !== nextModel) {
+            setModel(res.value);
+          }
+          if (res?.warning) {
+            setModelNotice({ kind: "warning", text: res.warning });
+          }
+          // Keep the identity we just applied on a session switch — see refresh().
+          refresh(!!session);
         })
-        .catch(() => {
-          setModel(prevModel);
-          setProvider(prevProvider);
-        });
+        .catch(revert);
     },
-    [model, provider, refresh],
+    [chatSession, model, provider, refresh],
   );
 
   const filtered = useMemo<FlatEntry[]>(() => {
@@ -171,6 +290,41 @@ export function ChatModelPill({ className }: Props) {
 
   return (
     <div ref={rootRef} className={cn("relative flex items-center text-xs", className)}>
+      {/* Sits above the pill because the panel closes on select — a notice
+          rendered inside it would never be seen. */}
+      {modelNotice && !open && (
+        <div className="absolute bottom-full right-0 z-30 mb-1 w-60 rounded-md border bg-background p-2 shadow-lg">
+          <div className="text-[11px] leading-snug text-foreground">
+            {modelNotice.text ||
+              (modelNotice.kind === "confirm"
+                ? "This model has unusually high known pricing."
+                : "")}
+          </div>
+          <div className="mt-1.5 flex justify-end gap-1.5">
+            <button
+              type="button"
+              className="rounded px-1.5 py-0.5 text-[11px] text-text-tertiary hover:bg-muted"
+              onClick={() => setModelNotice(null)}
+            >
+              {modelNotice.kind === "confirm" ? "Cancel" : "Dismiss"}
+            </button>
+            {modelNotice.kind === "confirm" && (
+              <button
+                type="button"
+                className="rounded bg-muted px-1.5 py-0.5 text-[11px] font-medium hover:bg-muted/70"
+                onClick={() => {
+                  const { model: m, provider: p } = modelNotice;
+                  setModelNotice(null);
+                  applyModel(p, m, true);
+                }}
+              >
+                Switch anyway
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       <button
         type="button"
         className={cn(

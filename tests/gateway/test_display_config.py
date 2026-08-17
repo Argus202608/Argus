@@ -305,7 +305,7 @@ class TestConfigMigration:
         }
         config_path.write_text(yaml.dump(config), encoding="utf-8")
 
-        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        monkeypatch.setenv("ARGUS_HOME", str(tmp_path))
         # Re-import to pick up the new HERMES_HOME
         import importlib
         import hermes_cli.config as cfg_mod
@@ -332,7 +332,7 @@ class TestConfigMigration:
         }
         config_path.write_text(yaml.dump(config), encoding="utf-8")
 
-        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        monkeypatch.setenv("ARGUS_HOME", str(tmp_path))
         import importlib
         import hermes_cli.config as cfg_mod
         importlib.reload(cfg_mod)

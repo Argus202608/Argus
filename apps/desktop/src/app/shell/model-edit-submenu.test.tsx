@@ -87,3 +87,26 @@ describe('ModelEditSubmenu no-session guard', () => {
     expect(requestGateway).toHaveBeenCalledWith('config.set', { key: 'fast', session_id: 'sess1', value: 'fast' })
   })
 })
+
+// Regression: turning Thinking OFF must reach the gateway as a SESSION-scoped
+// write. Without `scope: 'session'` the gateway writes agent.reasoning_effort
+// into config.yaml, which never reaches the already-built agent AND is erased on
+// the next start (sync_project_config copies the project config over
+// HERMES_HOME) — the "can't turn thinking off on desktop" report.
+describe('ModelEditSubmenu reasoning scope', () => {
+  it('sends scope=session so the live agent is what changes', () => {
+    const requestGateway = vi.fn().mockResolvedValue({})
+    $activeSessionId.set('sess1')
+    renderSubmenu({ fastControl: { kind: 'none' }, reasoning: true, requestGateway })
+
+    // Thinking starts on (effort="medium"); this click turns it off.
+    fireEvent.click(screen.getByRole('switch'))
+
+    expect(requestGateway).toHaveBeenCalledWith('config.set', {
+      key: 'reasoning',
+      scope: 'session',
+      session_id: 'sess1',
+      value: 'none'
+    })
+  })
+})

@@ -216,7 +216,7 @@ async def send_sticker(
         sticker:   Sticker name (e.g. "六六六") or sticker_id (e.g. "278").
                    Empty → pick a random one.
         chat_id:   Target chat; defaults to the current session context
-                   (HERMES_SESSION_CHAT_ID). Format:
+                   (ARGUS_SESSION_CHAT_ID). Format:
                    ``direct:{account_id}`` / ``group:{group_code}`` /
                    or a bare account_id.
         reply_to:  Optional quoted-message id (group chat only).
@@ -230,7 +230,7 @@ async def send_sticker(
         get_random_sticker,
     )
 
-    target = (chat_id or "").strip() or get_session_env("HERMES_SESSION_CHAT_ID", "")
+    target = (chat_id or "").strip() or get_session_env("ARGUS_SESSION_CHAT_ID", "")
     if not target:
         return {
             "success": False,
@@ -423,7 +423,7 @@ def _check_yuanbao():
     """Toolset availability check — True when running in a yuanbao gateway session."""
     try:
         from gateway.session_context import get_session_env
-        if get_session_env("HERMES_SESSION_PLATFORM", "") == "yuanbao":
+        if get_session_env("ARGUS_SESSION_PLATFORM", "") == "yuanbao":
             return True
     except Exception:
         pass
@@ -451,7 +451,7 @@ async def _handle_yb_send_dm(args, **kw):
     if not group_code:
         try:
             from gateway.session_context import get_session_env
-            chat_id = get_session_env("HERMES_SESSION_CHAT_ID", "")
+            chat_id = get_session_env("ARGUS_SESSION_CHAT_ID", "")
             # chat_id format: "group:<code>" → extract the code part
             if chat_id.startswith("group:"):
                 group_code = chat_id.split(":", 1)[1]
