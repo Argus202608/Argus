@@ -16,18 +16,18 @@ frames, recall earlier events, and run long-lived monitors or research tasks.
 
 ## Demo
 
-Live "watch-and-chat" walkthroughs of Argus — screen share a video, ask a question, get a grounded answer from the multimodal Agent. **Click a thumbnail to play immediately in your browser.**
+Live "watch-and-chat" walkthroughs of Argus — screen share a video, ask a question, get a grounded answer from the multimodal Agent. **Click a thumbnail to watch on YouTube.**
 
 <table>
 <tr>
 <td align="center" width="50%">
-<a href="https://cdn.jsdelivr.net/gh/MMArgus-Team/Argus@8a25475d6/demos/demo_en.mp4">
+<a href="https://www.youtube.com/watch?v=NhmocdvzQBo">
   <img src="assets/demo_en.png" alt="English demo preview" width="480"><br/>
   <b>🇬🇧 English demo</b> (click to play)
 </a>
 </td>
 <td align="center" width="50%">
-<a href="https://cdn.jsdelivr.net/gh/MMArgus-Team/Argus@8a25475d6/demos/demo_cn.mp4">
+<a href="https://www.youtube.com/watch?v=iCijSbVFRu8">
   <img src="assets/demo_cn.png" alt="中文 demo 预览" width="480"><br/>
   <b>🇨🇳 中文 demo</b> (click to play)
 </a>
@@ -35,7 +35,7 @@ Live "watch-and-chat" walkthroughs of Argus — screen share a video, ask a ques
 </tr>
 </table>
 
-<sub>Browser-streamable H.264 previews (~11–17 MB), served with <code>video/mp4</code> and byte-range support. Full 4K originals are available on the <a href="https://github.com/MMArgus-Team/Argus/releases/tag/v0.1.0-demos">v0.1.0-demos Release</a>.</sub>
+<sub>Hosted on YouTube. Full 4K originals are also available on the <a href="https://github.com/MMArgus-Team/Argus/releases/tag/v0.1.0-demos">v0.1.0-demos Release</a>.</sub>
 
 ## Highlights
 
