@@ -964,9 +964,9 @@ class QueryWorkerAskTimeSnapshotTests(unittest.TestCase):
             system_prompt = " ".join(
                 captured["messages"][0]["content"].split())
             self.assertIn(
-                "Timely completion is the product priority", system_prompt)
+                "PRIMARY CHECK — Progress bar / elapsed-duration display", system_prompt)
             self.assertIn(
-                "more consistent with completion than continuation",
+                "semantic conclusion may combine with persistent terminal-looking player UI",
                 system_prompt,
             )
             self.assertFalse(captured["stream"])

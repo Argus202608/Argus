@@ -33,7 +33,7 @@ def test_billing_logged_out(cli, monkeypatch, capsys):
     cli._show_billing("/billing")
     out = capsys.readouterr().out
     assert "Not logged into Nous Portal" in out
-    assert "hermes portal" in out
+    assert "argus portal" in out
 
 
 def test_billing_overview_non_interactive_renders_text_not_modal(cli, monkeypatch, capsys):

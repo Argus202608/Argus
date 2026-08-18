@@ -1742,7 +1742,7 @@ class CuaDriverBackend(ComputerUseBackend):
                     window_title=(
                         f"<no window matched app={app!r}. This does NOT mean "
                         f"capture is broken — a full-screen capture (omit `app`) "
-                        f"still works. Retry with an exact name from these "
+                        f"still works. Call list_apps or retry with an exact name from these "
                         f"running windows: {avail}>"
                     ),
                     png_bytes_len=0,

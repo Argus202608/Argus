@@ -56,7 +56,7 @@ class TestResumeQuietStderr:
         assert "Session not found" not in captured.out
         # the resume status goes to stderr
         assert "Session not found" in captured.err
-        assert "hermes sessions list" in captured.err
+        assert "argus sessions list" in captured.err
 
     def test_session_not_found_goes_to_stdout_in_full_mode(self, capsys):
         db = MagicMock()
