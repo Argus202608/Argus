@@ -52,7 +52,7 @@ class TestGetHermesHomeProfileWarning:
     def test_named_profile_unset_home_warns_once(
         self, fresh_constants, tmp_path, capsys
     ):
-        """active_profile=coder + HERMES_HOME unset → warn loudly, still return fallback."""
+        """active_profile=coder + ARGUS_HOME unset → warn loudly, still return fallback."""
         hermes_dir = tmp_path / ".argus"
         hermes_dir.mkdir()
         (hermes_dir / "active_profile").write_text("coder\n")
@@ -63,7 +63,7 @@ class TestGetHermesHomeProfileWarning:
         assert result == tmp_path / ".argus"
         # 2. Stderr got the warning exactly once
         err = capsys.readouterr().err
-        assert err.count("HERMES_HOME fallback") == 1
+        assert err.count("ARGUS_HOME fallback") == 1
         assert "'coder'" in err
         assert "#18594" in err
 
@@ -71,7 +71,7 @@ class TestGetHermesHomeProfileWarning:
         fresh_constants.get_hermes_home()
         fresh_constants.get_hermes_home()
         err2 = capsys.readouterr().err
-        assert "HERMES_HOME fallback" not in err2
+        assert "ARGUS_HOME fallback" not in err2
 
     def test_hermes_home_set_suppresses_warning(
         self, fresh_constants, tmp_path, capsys, monkeypatch

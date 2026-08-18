@@ -205,7 +205,7 @@ class TestSkillManageCrossProfileErrorUX:
         assert "default" in err
         assert "coder" in err
         # Switch-profiles hint
-        assert "hermes -p" in err
+        assert "argus -p" in err
 
     def test_genuinely_missing_skill_keeps_helpful_hint(
         self, fake_hermes, monkeypatch

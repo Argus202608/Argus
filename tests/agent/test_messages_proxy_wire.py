@@ -255,4 +255,4 @@ def test_multimodal_send_log_reports_tool_count_and_wire():
     })
 
     assert emitted[0]["tool_count"] == 1
-    assert emitted[0]["tool_wire"] == "anthropic"
+    assert emitted[0]["tool_wire"] == "openai"

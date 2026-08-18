@@ -81,7 +81,8 @@ class TestIgnoreUserConfigEnvGate:
         The built-in default ``model.default`` is empty string (no user override),
         and the user's ``agent.system_prompt`` is not seen.
         """
-        self._write_user_config(tmp_path, "anthropic/claude-sonnet-4.6")
+        user_only_model = "anthropic/claude-sonnet-4.6"
+        self._write_user_config(tmp_path, user_only_model)
         monkeypatch.setenv("ARGUS_IGNORE_USER_CONFIG", "1")
 
         load_cli_config = self._reload_cli(monkeypatch, tmp_path)

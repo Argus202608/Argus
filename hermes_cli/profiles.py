@@ -374,7 +374,7 @@ def check_alias_collision(name: str) -> Optional[str]:
             if existing_path == str(expected):
                 try:
                     content = expected.read_text()
-                    if "hermes -p" in content:
+                    if "argus -p" in content or "hermes -p" in content:
                         return None  # it's our wrapper, safe to overwrite
                 except Exception:
                     pass
@@ -414,7 +414,7 @@ def create_wrapper_script(name: str, target: Optional[str] = None) -> Optional[P
     if is_windows:
         wrapper_path = wrapper_dir / f"{canon}.bat"
         try:
-            wrapper_path.write_text(f"@echo off\r\nhermes -p {profile} %*\r\n")
+            wrapper_path.write_text(f"@echo off\r\nargus -p {profile} %*\r\n")
             return wrapper_path
         except OSError as e:
             print(f"⚠ Could not create wrapper at {wrapper_path}: {e}")
@@ -447,7 +447,7 @@ def remove_wrapper_script(name: str) -> bool:
             try:
                 # Verify it's our wrapper before removing
                 content = wrapper_path.read_text()
-                if "hermes -p" in content:
+                if "argus -p" in content or "hermes -p" in content:
                     wrapper_path.unlink()
                     return True
             except Exception:
@@ -490,8 +490,8 @@ def find_alias_for_profile(profile_name: str) -> Optional[str]:
     """Return the alias name of the wrapper that activates *profile_name*, or None.
 
     A wrapper created by :func:`create_wrapper_script` is a file named after the
-    alias whose body invokes ``hermes -p <profile>``. When the alias name equals
-    the profile name this is trivial, but a custom alias (``hermes profile alias
+    alias whose body invokes ``argus -p <profile>``. When the alias name equals
+    the profile name this is trivial, but a custom alias (``argus profile alias
     <profile> --name <custom>``) produces a differently-named file — so the
     display side cannot assume ``wrapper == profile`` and must reverse-look-up.
 
@@ -504,7 +504,7 @@ def find_alias_for_profile(profile_name: str) -> Optional[str]:
         return None
     canon = normalize_profile_name(profile_name)
     is_windows = sys.platform == "win32"
-    needle = f"hermes -p {canon}"
+    needles = (f"argus -p {canon}", f"hermes -p {canon}")
 
     custom: Optional[str] = None
     profile_named: Optional[str] = None
@@ -520,7 +520,7 @@ def find_alias_for_profile(profile_name: str) -> Optional[str]:
             content = entry.read_text()
         except (OSError, UnicodeDecodeError):
             continue
-        if needle not in content:
+        if not any(needle in content for needle in needles):
             continue
         alias = entry.stem if is_windows else entry.name
         if alias == canon:

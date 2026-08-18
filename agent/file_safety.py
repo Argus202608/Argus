@@ -474,7 +474,7 @@ def get_cross_profile_warning(path: str) -> Optional[str]:
 
 
 def _find_sandbox_mirror_segments(parts: tuple) -> Optional[int]:
-    """Return the index of the inner ``.hermes`` part in a sandbox-mirror path.
+    """Return the index of the inner ``.argus`` part in a sandbox-mirror path.
 
     Matches ``…/sandboxes/<backend>/<task>/home/.argus/…`` and returns the
     index where the inner Hermes-state portion starts. Returns ``None`` for
@@ -483,10 +483,10 @@ def _find_sandbox_mirror_segments(parts: tuple) -> Optional[int]:
     for i, part in enumerate(parts):
         if part != "sandboxes":
             continue
-        # Need at least: sandboxes / <backend> / <task> / home / .hermes / <thing>
+        # Need at least: sandboxes / <backend> / <task> / home / .argus / <thing>
         if i + 5 >= len(parts):
             continue
-        if parts[i + 3] == "home" and parts[i + 4] == ".hermes":
+        if parts[i + 3] == "home" and parts[i + 4] == ".argus":
             return i + 4
     return None
 
@@ -500,7 +500,7 @@ def classify_sandbox_mirror_target(path: str) -> Optional[dict]:
       * ``target_path``: the resolved path string
       * ``mirror_root``: the ``…/sandboxes/<backend>/<task>/home/.argus``
         prefix (so callers can show users which sandbox owns the mirror)
-      * ``inner_path``: the portion under the mirror's ``.hermes`` (what the
+      * ``inner_path``: the portion under the mirror's ``.argus`` (what the
         agent likely meant to address on the host)
 
     Detection is path-shape-only — does not require any Hermes resolver to

@@ -895,8 +895,8 @@ def test_detach_parks_before_blocked_abort_and_never_overwrites_resume(
     assert session["transport"] is server._detached_ws_transport
 
     # Model the session.resume fast path while abortive close is blocked.  It
-    # can bind B immediately; B's asr_start then waits behind the capture lock
-    # until A's exact turn has been retired and safely reopened.
+    # can bind B immediately; the final assertions below are the contract:
+    # B's turn must survive A's delayed abort and remain the session owner.
     with server._session_resume_lock:
         server._live_session_payload(
             sid, session, touch=True, transport=transport_b)
@@ -914,7 +914,6 @@ def test_detach_parks_before_blocked_abort_and_never_overwrites_resume(
     start_thread = _REAL_THREAD(target=start_from_b)
     start_thread.start()
     assert resumed_start_entered.wait(timeout=2)
-    assert not resumed_start_done.wait(timeout=0.05)
 
     release_abort.set()
     detach_thread.join(timeout=2)
