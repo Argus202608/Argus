@@ -15,26 +15,24 @@ Argus 是一个实时多模态 AI Agent，可以观看共享屏幕或摄像头�
 
 ## Demo 演示
 
-两段"边看边聊"的实况演示 —— 屏幕共享一段视频，向 Argus 提问，多模态 Agent 结合真实画面给出回答。
+两段"边看边聊"的实况演示 —— 屏幕共享一段视频，向 Argus 提问，多模态 Agent 结合真实画面给出回答。**点击缩略图播放 / 下载完整视频。**
 
 <table>
 <tr>
 <td align="center" width="50%">
-<b>🇬🇧 英文演示</b><br/>
-<video src="https://github.com/MMArgus-Team/Argus/releases/download/v0.1.0-demos/demo_en.mov" controls preload="metadata" width="480">
-浏览器不支持内嵌视频 — 请下载 <a href="https://github.com/MMArgus-Team/Argus/releases/download/v0.1.0-demos/demo_en.mov">demo_en.mov</a>。
-</video>
+<a href="https://github.com/MMArgus-Team/Argus/releases/download/v0.1.0-demos/demo_en.mov">
+  <img src="assets/demo_en.png" alt="英文演示预览" width="480"><br/>
+  <b>🇬🇧 英文演示</b>（点击播放）
+</a>
 </td>
 <td align="center" width="50%">
-<b>🇨🇳 中文演示</b><br/>
-<video src="https://github.com/MMArgus-Team/Argus/releases/download/v0.1.0-demos/demo_cn.mov" controls preload="metadata" width="480">
-浏览器不支持内嵌视频 — 请下载 <a href="https://github.com/MMArgus-Team/Argus/releases/download/v0.1.0-demos/demo_cn.mov">demo_cn.mov</a>。
-</video>
+<a href="https://github.com/MMArgus-Team/Argus/releases/download/v0.1.0-demos/demo_cn.mov">
+  <img src="assets/demo_cn.png" alt="中文演示预览" width="480"><br/>
+  <b>🇨🇳 中文演示</b>（点击播放）
+</a>
 </td>
 </tr>
 </table>
-
-<sub>若视频不能内嵌播放（部分 Markdown 渲染器会移除 <code>&lt;video&gt;</code>），可直接下载：<a href="https://github.com/MMArgus-Team/Argus/releases/download/v0.1.0-demos/demo_en.mov">demo_en.mov</a> · <a href="https://github.com/MMArgus-Team/Argus/releases/download/v0.1.0-demos/demo_cn.mov">demo_cn.mov</a>。</sub>
 
 ## 主要能力
 

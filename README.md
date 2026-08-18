@@ -16,26 +16,24 @@ frames, recall earlier events, and run long-lived monitors or research tasks.
 
 ## Demo
 
-Live "watch-and-chat" walkthroughs of Argus — screen share a video, ask a question, get a grounded answer from the multimodal Agent.
+Live "watch-and-chat" walkthroughs of Argus — screen share a video, ask a question, get a grounded answer from the multimodal Agent. **Click a thumbnail to play / download the full video.**
 
 <table>
 <tr>
 <td align="center" width="50%">
-<b>🇬🇧 English demo</b><br/>
-<video src="https://github.com/MMArgus-Team/Argus/releases/download/v0.1.0-demos/demo_en.mov" controls preload="metadata" width="480">
-Your browser does not render inline video — download <a href="https://github.com/MMArgus-Team/Argus/releases/download/v0.1.0-demos/demo_en.mov">demo_en.mov</a>.
-</video>
+<a href="https://github.com/MMArgus-Team/Argus/releases/download/v0.1.0-demos/demo_en.mov">
+  <img src="assets/demo_en.png" alt="English demo preview" width="480"><br/>
+  <b>🇬🇧 English demo</b> (click to play)
+</a>
 </td>
 <td align="center" width="50%">
-<b>🇨🇳 中文 demo</b><br/>
-<video src="https://github.com/MMArgus-Team/Argus/releases/download/v0.1.0-demos/demo_cn.mov" controls preload="metadata" width="480">
-Your browser does not render inline video — download <a href="https://github.com/MMArgus-Team/Argus/releases/download/v0.1.0-demos/demo_cn.mov">demo_cn.mov</a>.
-</video>
+<a href="https://github.com/MMArgus-Team/Argus/releases/download/v0.1.0-demos/demo_cn.mov">
+  <img src="assets/demo_cn.png" alt="中文 demo 预览" width="480"><br/>
+  <b>🇨🇳 中文 demo</b> (click to play)
+</a>
 </td>
 </tr>
 </table>
-
-<sub>If the videos don't play inline (some Markdown renderers strip <code>&lt;video&gt;</code>), download them directly: <a href="https://github.com/MMArgus-Team/Argus/releases/download/v0.1.0-demos/demo_en.mov">demo_en.mov</a> · <a href="https://github.com/MMArgus-Team/Argus/releases/download/v0.1.0-demos/demo_cn.mov">demo_cn.mov</a>.</sub>
 
 ## Highlights
 
