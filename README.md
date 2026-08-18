@@ -16,24 +16,17 @@ frames, recall earlier events, and run long-lived monitors or research tasks.
 
 ## Demo
 
-Live "watch-and-chat" walkthroughs of Argus — screen share a video, ask a question, get a grounded answer from the multimodal Agent. **Click a thumbnail to play / download the full video.**
+Live "watch-and-chat" walkthroughs of Argus — screen share a video, ask a question, get a grounded answer from the multimodal Agent.
 
-<table>
-<tr>
-<td align="center" width="50%">
-<a href="https://github.com/MMArgus-Team/Argus/releases/download/v0.1.0-demos/demo_en.mov">
-  <img src="assets/demo_en.png" alt="English demo preview" width="480"><br/>
-  <b>🇬🇧 English demo</b> (click to play)
-</a>
-</td>
-<td align="center" width="50%">
-<a href="https://github.com/MMArgus-Team/Argus/releases/download/v0.1.0-demos/demo_cn.mov">
-  <img src="assets/demo_cn.png" alt="中文 demo 预览" width="480"><br/>
-  <b>🇨🇳 中文 demo</b> (click to play)
-</a>
-</td>
-</tr>
-</table>
+### 🇬🇧 English demo
+
+https://github.com/MMArgus-Team/Argus/raw/main/demos/demo_en.mp4
+
+### 🇨🇳 中文 demo
+
+https://github.com/MMArgus-Team/Argus/raw/main/demos/demo_cn.mp4
+
+<sub>Compressed 720p H.264 previews (~11-30 MB) — full 4K originals available on the <a href="https://github.com/MMArgus-Team/Argus/releases/tag/v0.1.0-demos">v0.1.0-demos Release</a>.</sub>
 
 ## Highlights
 

@@ -245,5 +245,6 @@ skills/.bundled_manifest
 bin/tirith
 
 # ★ Demo videos (hosted as GitHub Release assets, not tracked in repo)
+# .mov 原始高清 走 GitHub Release Assets
 demos/*.mov
-demos/*.mp4
+# .mp4 压缩版直接 track 供内嵌播放
