@@ -92,11 +92,12 @@ class TestNestedSchemaMapping(unittest.TestCase):
         # monitor
         self.assertEqual(cfg.monitor_base_url, "https://mon")
         self.assertEqual(cfg.monitor_model, "qwen3.5-flash")
-        # memory (v33: recall has no endpoint — it uses model.memory; only the
-        # recall BEHAVIOR knob flows through)
+        # memory (post-v33: recall MAY have its own endpoint 4-tuple under
+        # model.memory.recall; here only the BEHAVIOR knob is set, so the
+        # endpoint stays empty and recall falls back to the memory client)
         self.assertEqual(cfg.memory_provider, "gemini")
         self.assertEqual(cfg.memory_model, "gemini-3.5-flash")
-        self.assertFalse(hasattr(cfg, "recall_base_url"))
+        self.assertEqual(cfg.recall_base_url, "")
         self.assertEqual(cfg.recall_topk_micro, 15)
 
     def test_settings_and_audio_map(self):

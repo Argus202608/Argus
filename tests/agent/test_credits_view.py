@@ -177,7 +177,7 @@ def test_gateway_credits_not_logged_in(monkeypatch):
     )
     stub = _make_gateway_stub()
     out = asyncio.run(stub._handle_credits_command(_FakeEvent()))
-    assert "Not logged into Nous Portal" in out
+    assert "Not logged into Argus Portal" in out
 
 
 def test_gateway_credits_fetch_exception_is_not_logged_in(monkeypatch):
@@ -187,7 +187,7 @@ def test_gateway_credits_fetch_exception_is_not_logged_in(monkeypatch):
     monkeypatch.setattr(account_usage, "build_credits_view", _boom)
     stub = _make_gateway_stub()
     out = asyncio.run(stub._handle_credits_command(_FakeEvent()))
-    assert "Not logged into Nous Portal" in out
+    assert "Not logged into Argus Portal" in out
 
 
 # ── command registry ────────────────────────────────────────────────────────
