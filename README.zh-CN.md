@@ -13,6 +13,29 @@ Argus 是一个实时多模态 AI Agent，可以观看共享屏幕或摄像头�
 > [Hermes Agent](https://github.com/NousResearch/hermes-agent) 修改而来。
 > 项目保留原始版权声明并继续使用 [MIT License](LICENSE)。
 
+## Demo 演示
+
+两段"边看边聊"的实况演示 —— 屏幕共享一段视频，向 Argus 提问，多模态 Agent 结合真实画面给出回答。
+
+<table>
+<tr>
+<td align="center" width="50%">
+<b>🇬🇧 英文演示</b><br/>
+<video src="https://github.com/MMArgus-Team/Argus/releases/download/v0.1.0-demos/demo_en.mov" controls preload="metadata" width="480">
+浏览器不支持内嵌视频 — 请下载 <a href="https://github.com/MMArgus-Team/Argus/releases/download/v0.1.0-demos/demo_en.mov">demo_en.mov</a>。
+</video>
+</td>
+<td align="center" width="50%">
+<b>🇨🇳 中文演示</b><br/>
+<video src="https://github.com/MMArgus-Team/Argus/releases/download/v0.1.0-demos/demo_cn.mov" controls preload="metadata" width="480">
+浏览器不支持内嵌视频 — 请下载 <a href="https://github.com/MMArgus-Team/Argus/releases/download/v0.1.0-demos/demo_cn.mov">demo_cn.mov</a>。
+</video>
+</td>
+</tr>
+</table>
+
+<sub>若视频不能内嵌播放（部分 Markdown 渲染器会移除 <code>&lt;video&gt;</code>），可直接下载：<a href="https://github.com/MMArgus-Team/Argus/releases/download/v0.1.0-demos/demo_en.mov">demo_en.mov</a> · <a href="https://github.com/MMArgus-Team/Argus/releases/download/v0.1.0-demos/demo_cn.mov">demo_cn.mov</a>。</sub>
+
 ## 主要能力
 
 - 使用 `query_multimodal` 回答当前画面和历史画面问题。

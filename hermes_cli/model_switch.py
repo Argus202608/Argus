@@ -784,6 +784,115 @@ def _configured_provider_matches(
     return matches
 
 
+def _config_entry_api_key(cfg: Optional[dict]) -> str:
+    """API key declared by a ``providers:`` / ``custom_providers:`` entry.
+
+    Accepts the key inline (``api_key``), as a ``${VAR}`` reference, or by
+    ``key_env`` naming the environment variable to read.
+    """
+    import os
+
+    if not isinstance(cfg, dict):
+        return ""
+    key = str(cfg.get("api_key", "") or "").strip()
+    if key.startswith("${") and key.endswith("}"):
+        key = os.environ.get(key[2:-1], "").strip()
+    if not key:
+        key_env = str(cfg.get("key_env", "") or "").strip()
+        if key_env:
+            key = os.environ.get(key_env, "").strip()
+    return key
+
+
+def _custom_provider_entry(
+    target_provider: str,
+    custom_providers: Optional[list],
+) -> Optional[dict]:
+    """The ``custom_providers:`` entry backing ``target_provider``, if any.
+
+    Matched by slug via :func:`custom_provider_slug` so the config's display
+    name (``Open.bigmodel.cn``) is found from the lowercased slug that flows
+    through :func:`switch_model` (``custom:open.bigmodel.cn``).
+    """
+    if not isinstance(custom_providers, list):
+        return None
+    want = str(target_provider or "").strip().lower()
+    if want.startswith("custom:"):
+        want = want[len("custom:"):]
+    if not want:
+        return None
+    for entry in custom_providers:
+        if not isinstance(entry, dict):
+            continue
+        name = str(entry.get("name", "") or "").strip()
+        if not name:
+            continue
+        if want in {name.lower(), custom_provider_slug(name)}:
+            return entry
+    return None
+
+
+def _declared_model_for_target(
+    model_name: str,
+    target_provider: str,
+    base_url: str,
+    user_providers: Optional[dict],
+    custom_providers: Optional[list],
+) -> Optional[str]:
+    """Canonical spelling of ``model_name`` if the *target* provider's own
+    config declares it, else ``None``.
+
+    This is the single answer to "did the user explicitly ask for this exact
+    model on this exact endpoint?", and :func:`switch_model` uses it for two
+    decisions that must never disagree: accepting a model the endpoint's
+    ``/models`` listing omits, and declining to fuzzy-correct its spelling.
+
+    Declaration scanning is delegated to :func:`_configured_provider_matches`
+    so both paths honour the same shapes (``models`` / ``model`` /
+    ``default_model``, dict / list / scalar, case-insensitive) instead of the
+    narrower hand-rolled matching this replaced.  Provider identity is matched
+    case-insensitively, and by ``base_url`` as a fallback: slugs are lowercased
+    downstream, so a config entry named ``Open.bigmodel.cn`` yields
+    ``custom:Open.bigmodel.cn`` and never equalled an incoming
+    ``custom:open.bigmodel.cn`` — and a bare ``custom`` target identifies its
+    entry only by URL.  Trailing slashes are insignificant.
+    """
+    matches = _configured_provider_matches(model_name, user_providers, custom_providers)
+    if not matches:
+        return None
+
+    target = str(target_provider or "").strip().lower()
+    if target:
+        for slug, canonical in matches.items():
+            if slug.strip().lower() == target:
+                return canonical
+
+    want_url = str(base_url or "").strip().rstrip("/").lower()
+    if not want_url:
+        return None
+
+    def _entry_url(cfg: dict) -> str:
+        return str(cfg.get("base_url", "") or "").strip().rstrip("/").lower()
+
+    if isinstance(user_providers, dict):
+        for slug, cfg in user_providers.items():
+            if isinstance(slug, str) and isinstance(cfg, dict) \
+                    and slug in matches and _entry_url(cfg) == want_url:
+                return matches[slug]
+
+    if isinstance(custom_providers, list):
+        for entry in custom_providers:
+            if not isinstance(entry, dict) or _entry_url(entry) != want_url:
+                continue
+            name = entry.get("name")
+            if isinstance(name, str) and name.strip():
+                slug = f"custom:{name}"
+                if slug in matches:
+                    return matches[slug]
+
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Core model-switching pipeline
 # ---------------------------------------------------------------------------
@@ -1147,6 +1256,7 @@ def switch_model(
 
     provider_changed = target_provider != current_provider
     provider_label = get_label(target_provider)
+    custom_pdef = None
     if target_provider == "custom" and current_base_url:
         provider_label = "Custom endpoint"
     if target_provider.startswith("custom:"):
@@ -1179,13 +1289,7 @@ def switch_model(
         if _user_pdef is not None and _user_pdef.base_url:
             _ucfg = (user_providers or {}).get(explicit_provider.strip().lower()) \
                 or (user_providers or {}).get(target_provider) or {}
-            _ukey = str(_ucfg.get("api_key", "") or "").strip()
-            if _ukey.startswith("${") and _ukey.endswith("}"):
-                _ukey = os.environ.get(_ukey[2:-1], "").strip()
-            if not _ukey:
-                _kenv = str(_ucfg.get("key_env", "") or "").strip()
-                if _kenv:
-                    _ukey = os.environ.get(_kenv, "").strip()
+            _ukey = _config_entry_api_key(_ucfg)
             try:
                 runtime = resolve_runtime_provider(
                     requested=target_provider,
@@ -1204,6 +1308,33 @@ def switch_model(
             api_key = current_api_key
             base_url = current_base_url
             api_mode = determine_api_mode(target_provider, base_url)
+        elif custom_pdef is not None and custom_pdef.base_url:
+            # A ``custom:<name>`` slug backed by the config passed to us. Same
+            # shape as the ``providers:`` branch above and for the same reason:
+            # resolve_runtime_provider() resolves by NAME against config on
+            # DISK, so it cannot see a custom_providers entry handed in as an
+            # argument — it raised "Unknown provider" and the switch failed
+            # before validation.  That bit whenever target_provider had been
+            # rewritten to the config's slug (e.g. configured-provider routing,
+            # or a differently-cased name), which is precisely when the entry we
+            # already resolved for provider_label is the authoritative endpoint.
+            _ckey = _config_entry_api_key(
+                _custom_provider_entry(target_provider, custom_providers)
+            ) or current_api_key
+            try:
+                runtime = resolve_runtime_provider(
+                    requested=target_provider,
+                    explicit_api_key=_ckey or None,
+                    explicit_base_url=custom_pdef.base_url,
+                    target_model=new_model,
+                )
+                api_key = runtime.get("api_key", "") or _ckey
+                base_url = runtime.get("base_url", "") or custom_pdef.base_url
+                api_mode = runtime.get("api_mode", "")
+            except Exception:
+                api_key = _ckey
+                base_url = custom_pdef.base_url
+                api_mode = ""
         else:
             try:
                 runtime = resolve_runtime_provider(
@@ -1270,55 +1401,19 @@ def switch_model(
             "message": f"Could not validate `{new_model}`: {e}",
         }
 
+    # A model the user declared for THIS provider is authoritative: they typed
+    # the endpoint, the key and the model id into config themselves, so config
+    # outranks anything inferred from ``/models``.  One lookup drives both
+    # decisions below so they can never disagree.
+    declared_model = _declared_model_for_target(
+        new_model, target_provider, base_url, user_providers, custom_providers
+    )
+
     # Override rejection if model is in the user's saved provider config.
     # API /v1/models may not list cloud/aliased models even though the server supports them.
     if not validation.get("accepted"):
-        override = False
-        if user_providers:
-            # user_providers is a dict: {provider_slug: config_dict}
-            for slug, cfg in user_providers.items():
-                if slug == target_provider:
-                    cfg_models = cfg.get("models", {})
-                    # Direct membership works for dict (keys) and list (strings)
-                    if new_model in cfg_models:
-                        override = True
-                        break
-                    # Also accept if models is a list of dicts with 'name' field
-                    if isinstance(cfg_models, list):
-                        if any(m.get("name") == new_model for m in cfg_models if isinstance(m, dict)):
-                            override = True
-                            break
-        # Also check custom_providers list — models declared there should be accepted
-        # even if the remote /v1/models endpoint doesn't list them.
-        if not override and custom_providers and isinstance(custom_providers, list):
-            for entry in custom_providers:
-                if not isinstance(entry, dict):
-                    continue
-                # Match by provider slug (custom:<name>) or by base_url.
-                # ★ Case/slash-insensitive: provider slugs are lowercased
-                #   downstream, so a config entry named "Open.bigmodel.cn"
-                #   produced "custom:Open.bigmodel.cn" and never matched the
-                #   incoming "custom:open.bigmodel.cn" — the override silently
-                #   failed for the exact configs it exists to protect. base_urls
-                #   likewise differ only by a trailing slash between the entry
-                #   and the resolved runtime.
-                entry_name = entry.get("name", "")
-                entry_slug = f"custom:{entry_name}".lower() if entry_name else ""
-                entry_url = str(entry.get("base_url", "") or "").rstrip("/").lower()
-                if (
-                    (entry_slug and entry_slug == str(target_provider or "").lower())
-                    or (entry_url and entry_url == str(base_url or "").rstrip("/").lower())
-                ):
-                    # Check if the requested model matches the entry's model
-                    entry_model = entry.get("model", "")
-                    entry_models = entry.get("models", {})
-                    if new_model == entry_model:
-                        override = True
-                        break
-                    if isinstance(entry_models, dict) and new_model in entry_models:
-                        override = True
-                        break
-        if override:
+        if declared_model is not None:
+            new_model = declared_model
             validation = {"accepted": True, "persist": True, "recognized": False, "message": validation.get("message", "")}
         else:
             msg = validation.get("message", "Invalid model")
@@ -1331,9 +1426,19 @@ def switch_model(
                 error_message=msg,
             )
 
-    # Apply auto-correction if validation found a closer match
-    if validation.get("corrected_model"):
-        new_model = validation["corrected_model"]
+    # Apply auto-correction if validation found a closer match.
+    #
+    # ★ Never fuzzy-correct a model the user declared for this provider.
+    #   ``validate_requested_model`` auto-corrects on a 0.9 difflib ratio, and
+    #   one-character model families sail past it: `glm-5v-turbo` → `glm-5-turbo`
+    #   scores 0.957, so selecting the configured vision model silently switched
+    #   it to the non-vision one whenever the endpoint's `/models` omitted it.
+    #   The override above only guarded the *rejection* path, but auto-correction
+    #   returns ``accepted: True`` and so skipped that guard entirely — the
+    #   declared model was rewritten with no error and no warning.
+    corrected = validation.get("corrected_model")
+    if corrected and declared_model is None:
+        new_model = corrected
 
     # --- Copilot api_mode override ---
     if target_provider in {"copilot", "github-copilot"}:

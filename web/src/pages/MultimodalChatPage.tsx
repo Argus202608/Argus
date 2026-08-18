@@ -1683,14 +1683,17 @@ export function summarizeStep(
 // when its `items` array identity changes (the parent rebuilds `rows` from a
 // new `messages` array only when a message actually changes).
 // Exported for the render test that pins disclosure nesting depth.
-export const BgBlock = memo(function BgBlock({ items, thinking, seg }: {
+export const BgBlock = memo(function BgBlock({ items, thinking }: {
   items: ChatMsg[];
   // Reasoning that preceded THIS segment's tool calls (see buildRows). Kept on
   // the segment so "what it was thinking" stays next to "what it then did" —
   // previously reasoning was dropped outright once the turn stopped streaming,
   // so a finished turn showed tool names with no rationale anywhere.
   thinking?: string;
-  seg?: number;
+  // `seg` (round index) is still carried on the Row and compared by the memo
+  // below, but is intentionally NOT rendered: with one segment per turn being
+  // the common case a constant "#1" was pure noise, and the `#` read as an id
+  // next to the neighbouring `#req_…` request ids.
 }) {
   useLocaleRevision();  // labels come from translateNow — see AsrBar
   const running = items.some((it) => it.kind === "tool"
@@ -1700,7 +1703,6 @@ export const BgBlock = memo(function BgBlock({ items, thinking, seg }: {
   // Collapsed by default: the header line already names the step count, so the
   // rationale is one click away without spending vertical space every turn.
   const [thinkingOpen, setThinkingOpen] = useState(false);
-  const toolCount = items.filter((it) => it.kind === "tool").length;
 
   const hasExpandable = items.some(
     (it) => it.kind === "tool" && (it.toolDetail || (it.recallTrace && it.recallTrace.length) || it.recallFindings || (it.toolArgs && it.toolArgs.length))
@@ -1739,11 +1741,6 @@ export const BgBlock = memo(function BgBlock({ items, thinking, seg }: {
             ? <span className="text-red-400">✕</span>
             : <span className="text-emerald-500">✓</span>}
         {stepLabel}
-        {/* Segment index: with several segments per turn the user needs to know
-            which round this is. Count is already implied by stepLabel. */}
-        {seg != null && toolCount > 0 && (
-          <span className="font-normal text-violet-400/70">{" · "}#{seg}</span>
-        )}
         {hasExpandable && (
           <span
             className="ml-auto cursor-pointer select-none text-[11px] font-medium text-violet-400 hover:text-violet-300"
@@ -1878,9 +1875,9 @@ export const BgBlock = memo(function BgBlock({ items, thinking, seg }: {
   // ★ 性能(#6): 按 items 逐元素引用比较 (不是数组引用)。rows useMemo 每次都 new 一个
   //   items 数组, 但纯 chat 流式期间 tool/status 消息对象 identity 不变 → 内容相同的
   //   bg 块在这里判等、跳过重渲染。只有本块的 tool/status 真变 (新增/patch) 才重渲染。
-  //   `thinking`/`seg` 也要比 —— 否则 interleaved reasoning 折进本段后画面不更新。
+  //   `thinking` 也要比 —— 否则 interleaved reasoning 折进本段后画面不更新。
+  //   (`seg` 不再是 prop: 段号已不渲染, 比较它也就没有意义了。)
   a.thinking === b.thinking &&
-  a.seg === b.seg &&
   a.items.length === b.items.length && a.items.every((it, i) => it === b.items[i]),
 );
 
@@ -2054,6 +2051,48 @@ function isPureThinkingChat(m: ChatMsg): boolean {
     m.role === "assistant" && !!m.streaming && !m.text?.trim() && !m.isError &&
     !m.monitorId && !m.deepResearch && m.subRole !== "query_worker"
   );
+}
+
+// ── 思考行 ↔ 处理过程卡 的分工 ────────────────────────────────────────────────
+// 流式一轮里两者【同时】呈现, 各司其职, 不再互相顶替:
+//   * 下方"处理过程"卡 (BgBlock): 工具的全部细节 —— 运行中是 ◌ 旋转 + 流光名 +
+//     参数摘要, 完成后换 ✓ + 耗时 + 结果摘要, 外加本段的 💭 思考块。
+//   * 上方 💭 思考行: 一行状态 + 计时器。BgBlock 的逐行工具【故意不挂计时器】
+//     (见其注释: "运行态的时长由上方思考行的计时器代表"), 所以这一行是卡片的
+//     计时伴侣, 两者本就设计为共存。
+//
+// ★ 曾经这里有一套"二选一"仲裁: 工具运行期间隐藏卡片, 只留一行 💭。它带来两个
+//   问题 —— (1) 工具正在跑的时候用户看不到工具框, 得等它【跑完】才出卡, 迟了一整个
+//   工具的时长; (2) 隐藏条件是"本 bg 含 tool", 而顶替条件是"有【正在运行】的 tool",
+//   二者在"工具已完成、正文未到"的窗口里不一致 → 两边都不出, 只剩 "Waiting
+//   response…"。仲裁本身就是这两个 bug 的共同来源, 所以整个删掉: 卡片永不让位,
+//   tool.start 一到就出卡, 也不存在"谁该让谁"的不一致。
+export type TurnToolPresentation = {
+  /** 本轮已产生 tool 条目 (ChatBubble 用它决定不出空气泡)。 */
+  inToolCall: boolean;
+  /** 当前运行中工具的一句话活动; "" = 无运行中工具 → 思考行回落到 reasoning 摘要。 */
+  toolActivity: string;
+};
+
+export function deriveTurnToolPresentation(
+  items: readonly ChatMsg[] | undefined,
+): TurnToolPresentation {
+  const none: TurnToolPresentation = { inToolCall: false, toolActivity: "" };
+  if (!items?.length) return none;
+  const tools = items.filter((it) => it.kind === "tool");
+  if (!tools.length) return none;
+
+  // 最新的运行中工具胜出 (从尾部找第一个 !toolDone), 对齐 desktop
+  // CurrentActivityLine 的"最新动作胜出"。
+  let running: ChatMsg | undefined;
+  for (let k = tools.length - 1; k >= 0; k--) {
+    if (!tools[k].toolDone) { running = tools[k]; break; }
+  }
+  const toolActivity = running?.toolName
+    ? (running.toolCtx ? `${running.toolName} · ${running.toolCtx.slice(0, 60)}` : running.toolName)
+    : "";
+
+  return { inToolCall: true, toolActivity };
 }
 
 // 一行"思考中"提示行 —— 事件驱动状态机 (跟 desktop CurrentActivityLine 同思路)。
@@ -2307,7 +2346,11 @@ const LiveMarkdown = memo(function LiveMarkdown({ content }: { content: string }
 
 // One readable analysis-round card: 🎬 第N段 [mm:ss–mm:ss] → 👁 看到 →
 // 🔎/🧩 检索 → 🖼 crops → 📝 就绪. Mirrors the desktop SegmentCard.
-const SegmentCard = memo(function SegmentCard({ s, defaultOpen }: { s: BgSegment; defaultOpen?: boolean }) {
+const SegmentCard = memo(function SegmentCard({ s, defaultOpen, terminal }: {
+  s: BgSegment; defaultOpen?: boolean;
+  /** 整个深度研究已结束 → 空段不能再写"分析中…"(它永远不会再有内容了)。 */
+  terminal?: boolean;
+}) {
   useLocaleRevision();  // labels come from translateNow — see AsrBar
   const range = s.tsRange ? ` ${fmtTs(s.tsRange[0])}–${fmtTs(s.tsRange[1])}` : "";
   // 真实的段描述: 排除后端合成的占位句 (isSynthSaw, 见 lib/mm-sentinels)。
@@ -2338,7 +2381,7 @@ const SegmentCard = memo(function SegmentCard({ s, defaultOpen }: { s: BgSegment
         <div className="break-words leading-snug text-muted-foreground">
           {desc}
         </div>
-      ) : empty ? (
+      ) : empty && !terminal ? (
         <div className="leading-snug text-violet-200/60">{translateNow("multimodal.deepAnalysis.analyzing")}</div>
       ) : null}
       {/* 💭 思考: 默认折叠 (<details>, 对齐主 Agent), 点击展开看全文。思考中 (本段还没
@@ -2347,9 +2390,9 @@ const SegmentCard = memo(function SegmentCard({ s, defaultOpen }: { s: BgSegment
       {s.thinking && (
         <details className="text-violet-200/70">
           <summary className="flex cursor-pointer list-none select-none items-center gap-1 leading-snug">
-            <span className={s.ready ? "" : "animate-pulse"}>💭</span>
-            <span>{s.ready ? translateNow("multimodal.deepAnalysis.thinking") : translateNow("multimodal.deepAnalysis.thinkingInProgress")}</span>
-            {!s.ready && (
+            <span className={s.ready || terminal ? "" : "animate-pulse"}>💭</span>
+            <span>{s.ready || terminal ? translateNow("multimodal.deepAnalysis.thinking") : translateNow("multimodal.deepAnalysis.thinkingInProgress")}</span>
+            {!s.ready && !terminal && (
               <span className="ml-0.5 inline-flex gap-0.5">
                 <span className="h-1 w-1 animate-bounce rounded-full bg-violet-400 [animation-delay:-0.3s]" />
                 <span className="h-1 w-1 animate-bounce rounded-full bg-violet-400 [animation-delay:-0.15s]" />
@@ -2480,19 +2523,29 @@ const DeepWindow = memo(function DeepWindow({
   const shortId = rid.replace(/^req_/, "").slice(0, 6);
   const label = item?.label || "";
   const segments = item?.segments || [];
-  const waiting = item?.waiting;
+  // ★ 渲染层兜底: 已结束的任务一律不显示攒帧条 —— 收尾时最后一个 Seg 的 waiting 常是
+  //   "下一段" 的预告心跳 (seg = 末轮+1), 那一段永远不会真正开始。即使上游漏清, 这里也
+  //   不该把 "已完成" 和一个转圈的 Seg 同时呈现。展开的进度条与收起的一行预览共用它。
+  const waiting = item?.done ? null : item?.waiting;
   // Collapsed one-line preview: the waiting banner, else the newest segment's
   // most-informative line, else any streamed answer text — so a folded window is
   // never a blank title bar during long ReAct phases.
   const lastSeg = segments[segments.length - 1];
   const _wSeg = waiting && typeof waiting.seg === "number" ? `Seg ${waiting.seg} · ` : "";
+  // ★ 已结束的任务不能再显示"第N段分析中…" —— 那是 lastSeg 缺真实描述时的进行中占位符,
+  //   末段常因收尾提前退出而没有 saw, 于是收起的窗口会在"已完成"旁边写"分析中"。终态下
+  //   优先用最终报告首句当预览, 没有则留空 (交给 answerPreview), 绝不复用进行中文案。
+  const segDone = !!item?.done;
+  const lastSegDesc = lastSeg && lastSeg.saw && !isSynthSaw(lastSeg.saw) ? lastSeg.saw : "";
   const segPreview = waiting
     ? (waiting.paused ? `⏳ ${_wSeg}Waiting for new frames…` : `⏳ ${_wSeg}Buffering frames… (${waiting.have}/${waiting.need})`)
-    : lastSeg
-      ? (lastSeg.saw && !isSynthSaw(lastSeg.saw)
-        ? `👁 ${lastSeg.saw}`
-        : translateNow("multimodal.deepAnalysis.segmentAnalyzing", lastSeg.seg))
-      : "";
+    : lastSegDesc
+      ? `👁 ${lastSegDesc}`
+      : segDone
+        ? (item?.finalReport || "").replace(/[#*`>\-\s]+/g, " ").trim().slice(0, 120)
+        : lastSeg
+          ? translateNow("multimodal.deepAnalysis.segmentAnalyzing", lastSeg.seg)
+          : "";
   // ★ 性能: answerPreview 只在真需要时算 (没有 segPreview 且窗口收起才显示 preview)。
   //   旧代码每次渲染都 msgs.map/join/replace 全量拼接一遍, 展开时根本用不到。
   const answerPreview = useMemo(
@@ -2541,13 +2594,13 @@ const DeepWindow = memo(function DeepWindow({
                   {older.length > 0 && (
                     <div className="space-y-1.5">
                       {older.map((s) => (
-                        <SegmentCard key={s.seg} s={s} defaultOpen={false} />
+                        <SegmentCard key={s.seg} s={s} defaultOpen={false} terminal={segDone} />
                       ))}
                     </div>
                   )}
                   {last && (
                     <div className="space-y-1.5">
-                      <SegmentCard key={last.seg} s={last} defaultOpen={true} />
+                      <SegmentCard key={last.seg} s={last} defaultOpen={true} terminal={segDone} />
                     </div>
                   )}
                 </>
@@ -4856,7 +4909,13 @@ export default function MultimodalChatPage() {
           const idx = prev.findIndex((b) => b.requestId === rid);
           if (idx >= 0) {
             const next = prev.slice();
-            next[idx] = { ...next[idx], finalReport: text, done: true };
+            // ★ waiting: null —— 最终报告到达即代表整轮结束, 必须同时撤掉攒帧条。
+            //   watcher.final 是内联送达、multimodal.bg 走 80ms 节流队列, 所以本事件
+            //   总是先于 delegation_done 到; 若这里只置 done, 后到的 delegation_done
+            //   会被它自己的 !b.done 判断跳过 → waiting 永远留在上一个 Seg 上 (显示
+            //   "已完成" 却仍挂着 "Seg N · 攒帧 5/40 · 26s left")。与桌面端
+            //   setWatcherFinal 对齐。
+            next[idx] = { ...next[idx], finalReport: text, done: true, waiting: null };
             return next;
           }
           // No bg item yet (run produced no visible events) → create one so the
@@ -5004,7 +5063,9 @@ export default function MultimodalChatPage() {
       const ch = p.channel || "bg";
       const rid = p.request_id || "";
       if (p.delegation_done && rid) {
-        return prevList.map((b) => (b.requestId === rid && !b.done
+        // ★ 幂等: 不再用 !b.done 作为前置条件。watcher.final 可能已先把 done 置真,
+        //   那时旧写法会整条跳过 → 连 waiting 也清不掉。收尾清理必须无条件执行。
+        return prevList.map((b) => (b.requestId === rid && (!b.done || b.waiting)
           ? { ...b, done: true, waiting: null } : b));
       }
       const itemId = rid || `_:${ch}`;
@@ -6746,20 +6807,15 @@ export default function MultimodalChatPage() {
   const autoSpeakOn = ttsEnabled || voiceDialogEnabled;
   const renderRow = useCallback((_i: number, row: Row) => {
     // ── bg (工具/状态) 行 ──
-    // ★ 流式期间隐藏"处理过程"卡: 若上一行正是本轮 streaming 空 body 的 assistant
-    //   (isPureThinkingChat) 且本 bg 行含 tool 条目 → 该 bg 属于进行中的这一轮, 其
-    //   工具活动已由上方 💭 思考行实时呈现, 这里不重复出卡。待本轮产出正文/结束后,
-    //   上一行不再是纯思考态, 本 bg 卡自然重新出现 (或让位给完整 AssistantMessage)。
+    // ★ 卡片【永不隐藏】: tool.start 一到就出卡, 于是用户在工具【开始】调用时就看到
+    //   思考块 + 旋转中的工具行, 而不是等它跑完。上方 💭 思考行同时在跑计时器, 两者
+    //   分工见 deriveTurnToolPresentation 的注释 —— 这里曾有一套"运行期间隐藏卡片"
+    //   的仲裁, 既让工具框迟到一整个工具时长, 又在"工具完成、正文未到"时与思考行的
+    //   顶替条件不一致导致两边都不出。删掉仲裁后这两种情况一起消失。
     if (row.type === "bg") {
-      const prev = rows[_i - 1];
-      const ownedByStreamingTurn =
-        prev?.type === "chat" &&
-        isPureThinkingChat(prev.msg) &&
-        row.items.some((it) => it.kind === "tool");
-      if (ownedByStreamingTurn) return null;
       return (
         <div className="px-4 pb-3">
-          <BgBlock items={row.items} seg={row.seg} thinking={row.thinking} />
+          <BgBlock items={row.items} thinking={row.thinking} />
         </div>
       );
     }
@@ -6767,31 +6823,15 @@ export default function MultimodalChatPage() {
     // ── chat 行 ──
     const msg = row.msg;
     const pureThinking = isPureThinkingChat(msg);
-    // ── 从相邻 bg 行派生: 本轮是否已产生 tool 条目 (inToolCall), 以及【当前正在运行】
-    //    的工具的一句话活动 (toolActivity, 最新的运行中 tool 胜出)。toolActivity 只在
-    //    有运行中 (!toolDone) 工具时非空 —— 工具跑完的间隙回落到 reasoning 摘要, 从而与
-    //    思维链在 💭 位置【交替显示】。工具是独立 kind:"tool" 消息, 相邻合并进一个 bg row。
-    let inToolCall = false;
-    let toolActivity = "";
-    if (pureThinking) {
-      const next = rows[_i + 1];
-      if (next && next.type === "bg") {
-        const tools = next.items.filter((it) => it.kind === "tool");
-        if (tools.length) {
-          inToolCall = true;
-          // 最新的运行中工具 (从尾部找第一个 !toolDone)。
-          let running: ChatMsg | undefined;
-          for (let k = tools.length - 1; k >= 0; k--) {
-            if (!tools[k].toolDone) { running = tools[k]; break; }
-          }
-          if (running?.toolName) {
-            toolActivity = running.toolCtx
-              ? `${running.toolName} · ${running.toolCtx.slice(0, 60)}`
-              : running.toolName;
-          }
-        }
-      }
-    }
+    // ── 从相邻 bg 行派生本轮的工具呈现 (见 deriveTurnToolPresentation 的注释):
+    //    inToolCall 决定不出空气泡, toolActivity 是 💭 位置的最高优先级 label ——
+    //    无运行中工具时为空 → 回落到 reasoning 摘要, 与思维链【交替显示】。
+    //    工具是独立 kind:"tool" 消息, 相邻的会合并进同一个 bg row。
+    //    注意这【不】影响下方卡片的可见性: 卡片永不隐藏, 这里只决定上方那一行的文字。
+    const nextRow = pureThinking ? rows[_i + 1] : undefined;
+    const { inToolCall, toolActivity } = deriveTurnToolPresentation(
+      nextRow?.type === "bg" ? nextRow.items : undefined,
+    );
     // 紧凑收纳: 纯思考行 (含工具调用态) 只是一行小状态文字, 上下都不需要 12px 大间距,
     // 用 -mt-3 抵消 space-y-3 让它紧贴上一条 UserMessage, 用 pb-0 拿掉底部 padding ——
     // 下一条 (最终气泡) 靠 space-y-3 自己拿间距。

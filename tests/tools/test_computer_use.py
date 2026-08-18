@@ -6,6 +6,7 @@ import base64
 import json
 import os
 import sys
+import threading
 from typing import Any, Dict, List
 from unittest.mock import MagicMock, patch
 
@@ -1341,6 +1342,130 @@ class TestUpdateCheck:
             assert cua_backend.cua_driver_update_nudge() is None
 
 
+class TestMinVersionPreflight:
+    """cua_driver_version() / _version_warning(): local `--version` floor check.
+
+    Separate from TestUpdateCheck: that one asks "is something newer out?"
+    (advisory, needs GitHub); this asks "is what you have known-broken?"
+    (offline, against _CUA_DRIVER_MIN_VERSION). Warning-only by design —
+    0.12.3 broke `launch_app` while capture/click kept working, so gating the
+    whole toolset off would remove working functionality.
+    """
+
+    @staticmethod
+    def _version_returning(stdout: str, stderr: str = ""):
+        fake = MagicMock()
+        fake.stdout = stdout
+        fake.stderr = stderr
+        return patch("tools.computer_use.cua_backend.subprocess.run", return_value=fake)
+
+    @staticmethod
+    def _binary_present(present: bool = True):
+        return patch(
+            "tools.computer_use.cua_backend.cua_driver_binary_available",
+            return_value=present,
+        )
+
+    @pytest.mark.parametrize("text,expected", [
+        ("cua-driver 0.20.0", (0, 20, 0)),
+        ("cua-driver 0.12.3\n", (0, 12, 3)),
+        ("0.20.0", (0, 20, 0)),
+        ("cua-driver v1.2.3", (1, 2, 3)),
+        ("cua-driver 0.21", (0, 21, 0)),          # two-component
+        ("cua-driver 0.21.0-rc1", (0, 21, 0)),    # pre-release suffix ignored
+        ("cua-driver 1.0.0 (abc1234)", (1, 0, 0)),
+        ("", None),
+        ("cua-driver unknown", None),
+    ])
+    def test_parse_version(self, text, expected):
+        from tools.computer_use.cua_backend import _parse_driver_version
+        assert _parse_driver_version(text) == expected
+
+    def test_old_version_warns(self):
+        from tools.computer_use import cua_backend
+        with self._binary_present(), self._version_returning("cua-driver 0.12.3\n"):
+            assert cua_backend.cua_driver_version() == (0, 12, 3)
+            msg = cua_backend.cua_driver_version_warning()
+        assert msg is not None
+        assert "0.12.3" in msg and "0.20.0" in msg
+        assert "launch_app" in msg
+
+    def test_min_version_exactly_is_quiet(self):
+        from tools.computer_use import cua_backend
+        with self._binary_present(), self._version_returning("cua-driver 0.20.0\n"):
+            assert cua_backend.cua_driver_version_warning() is None
+
+    def test_newer_version_is_quiet(self):
+        from tools.computer_use import cua_backend
+        with self._binary_present(), self._version_returning("cua-driver 0.21.0\n"):
+            assert cua_backend.cua_driver_version_warning() is None
+
+    def test_version_on_stderr_is_read(self):
+        # Some builds print the banner to stderr rather than stdout.
+        from tools.computer_use import cua_backend
+        with self._binary_present(), self._version_returning("", "cua-driver 0.12.3\n"):
+            assert cua_backend.cua_driver_version() == (0, 12, 3)
+
+    def test_unparseable_version_is_quiet(self):
+        # An unknown version is not evidence of a bad one.
+        from tools.computer_use import cua_backend
+        with self._binary_present(), self._version_returning("cua-driver unknown\n"):
+            assert cua_backend.cua_driver_version() is None
+            assert cua_backend.cua_driver_version_warning() is None
+
+    def test_missing_binary_is_quiet(self):
+        from tools.computer_use import cua_backend
+        with self._binary_present(False):
+            assert cua_backend.cua_driver_version() is None
+            assert cua_backend.cua_driver_version_warning() is None
+
+    def test_subprocess_failure_is_quiet(self):
+        from tools.computer_use import cua_backend
+        with self._binary_present(), \
+             patch("tools.computer_use.cua_backend.subprocess.run",
+                   side_effect=FileNotFoundError()):
+            assert cua_backend.cua_driver_version() is None
+            assert cua_backend.cua_driver_version_warning() is None
+
+    def test_no_network_call(self):
+        # The floor check must stay offline — it must not reach for
+        # check-update (which polls GitHub and returns None when offline).
+        from tools.computer_use import cua_backend
+        with self._binary_present(), self._version_returning("cua-driver 0.12.3\n"), \
+             patch.object(cua_backend, "cua_driver_update_check") as mock_update:
+            cua_backend.cua_driver_version_warning()
+        mock_update.assert_not_called()
+
+    def test_warns_once_per_process(self):
+        from tools.computer_use import cua_backend
+        with patch.object(cua_backend, "_version_checked", False), \
+             patch.object(cua_backend, "cua_driver_version_warning",
+                          return_value="too old") as mock_warn:
+            cua_backend._maybe_warn_old_version()
+            cua_backend._maybe_warn_old_version()
+        # Off-thread; join the checker so the assertion isn't racy.
+        for t in threading.enumerate():
+            if t.name == "cua-driver-version-check":
+                t.join(timeout=5)
+        assert mock_warn.call_count == 1
+
+    def test_doctor_warns_on_old_driver(self, capsys):
+        from tools.computer_use.doctor import _warn_if_below_min_version
+        _warn_if_below_min_version({"driver_version": "0.12.3"})
+        assert "0.12.3" in capsys.readouterr().err
+
+    @pytest.mark.parametrize("report", [
+        {"driver_version": "0.20.0"},
+        {"driver_version": "0.21.0"},
+        {"driver_version": "?"},   # health_report's placeholder
+        {},                        # field absent
+    ])
+    def test_doctor_quiet_when_ok_or_unknown(self, report, capsys):
+        from tools.computer_use.doctor import _warn_if_below_min_version
+        _warn_if_below_min_version(report)
+        assert capsys.readouterr().err == ""
+
+
 class TestLazyMcpInstall:
     """`mcp` is an optional extra; the backend lazy-installs it on start().
 
@@ -1643,9 +1768,15 @@ class TestCuaDriverSessionReconnect:
 
 
 class TestCaptureAppFilterNoMatch:
-    """App filtering may match a localized application by window title."""
+    """capture(app=X) must not silently fall back to the frontmost window
+    when X matches nothing — on a non-English macOS, list_windows returns
+    localized app names (e.g. "計算機"), so an English `app="Calculator"`
+    legitimately matches nothing and the caller needs to retry with the
+    localized name. The old code silently captured the frontmost window
+    (e.g. a menu-bar utility), giving the agent wrong UI elements.
+    """
 
-    def test_app_filter_matches_localized_app_by_window_title(self):
+    def test_app_filter_no_match_returns_empty_capture_with_diagnostic(self):
         # Simulates a localized macOS where Calculator's app_name is "計算機".
         windows = [
             {"app_name": "Fuwari", "pid": 100, "window_id": 1,
@@ -1657,9 +1788,16 @@ class TestCaptureAppFilterNoMatch:
 
         cap = backend.capture(mode="som", app="Calculator")
 
-        assert cap.app == "計算機"
-        assert backend._active_pid == 200
-        assert backend._active_window_id == 2
+        # No window matched; capture must NOT pick the frontmost (Fuwari).
+        assert cap.app == "", (
+            f"app= filter no-match should not silently target a window; got {cap.app!r}"
+        )
+        assert cap.elements == []
+        assert "Calculator" in cap.window_title
+        assert "list_apps" in cap.window_title
+        # _active_pid must remain unset so a subsequent click doesn't hit Fuwari.
+        assert backend._active_pid is None
+        assert backend._active_window_id is None
 
     def test_app_filter_match_still_works(self):
         windows = [

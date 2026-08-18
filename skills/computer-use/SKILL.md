@@ -167,6 +167,47 @@ it. You rarely need to focus explicitly — passing `app=...` to
 `capture` / `click` / `type` will target that app's frontmost window
 automatically.
 
+## Multi-window apps — discover the windows before you drive
+
+`app=...` picks ONE window automatically via a heuristic (title match
++ on-screen bonus + z-order). When an app has multiple windows — main
++ auxiliary (login, tray, floating panel), duplicates in different
+languages, or a main window on another Space — the auto-pick is often
+wrong.
+
+Symptoms of a wrong pick:
+
+- Capture returns real bytes but zero interactable elements, or an
+  element list that doesn't match what you can see on screen.
+- The chosen window is reported as off-screen (on another Space or
+  minimized). The OS returns an empty backing store for those; the
+  capture "succeeds" but has nothing to click.
+
+**Rule: whenever the target app may have more than one window, list
+windows first and target by exact title.** Two ways to get the list,
+cheapest first:
+
+1. **Probe capture — one round trip.** Call `capture` with an `app`
+   name you know won't match; the error payload enumerates every open
+   window as `app (title)`:
+
+   ```
+   computer_use(action="capture", mode="som", app="__probe__")
+   → "<no window matched app='__probe__'. … Retry with an exact name
+      from these running windows: <app> (<title>), <app> (<title>), ...>"
+   ```
+
+   Pick the entry whose title matches the UI you actually want.
+
+2. **Full-screen SOM capture.** `capture(mode="som")` with no `app`
+   returns every top-level window's elements; scan the AX tree when
+   even the app name is ambiguous.
+
+Then re-issue actions with the exact `app` string from the list. If
+two entries share an app name, differentiate by title; if they also
+share a title, drive via full-screen element indices instead of an
+`app` filter.
+
 ## Delivering screenshots to the user
 
 When the user is on a messaging platform (Telegram, Discord, etc.) and
@@ -206,6 +247,7 @@ in your conversation context.
 | Captures consistently return empty / "no on-screen window" | On Linux: DISPLAY may not be set (X11) or you're on pure Wayland — ask the user to run `hermes computer-use doctor`. On Windows: you may be in Session 0 (SSH session) instead of the interactive desktop — see the cua-driver `WINDOWS.md` deep-dive |
 | Element index stale ("Element N not in cache") | SOM indices are only valid until the next `capture`. Re-capture before clicking. The wrapper carries opaque `element_token`s for stale-detection; you'll see an explicit error rather than a wrong click |
 | Click had no effect | Re-capture and verify. A modal that wasn't visible before may be blocking input. Dismiss it (usually `escape` or click its close button) before retrying |
+| Capture returns bytes but 0 or nonsense elements; you can "see" the app but can't click anything real | `app=...` auto-picked the wrong window (off-screen main, hidden secondary, wrong-language duplicate). See **Multi-window apps** above — list windows via a probe capture with a bogus `app` name, then target by exact title. Do NOT fall back to raw `coordinate=[x,y]` — you'll be guessing pixels on an empty backing store |
 | Type text disappears into a terminal emulator | cua-driver detects terminals (Ghostty, iTerm2, Terminal.app, Windows Terminal, mintty, etc.) and routes through key-event synthesis — should "just work" on a recent cua-driver. If it doesn't, ask the user to run `hermes computer-use doctor` |
 | `blocked pattern in type text` | You tried to `type` a shell command matching the dangerous-pattern block list (`curl ... \| bash`, `sudo rm -rf`, etc.). Break the command up or reconsider |
 | Anything else weird | **First action: ask the user to run `hermes computer-use doctor`.** It runs the cua-driver `health_report` MCP tool and prints a structured per-check matrix. Their output tells you (and them) exactly what's wrong |

@@ -193,6 +193,30 @@ code { font-size: 0.875rem; }
 }
 
 
+/* ------------------------------------------------------------------ */
+/* Fenced code blocks must not inherit the DS "code == selection" fill. */
+/*                                                                     */
+/* `@nous-research/ui/styles/globals.css` groups `code` together with   */
+/* `*::selection` and gives both `background: var(--selection-bg,       */
+/* var(--midground))` + `text-background`. That's their *inline* code   */
+/* chip aesthetic (bright accent fill, dark text on top).              */
+/*                                                                     */
+/* For a fenced block (`<pre><code>`) it reads as a bug: the entire     */
+/* block renders in the selection color even when nothing is selected,  */
+/* so a multi-line log excerpt looks permanently highlighted. Inline    */
+/* code in `components/Markdown.tsx` dodges this because it carries its */
+/* own `bg-secondary/60`; the `<code>` inside `<pre>` has no class, so  */
+/* the DS base rule lands at full strength.                            */
+/*                                                                     */
+/* Unlayered rules out-rank `@layer base`, so this wins without         */
+/* `!important`. The `<pre>` keeps owning the block's surface + text     */
+/* color (bg-secondary/60 over the inherited `text-foreground`).        */
+/* ------------------------------------------------------------------ */
+pre code {
+  background: transparent;
+  color: inherit;
+}
+
 /* Collapsed sidebar tooltip entrance — skipped when moving between items. */
 @keyframes sidebar-tooltip-in {
   from { opacity: 0; transform: translateY(-50%) translateX(-4px); }

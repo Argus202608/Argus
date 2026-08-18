@@ -243,3 +243,7 @@ skills/.bundled_manifest
 # Vendored native helper binary (18 MB, arm64 Mach-O) — a build/install output,
 # not source. Fetched per-platform rather than committed.
 bin/tirith
+
+# ★ Demo videos (hosted as GitHub Release assets, not tracked in repo)
+demos/*.mov
+demos/*.mp4

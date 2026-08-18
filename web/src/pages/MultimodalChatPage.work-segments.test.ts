@@ -134,22 +134,22 @@ describe("buildRows work segments", () => {
     expect(thinkingOf(afterAnswer)).toBe("想A");
   });
 
-  it("renders the segment's rationale and step count in the block header", () => {
+  it("renders the segment's rationale in the block header without a round index", () => {
     const markup = renderToStaticMarkup(
       createElement(BgBlock, {
         items: [
           { id: "t1", role: "assistant", text: "", kind: "tool", toolName: "read_file", toolDone: true },
           { id: "t2", role: "assistant", text: "", kind: "tool", toolName: "grep", toolDone: true },
         ] as never,
-        seg: 2,
         thinking: "先确认配置再决定改哪里",
       }),
     );
 
     // Rationale survives into the finished turn (it used to be discarded).
     expect(markup).toContain("先确认配置再决定改哪里");
-    // Header carries round index + how many calls it made.
-    expect(markup).toContain("#2");
+    // The round index is deliberately not rendered: one segment per turn is the
+    // common case, so a constant "#1" was noise that also read as a request id.
+    expect(markup).not.toContain("#");
     // Collapsed by default — the full text is behind the toggle, so a long
     // rationale can't push the tool rows off screen.
     expect(markup).toContain('aria-expanded="false"');
@@ -279,7 +279,6 @@ describe("failed tool rows", () => {
           toolName: "read_file", toolCtx: "/nope.txt", toolDone: true,
           toolIsError: true, toolError: "file not found: /nope.txt",
         }] as never,
-        seg: 1,
       }),
     );
 
@@ -295,7 +294,6 @@ describe("failed tool rows", () => {
           id: "t1", role: "assistant", text: "", kind: "tool",
           toolName: "read_file", toolDone: true, toolSummary: "142 lines",
         }] as never,
-        seg: 1,
       }),
     );
 

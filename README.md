@@ -14,6 +14,29 @@ frames, recall earlier events, and run long-lived monitors or research tasks.
 > by Nous Research. The original copyright and MIT license are preserved in
 > [LICENSE](LICENSE).
 
+## Demo
+
+Live "watch-and-chat" walkthroughs of Argus — screen share a video, ask a question, get a grounded answer from the multimodal Agent.
+
+<table>
+<tr>
+<td align="center" width="50%">
+<b>🇬🇧 English demo</b><br/>
+<video src="https://github.com/MMArgus-Team/Argus/releases/download/v0.1.0-demos/demo_en.mov" controls preload="metadata" width="480">
+Your browser does not render inline video — download <a href="https://github.com/MMArgus-Team/Argus/releases/download/v0.1.0-demos/demo_en.mov">demo_en.mov</a>.
+</video>
+</td>
+<td align="center" width="50%">
+<b>🇨🇳 中文 demo</b><br/>
+<video src="https://github.com/MMArgus-Team/Argus/releases/download/v0.1.0-demos/demo_cn.mov" controls preload="metadata" width="480">
+Your browser does not render inline video — download <a href="https://github.com/MMArgus-Team/Argus/releases/download/v0.1.0-demos/demo_cn.mov">demo_cn.mov</a>.
+</video>
+</td>
+</tr>
+</table>
+
+<sub>If the videos don't play inline (some Markdown renderers strip <code>&lt;video&gt;</code>), download them directly: <a href="https://github.com/MMArgus-Team/Argus/releases/download/v0.1.0-demos/demo_en.mov">demo_en.mov</a> · <a href="https://github.com/MMArgus-Team/Argus/releases/download/v0.1.0-demos/demo_cn.mov">demo_cn.mov</a>.</sub>
+
 ## Highlights
 
 - Current and historical visual question answering through `query_multimodal`.

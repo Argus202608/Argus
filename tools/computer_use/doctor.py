@@ -265,7 +265,43 @@ def run_doctor(
             color = sys.stdout.isatty()
         _print_text_report(report, color=bool(color))
 
+    # Minimum-version preflight. health_report is the driver's own view of its
+    # health and has no opinion about our supported floor, so check it here
+    # against the version the report already carries. Goes to stderr so
+    # `--json` output on stdout stays a clean health_report payload.
+    _warn_if_below_min_version(report)
+
     overall = report.get("overall")
     if overall in ("degraded", "failed"):
         return 1
     return 0
+
+
+def _warn_if_below_min_version(report: Dict[str, Any]) -> None:
+    """Print a warning when `driver_version` is below the supported floor.
+
+    Reuses the floor and message from `cua_backend` so the doctor and the
+    runtime never disagree about what counts as too old. Silent when the
+    version is absent or unparseable — an unknown version is not evidence of
+    a bad one. Best-effort; never raises.
+    """
+    try:
+        from tools.computer_use.cua_backend import (
+            _CUA_DRIVER_MIN_VERSION,
+            _parse_driver_version,
+        )
+        version = _parse_driver_version(str(report.get("driver_version") or ""))
+        if version is None or version >= _CUA_DRIVER_MIN_VERSION:
+            return
+        have = ".".join(str(p) for p in version)
+        want = ".".join(str(p) for p in _CUA_DRIVER_MIN_VERSION)
+        print(
+            f"⚠️  cua-driver {have} is below the minimum supported {want}. "
+            f"`launch_app` is known to fail on older builds, and repeated "
+            f"failures make the driver reject every later action with "
+            f"`session has ended`.\n"
+            f"    Upgrade: cua-driver update --apply  (stop Argus first)",
+            file=sys.stderr,
+        )
+    except Exception:
+        pass

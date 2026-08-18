@@ -635,6 +635,118 @@ def _maybe_nudge_update() -> None:
     ).start()
 
 
+# ---------------------------------------------------------------------------
+# Minimum-version preflight
+# ---------------------------------------------------------------------------
+#
+# Distinct from the update nudge above. The nudge answers "is there something
+# newer?" (advisory, needs GitHub). This answers "is what you have known to be
+# broken?" — a local, offline check against a floor we set from observed
+# breakage, not from an upstream support statement.
+#
+# The floor exists because of one reproduced failure mode on 0.12.3:
+# `launch_app` returns `exit_code: 1`, and after repeated failures cua-driver
+# marks the whole session dead — every later tool call is then rejected with
+# `session has ended`. capture / click / list_apps kept working right up to
+# that point, which is why this WARNS and does not block: gating the toolset
+# off would remove working functionality over one broken action.
+#
+# Note the tension with the comment at the top of this module's "Update
+# checking" section, which argues against a hardcoded floor on the grounds
+# that it rots. That argument stands for "is this the latest?" — it does not
+# cover "is this one known-bad?". Keep this floor pinned to versions with
+# observed breakage and raise it only with the same kind of evidence.
+_CUA_DRIVER_MIN_VERSION = (0, 20, 0)
+
+
+def _parse_driver_version(text: str) -> Optional[tuple]:
+    """Parse ``cua-driver 0.20.0`` → ``(0, 20, 0)``.
+
+    Tolerates a bare ``0.20.0``, a ``v`` prefix, and trailing pre-release /
+    build metadata (``0.21.0-rc1`` → ``(0, 21, 0)``). Returns ``None`` when no
+    dotted numeric version is present, so callers stay quiet rather than
+    guessing on unfamiliar output.
+    """
+    m = re.search(r"\bv?(\d+)\.(\d+)(?:\.(\d+))?", text or "")
+    if not m:
+        return None
+    return (int(m.group(1)), int(m.group(2)), int(m.group(3) or 0))
+
+
+def cua_driver_version(*, timeout: float = 5.0) -> Optional[tuple]:
+    """Installed driver version as a tuple, or ``None`` if indeterminate.
+
+    Runs ``cua-driver --version`` locally — no network, unlike
+    :func:`cua_driver_update_check`. Best-effort; never raises.
+    """
+    if not cua_driver_binary_available():
+        return None
+    try:
+        proc = subprocess.run(
+            [_CUA_DRIVER_CMD, "--version"],
+            capture_output=True, text=True, timeout=timeout,
+            # Same rationale as cua_driver_update_check: decode explicitly so a
+            # non-GBK byte on zh-CN Windows can't raise UnicodeDecodeError, and
+            # give stdin EOF so a driver that falls through to a read loop exits
+            # instead of blocking until the timeout.
+            encoding="utf-8", errors="replace",
+            stdin=subprocess.DEVNULL,
+            env=cua_driver_child_env(),
+        )
+    except Exception:
+        return None
+    # Some builds print the version banner to stderr.
+    return _parse_driver_version(f"{proc.stdout or ''}\n{proc.stderr or ''}")
+
+
+def cua_driver_version_warning() -> Optional[str]:
+    """Warning for a driver below :data:`_CUA_DRIVER_MIN_VERSION`, else ``None``.
+
+    ``None`` also covers the indeterminate cases (binary missing, unparseable
+    output) — an unknown version is not evidence of a bad one.
+    """
+    version = cua_driver_version()
+    if version is None or version >= _CUA_DRIVER_MIN_VERSION:
+        return None
+    have = ".".join(str(p) for p in version)
+    want = ".".join(str(p) for p in _CUA_DRIVER_MIN_VERSION)
+    return (
+        f"cua-driver {have} is below the minimum supported {want}. "
+        f"`launch_app` is known to fail on older builds, and repeated failures "
+        f"make the driver reject every later action with `session has ended`. "
+        f"Upgrade with `cua-driver update --apply` (stop Argus first) or "
+        f"`argus computer-use install --upgrade`."
+    )
+
+
+_version_checked = False
+
+
+def _maybe_warn_old_version() -> None:
+    """Warn once per process when the driver is below the supported floor.
+
+    Runs off-thread for the same reason as :func:`_maybe_nudge_update` — a
+    subprocess spawn on the first computer_use action is latency the user
+    would feel. Warning-only by design: see ``_CUA_DRIVER_MIN_VERSION``.
+    """
+    global _version_checked
+    if _version_checked:
+        return
+    _version_checked = True
+
+    def _run() -> None:
+        try:
+            msg = cua_driver_version_warning()
+        except Exception:
+            return
+        if msg:
+            logger.warning("computer_use: %s", msg)
+
+    threading.Thread(
+        target=_run, name="cua-driver-version-check", daemon=True
+    ).start()
+
+
 def cua_driver_install_hint() -> str:
     if sys.platform == "win32":
         installer = (
@@ -1302,6 +1414,7 @@ class CuaDriverBackend(ComputerUseBackend):
     # ── Lifecycle ──────────────────────────────────────────────────
     def start(self) -> None:
         _maybe_nudge_update()
+        _maybe_warn_old_version()
         # The MCP client SDK (`mcp`) is an optional dependency (the
         # `computer-use` / `mcp` extras), not part of Hermes' minimal core.
         # Lazy-install it on first use — the same pattern every other optional
