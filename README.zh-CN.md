@@ -15,17 +15,26 @@ Argus 是一个实时多模态 AI Agent，可以观看共享屏幕或摄像头�
 
 ## Demo 演示
 
-两段"边看边聊"的实况演示 —— 屏幕共享一段视频，向 Argus 提问，多模态 Agent 结合真实画面给出回答。
+两段"边看边聊"的实况演示 —— 屏幕共享一段视频，向 Argus 提问，多模态 Agent 结合真实画面给出回答。**点击缩略图即可在浏览器中直接播放。**
 
-### 🇬🇧 英文演示
+<table>
+<tr>
+<td align="center" width="50%">
+<a href="https://cdn.jsdelivr.net/gh/MMArgus-Team/Argus@8a25475d6/demos/demo_en.mp4">
+  <img src="assets/demo_en.png" alt="英文演示预览" width="480"><br/>
+  <b>🇬🇧 英文演示</b>（点击播放）
+</a>
+</td>
+<td align="center" width="50%">
+<a href="https://cdn.jsdelivr.net/gh/MMArgus-Team/Argus@8a25475d6/demos/demo_cn.mp4">
+  <img src="assets/demo_cn.png" alt="中文演示预览" width="480"><br/>
+  <b>🇨🇳 中文演示</b>（点击播放）
+</a>
+</td>
+</tr>
+</table>
 
-https://github.com/MMArgus-Team/Argus/raw/main/demos/demo_en.mp4
-
-### 🇨🇳 中文演示
-
-https://github.com/MMArgus-Team/Argus/raw/main/demos/demo_cn.mp4
-
-<sub>720p H.264 压缩版（约 11-30 MB）—— 原始 4K 高清版本请见 <a href="https://github.com/MMArgus-Team/Argus/releases/tag/v0.1.0-demos">v0.1.0-demos Release 页面</a>。</sub>
+<sub>H.264 浏览器流式预览版（约 11–17 MB），服务端返回 <code>video/mp4</code> 并支持拖动进度。原始 4K 高清版本请见 <a href="https://github.com/MMArgus-Team/Argus/releases/tag/v0.1.0-demos">v0.1.0-demos Release 页面</a>。</sub>
 
 ## 主要能力
 
