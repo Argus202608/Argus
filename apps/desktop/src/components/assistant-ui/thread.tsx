@@ -774,7 +774,7 @@ const STREAM_STALL_S = 2
 // Subscribes to the activity signal ITSELF (rather than taking it as a prop)
 // so that per-token updates re-render only this leaf, not the whole
 // AssistantMessage subtree.
-const StreamStallIndicator: FC = () => {
+export const StreamStallIndicator: FC = () => {
   const activity = useAuiState(s => {
     let textLength = 0
 

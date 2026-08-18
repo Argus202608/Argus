@@ -26,8 +26,8 @@ def test_thinking_takes_effect_after_first_turn():
     agent = types.SimpleNamespace(
         _extra_body_additions={"enable_thinking": False},
         model="qwen3.7-plus",
-        provider="custom",
-        base_url="https://example.test/v1",
+        provider="alibaba",
+        base_url="https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
         reasoning_config={"enabled": False},
     )
     session = {"source": "multimodal"}
