@@ -27,7 +27,7 @@ from datetime import datetime, timedelta
 
 
 def hermes_available() -> bool:
-    return shutil.which("hermes") is not None
+    return shutil.which("argus") is not None
 
 
 def kanban_list(tenant: str) -> list[dict]:

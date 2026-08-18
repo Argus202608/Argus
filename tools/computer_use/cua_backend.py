@@ -1710,10 +1710,20 @@ class CuaDriverBackend(ComputerUseBackend):
             # "... - <project>") or claude.exe (title "Claude"); matching only
             # app_name would miss "capture(app='Claude Code')".
             app_lower = app.lower()
+            # Title matching is only a compatibility fallback for explicit
+            # multi-word aliases such as "Claude Code" whose process/app name
+            # is often different.  Keep single-token app filters strict to the
+            # OS-reported app_name; otherwise localized apps like Calculator
+            # (app_name="計算機", title="Calculator") look like a match when the
+            # caller actually needs a no-match diagnostic with available names.
+            title_match_allowed = len(app_lower.split()) > 1
             filtered = [
                 w for w in windows
                 if app_lower in w["app_name"].lower()
-                or app_lower in str(w.get("title", "")).lower()
+                or (
+                    title_match_allowed
+                    and app_lower in str(w.get("title", "")).lower()
+                )
             ]
             if not filtered:
                 # Enumerate the running windows so the model can retry with a

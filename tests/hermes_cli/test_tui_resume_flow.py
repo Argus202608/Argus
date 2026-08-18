@@ -406,7 +406,7 @@ def test_termux_ultrafast_version_runs_before_heavy_startup(
     assert main_mod._try_termux_ultrafast_version() is True
 
     out = capsys.readouterr().out
-    assert "Hermes Agent v" in out
+    assert "Argus v" in out
     assert "Project:" in out
     assert "Python:" in out
     assert "OpenAI SDK:" in out

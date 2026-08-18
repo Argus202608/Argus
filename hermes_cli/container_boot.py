@@ -261,9 +261,9 @@ def _strip_container_argv_prefix(argv: Sequence[str]) -> list[str]:
     in the v2→v3 bump), drop everything up to and including the
     ``main-wrapper.sh`` token: that wrapper path is the stable boundary the
     image owns, and the subcommand always follows it. Pre-s6 / direct
-    ``hermes`` invocations carry no wrapper, so fall back to peeling a bare
-    ``init`` prefix. The wrapper re-execs ``hermes <subcommand>``, so an
-    explicit leading ``hermes`` is peeled too. Shared by the legacy-gateway
+    ``argus`` invocations carry no wrapper, so fall back to peeling a bare
+    ``init`` prefix. The wrapper re-execs ``argus <subcommand>``, so an
+    explicit leading ``argus`` is peeled too. Shared by the legacy-gateway
     and dashboard role detectors.
     """
     args = list(argv)
@@ -281,8 +281,8 @@ def _strip_container_argv_prefix(argv: Sequence[str]) -> list[str]:
         # Defensive: an `init` prefix with no wrapper token in argv.
         args = args[1:]
 
-    # The wrapper re-execs `hermes <subcommand>`; peel an explicit hermes.
-    if args and Path(args[0]).name == "hermes":
+    # The wrapper re-execs `argus <subcommand>`; peel an explicit argus.
+    if args and Path(args[0]).name in {"argus", "hermes"}:
         args = args[1:]
     return args
 

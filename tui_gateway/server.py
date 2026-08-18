@@ -4556,6 +4556,23 @@ def _session_info(agent, session: dict | None = None) -> dict:
         else:
             reasoning_effort = str(reasoning_config.get("effort", "") or "")
     service_tier = getattr(agent, "service_tier", None) or ""
+    can_toggle_reasoning = True
+    try:
+        from providers import resolve_provider_profile
+
+        profile = resolve_provider_profile(
+            getattr(agent, "provider", ""), getattr(agent, "base_url", "")
+        )
+        if profile is not None:
+            model = getattr(agent, "model", "")
+            off_config = {"enabled": False}
+            extra_body, top_level = profile.build_api_kwargs_extras(
+                reasoning_config=off_config, model=model
+            )
+            body = profile.build_extra_body(reasoning_config=off_config, model=model)
+            can_toggle_reasoning = bool(extra_body or top_level or body)
+    except Exception:
+        can_toggle_reasoning = True
     # Effective approval-bypass state — the same three sources that
     # check_all_command_guards() ORs together: persistent config
     # (approvals.mode=off), the process-scoped --yolo env, and the
@@ -4580,6 +4597,7 @@ def _session_info(agent, session: dict | None = None) -> dict:
         "model": getattr(agent, "model", ""),
         "provider": getattr(agent, "provider", ""),
         "reasoning_effort": reasoning_effort,
+        "can_toggle_reasoning": can_toggle_reasoning,
         "service_tier": service_tier,
         "fast": service_tier == "priority",
         "yolo": yolo,
