@@ -114,8 +114,10 @@ def test_recall_decision_recursively_unwraps_top_level_json_string():
     parsed, _ = RecallAgent._normalize_decision_tool_calls(parsed or {})
 
     assert parsed["can_answer"] is False
+    # Legacy tool names are canonicalized to their merged replacement
+    # (search_micro → search_events) by _apply_legacy_tool_alias.
     assert parsed["tool_calls"] == [{
-        "name": "search_micro",
+        "name": "search_events",
         "args": {"query": "车牌 2V6J5"},
     }]
     assert repairs
