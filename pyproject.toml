@@ -371,6 +371,10 @@ markers = [
 ]
 # integration tests take way too long to run in the normal CI environments
 addopts = "-m 'not integration'"
+# Dump all thread stacks when a single test stalls past 120s. The per-file
+# harness kills at 140s, so the dump lands in the CI log just before the kill
+# and identifies the exact hung test + stack instead of a bare SIGKILL.
+faulthandler_timeout = 120
 
 [tool.ty.environment]
 python-version = "3.13"
