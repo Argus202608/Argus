@@ -72,7 +72,18 @@ _SKIP_PARTS = {"integration", "e2e", "docker"}
 
 # Per-file wall-clock cap. Override
 # via --file-timeout or ARGUS_TEST_FILE_TIMEOUT.
-_DEFAULT_FILE_TIMEOUT_SECONDS = 140.0 # set by observing the slowest file at commit time was ~100s in CI and adding some leeway
+#
+# Was 140.0, "the slowest file at commit time was ~100s in CI plus some leeway".
+# That leeway did not survive contention: the cap is per *file*, but files run -j
+# at a time on a 2-core GitHub runner, so the slowest ones (test_provider_parity,
+# test_codex_ttfb_watchdog — both dominated by real sleeps/retry backoff, not CPU)
+# routinely land within 40% of 140s and tip over it when the runner is busy. A
+# file that tips over is SIGKILL'd and reported as a bare non-zero exit with no
+# pytest summary, which is indistinguishable from a genuine hang and cost a whole
+# afternoon of red slice-8 runs to tell apart. This cap is only a backstop against
+# a wedged file; the real time budget is the job's ``timeout-minutes: 30``, so
+# there is no reason to keep it tight.
+_DEFAULT_FILE_TIMEOUT_SECONDS = 420.0
 
 # Duration cache: maps relative file paths to last-observed subprocess
 # wall-clock seconds. Used by ``--slice`` to distribute files across
@@ -148,6 +159,31 @@ def _discover_files(roots: List[Path]) -> List[Path]:
             seen.add(real)
             out.append(path)
     return sorted(out)
+
+
+_ABORT_DRAIN_SECONDS = 15.0
+
+
+def _abort_for_stacks(proc: "subprocess.Popen") -> bool:
+    """SIGABRT the pytest leader so faulthandler dumps every thread's stack.
+
+    Returns True if the signal was delivered (so the caller should try to drain
+    the output), False when that isn't possible — Windows has no SIGABRT
+    delivery to another process, and the process may already be gone.
+
+    Only the leader is signalled, not the whole group: we want the Python
+    traceback from the process that is actually stuck, and aborting unrelated
+    grandchildren (uvicorn, node) just adds noise. ``_kill_tree`` still takes
+    out the group afterwards.
+    """
+    if sys.platform == "win32" or proc.pid is None or proc.poll() is not None:
+        return False
+    try:
+        import signal as _signal
+        os.kill(proc.pid, _signal.SIGABRT)  # windows-footgun: ok
+    except (ProcessLookupError, PermissionError, OSError):
+        return False
+    return True
 
 
 def _kill_tree(proc: "subprocess.Popen", pgid: int | None = None) -> None:
@@ -239,7 +275,14 @@ def _run_one_file(
     orphan onto PID 1. This outer timeout exists only to
     bound a pathologically slow or hung file as a whole.
     """
-    cmd = [sys.executable, "-m", "pytest", str(file), *pytest_args]
+    # -X faulthandler (rather than relying on pytest's faulthandler plugin) so the
+    # SIGABRT we send on timeout still produces an all-thread traceback dump even
+    # when the hang is *outside* the pytest session — e.g. a non-daemon worker
+    # thread being joined by threading._shutdown after pytest already ran
+    # pytest_unconfigure and disabled its own faulthandler. That interpreter-exit
+    # window is exactly where the CI slice-8 hang lived, and it is invisible to
+    # both `faulthandler_timeout` and pytest-timeout.
+    cmd = [sys.executable, "-X", "faulthandler", "-m", "pytest", str(file), *pytest_args]
     
     subproc_start = time.monotonic()
     # launch the pytest process
@@ -273,15 +316,31 @@ def _run_one_file(
         output, _ = proc.communicate(timeout=file_timeout)
         rc = proc.returncode
     except subprocess.TimeoutExpired:
+        # Ask the hung interpreter to describe itself *before* we destroy it.
+        # SIGKILL alone left us with rc=124 and "output unavailable", which is
+        # how a real hang in CI showed up as a red slice with no failure
+        # summary and nothing to act on. With -X faulthandler above, SIGABRT
+        # dumps every thread's stack to stderr (merged into our stdout pipe)
+        # and then the default handler kills the process, so the dump lands in
+        # the captured output and the hang names itself.
+        aborted = _abort_for_stacks(proc)
+        output = ""
+        if aborted:
+            try:
+                output, _ = proc.communicate(timeout=_ABORT_DRAIN_SECONDS)
+            except subprocess.TimeoutExpired:
+                output = ""
         _kill_tree(proc, pgid=pgid)
-        try:
-            output, _ = proc.communicate(timeout=10)
-        except subprocess.TimeoutExpired:
-            output = "(file timeout exceeded; output unavailable)"
+        if not output:
+            try:
+                output, _ = proc.communicate(timeout=10)
+            except subprocess.TimeoutExpired:
+                output = "(file timeout exceeded; output unavailable)"
         rc = 124  # de facto convention for "killed by timeout".
         output = (
             f"({file_timeout:.0f}s exceeded; "
-            f"process tree SIGKILL'd)\n{output}"
+            f"SIGABRT stack dump requested, then process tree SIGKILL'd)\n"
+            f"{output}"
         )
     except BaseException:
         # KeyboardInterrupt / runner crash — make sure no zombie

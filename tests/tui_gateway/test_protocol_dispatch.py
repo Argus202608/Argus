@@ -61,14 +61,95 @@ def capture(server):
         server._real_stdout = original
 
 
+# ── gated pool handlers ──────────────────────────────────────────────
+#
+# Every "slow handler must not block the fast path" test below used to assert
+# `time.monotonic() - t0 < 0.5` and then fire-and-forget the pool task. Both
+# halves were load-sensitive and both burned CI:
+#
+#   * The wall-clock bound measured from *before* `_pool.submit()`, so it also
+#     covered lazy worker-thread creation and `contextvars.copy_context()`. On a
+#     2-core runner already running several pytest processes, 0.5s is not a
+#     reliable ceiling for work that is supposed to take microseconds.
+#   * Releasing the stub without joining it let the pool worker outlive the
+#     test. `handle_request` resolves handlers at execution time via
+#     `_methods.get(method)`, so a worker scheduled after `patch.dict` unwound
+#     would call the *real* handler with `params={}` — by which point the
+#     `server` fixture's `patch.dict("sys.modules", ...)` had also unwound, so
+#     it touched the real modules. Pool workers are non-daemon and
+#     `atexit`'s `_pool.shutdown(wait=False)` cannot interrupt a running task,
+#     so `concurrent.futures.thread._python_exit` joined it at interpreter
+#     shutdown: every test passed, then the process never exited and the
+#     harness SIGKILLed it at the 140s per-file cap with no summary.
+#     `faulthandler_timeout` cannot catch that — it is armed per test and
+#     already disarmed by then.
+#
+# `_GatedHandler` replaces both with explicit handshakes. Asserting that the
+# fast response arrived *while the slow handler is still inside the pool* tests
+# the real property and is immune to scheduling jitter.
+
+_GATE_TIMEOUT = 30.0
+
+
+class _GatedHandler:
+    """RPC handler that announces entry and returns only once released."""
+
+    def __init__(self, server, result):
+        self._server = server
+        self._result = result
+        self.entered = threading.Event()
+        self.released = threading.Event()
+        self.finished = threading.Event()
+
+    def __call__(self, rid, params):
+        self.entered.set()
+        try:
+            if not self.released.wait(timeout=_GATE_TIMEOUT):
+                raise AssertionError("gated handler was never released")
+            return self._server._ok(rid, self._result)
+        finally:
+            self.finished.set()
+
+    def wait_entered(self):
+        """Block until a pool worker is actually executing this handler."""
+        assert self.entered.wait(timeout=_GATE_TIMEOUT), (
+            "pool never started the handler"
+        )
+
+    def release(self):
+        """Release the handler and join it, so it cannot outlive the test."""
+        self.released.set()
+        assert self.finished.wait(timeout=_GATE_TIMEOUT), (
+            "pool handler never finished"
+        )
+
+
+def _pong(server):
+    return lambda rid, params: server._ok(rid, {"pong": True})
+
+
+def _wait_for_write(buf, timeout=_GATE_TIMEOUT):
+    """Wait for the pool worker's response to land in *buf*.
+
+    Was `for _ in range(50): time.sleep(0.01)` — a hard 0.5s budget for
+    "schedule a pool worker and write one line", which is not something a
+    loaded runner guarantees.
+    """
+    deadline = time.monotonic() + timeout
+    while not buf.getvalue() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    written = buf.getvalue()
+    assert written, f"pool worker wrote nothing within {timeout:.0f}s"
+    return json.loads(written)
+
+
 # ── dispatch(): pool routing for long handlers (#12546) ──────────────
 
 
 def test_dispatch_runs_short_handlers_inline(server):
     """Non-long handlers return their response synchronously from dispatch()."""
-    server._methods["fast.ping"] = lambda rid, params: server._ok(rid, {"pong": True})
-
-    resp = server.dispatch({"id": "r1", "method": "fast.ping", "params": {}})
+    with patch.dict(server._methods, {"fast.ping": _pong(server)}):
+        resp = server.dispatch({"id": "r1", "method": "fast.ping", "params": {}})
 
     assert resp == {"jsonrpc": "2.0", "id": "r1", "result": {"pong": True}}
 
@@ -76,59 +157,59 @@ def test_dispatch_runs_short_handlers_inline(server):
 def test_dispatch_offloads_long_handlers_and_emits_via_stdout(capture):
     """Long handlers run on the pool and write their response via write_json."""
     server, buf = capture
-    server._methods["slash.exec"] = lambda rid, params: server._ok(rid, {"output": "hi"})
 
-    resp = server.dispatch({"id": "r2", "method": "slash.exec", "params": {}})
-    assert resp is None
+    with patch.dict(
+        server._methods,
+        {"slash.exec": lambda rid, params: server._ok(rid, {"output": "hi"})},
+    ):
+        resp = server.dispatch({"id": "r2", "method": "slash.exec", "params": {}})
+        assert resp is None
 
-    for _ in range(50):
-        if buf.getvalue():
-            break
-        time.sleep(0.01)
+        written = _wait_for_write(buf)
 
-    written = json.loads(buf.getvalue())
     assert written == {"jsonrpc": "2.0", "id": "r2", "result": {"output": "hi"}}
 
 
 def test_dispatch_long_handler_does_not_block_fast_handler(server):
     """A slow long handler must not prevent a concurrent fast handler from completing."""
-    released = threading.Event()
-    server._methods["slash.exec"] = lambda rid, params: (released.wait(timeout=5), server._ok(rid, {"done": True}))[1]
-    server._methods["fast.ping"] = lambda rid, params: server._ok(rid, {"pong": True})
+    slow = _GatedHandler(server, {"done": True})
 
-    t0 = time.monotonic()
-    assert server.dispatch({"id": "slow", "method": "slash.exec", "params": {}}) is None
+    with patch.dict(
+        server._methods, {"slash.exec": slow, "fast.ping": _pong(server)}
+    ):
+        assert server.dispatch({"id": "slow", "method": "slash.exec", "params": {}}) is None
+        slow.wait_entered()
 
-    fast_resp = server.dispatch({"id": "fast", "method": "fast.ping", "params": {}})
-    fast_elapsed = time.monotonic() - t0
+        fast_resp = server.dispatch({"id": "fast", "method": "fast.ping", "params": {}})
 
-    assert fast_resp["result"] == {"pong": True}
-    assert fast_elapsed < 0.5, f"fast handler blocked for {fast_elapsed:.2f}s behind slow handler"
+        assert fast_resp["result"] == {"pong": True}
+        assert not slow.finished.is_set(), (
+            "fast handler only completed after the slow handler returned"
+        )
 
-    released.set()
+        slow.release()
 
 
 def test_dispatch_session_compress_does_not_block_fast_handler(server):
     """Manual TUI compaction can take minutes, so it must not block the RPC loop."""
-    released = threading.Event()
+    slow = _GatedHandler(server, {"done": True})
 
-    def slow_compress(rid, params):
-        released.wait(timeout=5)
-        return server._ok(rid, {"done": True})
+    with patch.dict(
+        server._methods, {"session.compress": slow, "fast.ping": _pong(server)}
+    ):
+        assert server.dispatch(
+            {"id": "slow", "method": "session.compress", "params": {}}
+        ) is None
+        slow.wait_entered()
 
-    server._methods["session.compress"] = slow_compress
-    server._methods["fast.ping"] = lambda rid, params: server._ok(rid, {"pong": True})
+        fast_resp = server.dispatch({"id": "fast", "method": "fast.ping", "params": {}})
 
-    t0 = time.monotonic()
-    assert server.dispatch({"id": "slow", "method": "session.compress", "params": {}}) is None
+        assert fast_resp["result"] == {"pong": True}
+        assert not slow.finished.is_set(), (
+            "fast handler only completed after session.compress returned"
+        )
 
-    fast_resp = server.dispatch({"id": "fast", "method": "fast.ping", "params": {}})
-    fast_elapsed = time.monotonic() - t0
-
-    assert fast_resp["result"] == {"pong": True}
-    assert fast_elapsed < 0.5, f"fast handler blocked for {fast_elapsed:.2f}s behind session.compress"
-
-    released.set()
+        slow.release()
 
 
 def test_dispatch_long_handler_exception_produces_error_response(capture):
@@ -138,16 +219,11 @@ def test_dispatch_long_handler_exception_produces_error_response(capture):
     def boom(rid, params):
         raise RuntimeError("kaboom")
 
-    server._methods["slash.exec"] = boom
+    with patch.dict(server._methods, {"slash.exec": boom}):
+        server.dispatch({"id": "r3", "method": "slash.exec", "params": {}})
 
-    server.dispatch({"id": "r3", "method": "slash.exec", "params": {}})
+        written = _wait_for_write(buf)
 
-    for _ in range(50):
-        if buf.getvalue():
-            break
-        time.sleep(0.01)
-
-    written = json.loads(buf.getvalue())
     assert written["id"] == "r3"
     assert written["error"]["code"] == -32000
     assert "kaboom" in written["error"]["message"]
@@ -155,9 +231,11 @@ def test_dispatch_long_handler_exception_produces_error_response(capture):
 
 def test_dispatch_unknown_long_method_still_goes_inline(server):
     """Method name not in _LONG_HANDLERS takes the sync path even if handler is slow."""
-    server._methods["some.method"] = lambda rid, params: server._ok(rid, {"ok": True})
-
-    resp = server.dispatch({"id": "r4", "method": "some.method", "params": {}})
+    with patch.dict(
+        server._methods,
+        {"some.method": lambda rid, params: server._ok(rid, {"ok": True})},
+    ):
+        resp = server.dispatch({"id": "r4", "method": "some.method", "params": {}})
 
     assert resp["result"] == {"ok": True}
 
@@ -175,25 +253,24 @@ def test_completion_handlers_are_pool_routed(completion_method, server):
 @pytest.mark.parametrize("completion_method", ["complete.path", "complete.slash"])
 def test_slow_completion_does_not_block_fast_handler(completion_method, server):
     """A slow completion RPC must not block a concurrent fast handler (#21123)."""
-    released = threading.Event()
+    slow = _GatedHandler(server, {"items": []})
 
-    def slow_completion(rid, params):
-        released.wait(timeout=5)
-        return server._ok(rid, {"items": []})
+    with patch.dict(
+        server._methods, {completion_method: slow, "fast.ping": _pong(server)}
+    ):
+        assert server.dispatch(
+            {"id": "slow", "method": completion_method, "params": {}}
+        ) is None
+        slow.wait_entered()
 
-    server._methods[completion_method] = slow_completion
-    server._methods["fast.ping"] = lambda rid, params: server._ok(rid, {"pong": True})
+        fast_resp = server.dispatch({"id": "fast", "method": "fast.ping", "params": {}})
 
-    t0 = time.monotonic()
-    assert server.dispatch({"id": "slow", "method": completion_method, "params": {}}) is None
+        assert fast_resp["result"] == {"pong": True}
+        assert not slow.finished.is_set(), (
+            f"fast handler only completed after {completion_method} returned"
+        )
 
-    fast_resp = server.dispatch({"id": "fast", "method": "fast.ping", "params": {}})
-    fast_elapsed = time.monotonic() - t0
-
-    assert fast_resp["result"] == {"pong": True}
-    assert fast_elapsed < 0.5, f"fast handler blocked for {fast_elapsed:.2f}s behind {completion_method}"
-
-    released.set()
+        slow.release()
 
 
 # The dashboard fires all four of these immediately after session.resume returns
@@ -222,34 +299,28 @@ def test_session_switch_hydration_is_pool_routed(hydration_method, server):
 @pytest.mark.parametrize("hydration_method", SESSION_SWITCH_HYDRATION_METHODS)
 def test_slow_hydration_does_not_block_fast_handler(hydration_method, server):
     """A slow hydration RPC must not block concurrent fast RPCs on the reader thread."""
-    released = threading.Event()
-
-    def slow_hydration(rid, params):
-        released.wait(timeout=5)
-        return server._ok(rid, {"entries": []})
+    slow = _GatedHandler(server, {"entries": []})
 
     # The `server` fixture deliberately does NOT restore _methods (it's populated
     # at import time), so patch.dict is what keeps this stub from leaking into
     # tests that call the real handler directly (e.g.
-    # test_trajectory_image_budget.py's snapshot test).
+    # test_trajectory_image_budget.py's snapshot test). `slow.release()` inside the
+    # `with` block is what makes that safe: `handle_request` looks the handler up at
+    # execution time, so a worker still parked in the gate when patch.dict unwound
+    # would go on to call the *real* handler.
     with patch.dict(
-        server._methods,
-        {
-            hydration_method: slow_hydration,
-            "fast.ping": lambda rid, params: server._ok(rid, {"pong": True}),
-        },
+        server._methods, {hydration_method: slow, "fast.ping": _pong(server)}
     ):
-        t0 = time.monotonic()
         assert server.dispatch(
             {"id": "slow", "method": hydration_method, "params": {}}
         ) is None
+        slow.wait_entered()
 
         fast_resp = server.dispatch({"id": "fast", "method": "fast.ping", "params": {}})
-        fast_elapsed = time.monotonic() - t0
 
         assert fast_resp["result"] == {"pong": True}
-        assert fast_elapsed < 0.5, (
-            f"fast handler blocked for {fast_elapsed:.2f}s behind {hydration_method}"
+        assert not slow.finished.is_set(), (
+            f"fast handler only completed after {hydration_method} returned"
         )
 
-        released.set()
+        slow.release()
