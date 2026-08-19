@@ -144,7 +144,12 @@ def test_inprocess_provider_ticks_and_stops():
             target=prov.start, args=(stop,), kwargs={"interval": 0}, daemon=True
         )
         t.start()
-        time.sleep(0.2)
+        # Poll for the first tick instead of sleeping a fixed 0.2s: on a
+        # heavily loaded CI runner the provider thread may not be scheduled
+        # within that window even though it is working correctly.
+        deadline = time.monotonic() + 5
+        while not calls and time.monotonic() < deadline:
+            time.sleep(0.01)
         stop.set()
         t.join(timeout=5)
 
