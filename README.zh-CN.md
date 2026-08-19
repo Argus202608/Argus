@@ -20,7 +20,7 @@ Argus 是一个实时多模态 AI Agent，可以观看共享屏幕或摄像头�
 <table>
 <tr>
 <td align="center" width="50%">
-<a href="https://www.youtube.com/watch?v=NhmocdvzQBo">
+<a href="https://www.youtube.com/watch?v=suX31-o6lLM">
   <img src="assets/demo_en.png" alt="英文演示预览" width="480"><br/>
   <b>🇬🇧 英文演示</b>（点击播放）
 </a>

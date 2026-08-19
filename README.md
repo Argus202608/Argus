@@ -21,7 +21,7 @@ Live "watch-and-chat" walkthroughs of Argus — screen share a video, ask a ques
 <table>
 <tr>
 <td align="center" width="50%">
-<a href="https://www.youtube.com/watch?v=NhmocdvzQBo">
+<a href="https://www.youtube.com/watch?v=suX31-o6lLM">
   <img src="assets/demo_en.png" alt="English demo preview" width="480"><br/>
   <b>🇬🇧 English demo</b> (click to play)
 </a>
