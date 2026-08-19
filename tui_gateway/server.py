@@ -226,6 +226,22 @@ _LONG_HANDLERS = frozenset(
         # unrelated chat streaming remain responsive.
         "multimodal.asr_start",
         "multimodal.asr_stop",
+        # Session-switch hydration. The dashboard fires all four of these
+        # immediately after session.resume returns (fetchRegistries /
+        # fetchMmSidechannel / fetchTrajectory in MultimodalChatPage). resume
+        # itself is already pool-routed, but these ran inline on the reader
+        # thread — the same thread that flushes streaming tokens — so switching
+        # sessions stalled the loop for seconds and the restored bubbles landed
+        # LATER than the resume response that was supposed to carry them.
+        # Symptom: "web 端切换 session 时候内容加载速度非常的慢", with
+        # `ws write slow (loop stalled >10.0s)` and max_send=9.47s in agent.log.
+        # trajectory.list is the heaviest (bounded at 16 MB of base64 evidence
+        # thumbnails); the other three are DB reads over the mm sidechannel
+        # tables. All four are read-only and write_json is lock-guarded.
+        "multimodal.list_registries",
+        "multimodal.list_monitor_alerts",
+        "multimodal.list_watcher_content",
+        "multimodal.trajectory.list",
         # Pet RPCs hit the network (manifest fetch / spritesheet download) or do
         # per-frame PNG decode/encode (pet.cells): inline they serialize on the
         # reader thread, so picker previews trickle in one at a time and the
@@ -246,6 +262,11 @@ _LONG_HANDLERS = frozenset(
         "projects.project_sessions",
         "session.branch",
         "session.compress",
+        # Same _history_to_messages projection session.resume runs, but it was
+        # never pool-routed — so an explicit history reload of a long monitored
+        # session (its base64 tool-result images make the projection heavy) ran
+        # inline on the WS reader thread. Route it with resume.
+        "session.history",
         "session.resume",
         "shell.exec",
         "skills.manage",
@@ -4764,7 +4785,21 @@ def _redact_tui_display_text(text: str) -> str:
         return ""
 
 
+# Redaction runs the secret-scan regex over the whole input BEFORE the cap (so
+# a credential straddling the truncation point can't be sliced into a fragment
+# the recognizer misses — see _history_tool_result's summary note). That's fine
+# for normal output but pathological on multi-MB blobs (base64 image data, a
+# giant read_file): the regex is ~10s/MB and 99.9% of it is discarded by the
+# cap. Pre-trim to a window FAR larger than the visible tail (last 1000 chars /
+# 16 lines) so credential matching around the shown text is unaffected, while
+# megabytes of never-shown prefix never reach the regex. The image path already
+# strips base64 before it gets here; this is the generic backstop.
+_TUI_VERBOSE_REDACT_MAX_CHARS = 64 * 1024
+
+
 def _redact_tui_verbose_text(text: str) -> str:
+    if len(text) > _TUI_VERBOSE_REDACT_MAX_CHARS:
+        text = text[-_TUI_VERBOSE_REDACT_MAX_CHARS:]
     return _cap_tui_verbose_text(_redact_tui_display_text(text))
 
 
@@ -4786,6 +4821,26 @@ def _tool_result_text(result: object) -> str:
     return _redact_tui_verbose_text(raw)
 
 
+def _strip_content_image_parts(content: list) -> list:
+    """Replace multimodal image parts with a text placeholder, in O(parts).
+
+    Used on the tool-result history-projection path so a ~3.8 MB base64
+    ``image_url`` never reaches ``_coerce_message_text`` (which would inline the
+    whole data: URL) nor the secret redactor (which scans it for ~10s). Cheap:
+    it inspects each part's ``type`` — it never touches the base64 payload
+    itself. Returns a new list; non-image parts are passed through unchanged.
+    """
+    out: list = []
+    for part in content:
+        if isinstance(part, dict) and part.get("type") in {
+            "image_url", "input_image", "image",
+        }:
+            out.append({"type": "text", "text": "[image]"})
+        else:
+            out.append(part)
+    return out
+
+
 def _history_tool_result(name: str, content: object) -> tuple[str, str]:
     """Project a persisted tool result into ``(body, summary)`` for a client.
 
@@ -4804,7 +4859,19 @@ def _history_tool_result(name: str, content: object) -> tuple[str, str]:
     if content is None:
         return "", ""
 
-    raw = content if isinstance(content, str) else _coerce_message_text(content)
+    # Tool results can carry multimodal parts — get_current_frame returns a
+    # ~2.5-3.8 MB base64 image_url per call, and a monitored session accumulates
+    # ~10 of them. Those images are never rendered from the history body (the
+    # cap below keeps only a meaningless 1000-char base64 tail); worse, feeding
+    # the raw data: URL into _redact_tui_display_text runs the secret-scan regex
+    # over multiple megabytes of base64 — ~10s PER image, ~62s per resume of a
+    # long monitored session, all on the WS loop (session.history) or delaying
+    # time-to-content (session.resume). Collapse image parts to a placeholder
+    # BEFORE building the string so the redactor never sees the base64.
+    if isinstance(content, list):
+        raw = _coerce_message_text(_strip_content_image_parts(content))
+    else:
+        raw = content if isinstance(content, str) else _coerce_message_text(content)
     if not raw.strip():
         return "", ""
 
@@ -10725,6 +10792,9 @@ def _maybe_start_monitor_engine(sid: str, session: dict, frame_buffer):
 
         def _speak_cb(mid, m, text):
             lock = session.get("history_lock")
+            _evidence = m.get("_delivery_evidence")
+            if not isinstance(_evidence, dict):
+                _evidence = None
             # ★ 二选一: 命中后【要么】触发主 Agent (hook)【要么】只弹提醒气泡, 不并存。
             #   hook_main_agent 使能 → 只走 hook, 不发气泡 / 不写 context / 不 TTS
             #   (否则 reopen 会重建出一条本不该有的气泡)。
@@ -10790,7 +10860,11 @@ def _maybe_start_monitor_engine(sid: str, session: dict, frame_buffer):
             # session.running or blocking/being dropped by user conversation.
             _emit("message.start", sid, tag)
             _emit("message.delta", sid, {**tag, "text": text})
-            _emit("message.complete", sid, {**tag, "text": text})
+            _emit("message.complete", sid, {
+                **tag,
+                "text": text,
+                "evidence": copy.deepcopy(_evidence),
+            })
             # Persist to the sidechannel DB (NOT session["history"]). The main
             # agent never sees these alerts (they go to the right multimodal
             # panel via list_mm_monitor_alerts on session.resume). The
@@ -10802,7 +10876,9 @@ def _maybe_start_monitor_engine(sid: str, session: dict, frame_buffer):
                         if _side_db is not None:
                             _side_db.insert_mm_monitor_alert(
                                 _durable_sid, monitor_id=str(mid),
-                                text=text, label=_lbl or None)
+                                text=text, label=_lbl or None,
+                                evidence=copy.deepcopy(_evidence),
+                            )
             except Exception as _exc:
                 logger.debug("[mm-monitor] sidechannel write failed: %s", _exc)
             live = (getattr(agent, "mm_monitors", None) or {}).get(mid)
@@ -13927,7 +14003,7 @@ def _(rid, params: dict) -> dict:
     entirely — these live in the mm_monitor_alerts sidechannel table.
 
     params: {session_id}
-    returns: {alerts: [{monitor_id, text, label, wall_ts}, ...]}
+    returns: {alerts: [{monitor_id, text, label, wall_ts, evidence}, ...]}
     """
     session, err = _sess_nowait(params, rid)
     if err:

@@ -384,7 +384,15 @@ describe('multimodal main-session binding', () => {
       watchers: [{ watcher_id: 'watcher-B' }]
     })
     pending.get('runtime-B:multimodal.list_monitor_alerts')!.resolve({
-      alerts: [{ monitor_id: 'monitor-B', text: 'alert-B', wall_ts: 2 }]
+      alerts: [{
+        monitor_id: 'monitor-B',
+        text: 'alert-B',
+        wall_ts: 2,
+        evidence: {
+          input_count: 9,
+          frames: [{ ts: 4, source_type: 'screen', thumb_b64: 'dGh1bWI=' }]
+        }
+      }]
     })
     await flush()
     pending.get('runtime-B:multimodal.list_watcher_content')!.resolve({
@@ -396,6 +404,11 @@ describe('multimodal main-session binding', () => {
     expect($mmMonitors.get().map(item => item.monitor_id)).toEqual(['monitor-B'])
     expect($mmWatchers.get().map(item => item.watcher_id)).toEqual(['watcher-B'])
     expect($mmMonitorAlerts.get()['monitor-B']?.map(item => item.text)).toEqual(['alert-B'])
+    expect($mmMonitorAlerts.get()['monitor-B']?.[0]?.evidence).toEqual({
+      input_count: 9,
+      shown_count: 1,
+      frames: [{ ts: 4, source_type: 'screen', thumb_b64: 'dGh1bWI=' }]
+    })
     expect($mmWatcherReports.get()['watcher-B']?.map(item => item.text)).toEqual(['report-B'])
     expect($mmBgItems.get().map(item => item.requestId)).toEqual(['watcher-B'])
 

@@ -2014,6 +2014,8 @@ export interface Translations {
       completedOnceHint: string
       fallbackLabel: string
       alertsTitle: string
+      evidenceSummary: (inputCount: number, shownCount: number) => string
+      evidenceFrame: (index: number) => string
       expandMore: (n: number) => string
       collapse: string
     }

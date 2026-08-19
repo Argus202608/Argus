@@ -36,8 +36,10 @@ The monitor registry (``agent.mm_monitors``) is shared by reference with
 from __future__ import annotations
 
 import asyncio
+import base64
 from concurrent.futures import Future, TimeoutError as FutureTimeoutError
 import contextvars
+from io import BytesIO
 import inspect
 import json
 import logging
@@ -55,9 +57,91 @@ log = logging.getLogger("hermes.multimodal.monitor")
 # 每轮 eval 新帧上限: ≤ 此值全送, 超过即判拥塞降采样。采集 2fps → 32 帧 ≈ 16s 画面量,
 # 即"攒够 16 秒还没评估完"就算拥塞 (原为 64=32s, 对单请求图量偏大)。
 _MM_MONITOR_MAX_WINDOW = 32
+# A SPEAK alert is durable UI evidence, not another copy of the full model
+# payload. Keep a uniformly sampled strip small enough to hydrate safely on
+# session reopen while still showing the beginning, middle and end of the
+# exact frame batch the model evaluated.
+_MM_MONITOR_EVIDENCE_MAX_FRAMES = 6
+_MM_MONITOR_EVIDENCE_MAX_SIDE = 320
+_MM_MONITOR_EVIDENCE_JPEG_QUALITY = 58
+_MM_MONITOR_EVIDENCE_MAX_B64_CHARS = 600_000
 # 持续拥塞时抽样步长几何翻倍 (stride 1→2→4→…); 达到此翻倍次数仍未缓解 → 放弃, 只送尾 2 帧。
 # cap=32 时 stride 到 32 (=2^5) 即已把整窗抽成 1 帧, 所以 5 次翻倍就够; 取 5 与 cap 对齐。
 _MM_MONITOR_MAX_DOUBLINGS = 5
+
+
+def _uniform_sample(items: list, limit: int) -> list:
+    """Return at most *limit* evenly-spaced items, including both ends."""
+    if limit <= 0 or not items:
+        return []
+    if len(items) <= limit:
+        return list(items)
+    if limit == 1:
+        return [items[-1]]
+    indexes = [round(i * (len(items) - 1) / (limit - 1)) for i in range(limit)]
+    return [items[i] for i in indexes]
+
+
+def _monitor_evidence_thumb(jpeg_b64: str) -> str:
+    """Create a bounded UI-only thumbnail; failures never retain the original."""
+    try:
+        from PIL import Image
+
+        raw = base64.b64decode(jpeg_b64, validate=True)
+        image = Image.open(BytesIO(raw)).convert("RGB")
+        if max(image.size) > _MM_MONITOR_EVIDENCE_MAX_SIDE:
+            resampling = getattr(Image, "Resampling", Image)
+            image.thumbnail(
+                (_MM_MONITOR_EVIDENCE_MAX_SIDE, _MM_MONITOR_EVIDENCE_MAX_SIDE),
+                resampling.LANCZOS,
+            )
+        out = BytesIO()
+        image.save(
+            out,
+            format="JPEG",
+            quality=_MM_MONITOR_EVIDENCE_JPEG_QUALITY,
+            optimize=True,
+        )
+        return base64.b64encode(out.getvalue()).decode("ascii")
+    except Exception:
+        return ""
+
+
+def build_monitor_evidence(frames: list) -> dict:
+    """Build the durable evidence strip from the exact model-input frames."""
+    rows = []
+    used_chars = 0
+    for frame in _uniform_sample(frames, _MM_MONITOR_EVIDENCE_MAX_FRAMES):
+        thumb = _monitor_evidence_thumb(str(getattr(frame, "jpeg_b64", "") or ""))
+        if not thumb or used_chars + len(thumb) > _MM_MONITOR_EVIDENCE_MAX_B64_CHARS:
+            continue
+        used_chars += len(thumb)
+        rows.append({
+            "ts": float(getattr(frame, "ts", 0.0) or 0.0),
+            "source_type": str(getattr(frame, "source_type", "") or ""),
+            "thumb_b64": thumb,
+        })
+    return {
+        "input_count": len(frames),
+        "shown_count": len(rows),
+        "frames": rows,
+    }
+
+
+def merge_monitor_evidence(current: Optional[dict], incoming: Optional[dict]) -> dict:
+    """Merge aggregation-window evidence without allowing image growth."""
+    left = current if isinstance(current, dict) else {}
+    right = incoming if isinstance(incoming, dict) else {}
+    combined = [
+        row for row in list(left.get("frames") or []) + list(right.get("frames") or [])
+        if isinstance(row, dict) and row.get("thumb_b64")
+    ]
+    rows = _uniform_sample(combined, _MM_MONITOR_EVIDENCE_MAX_FRAMES)
+    return {
+        "input_count": int(left.get("input_count") or 0) + int(right.get("input_count") or 0),
+        "shown_count": len(rows),
+        "frames": rows,
+    }
 
 
 def _model_prefers_portable_chat_params(model: str) -> bool:
@@ -798,7 +882,12 @@ class MonitorEngine:
                 return True
             if (pending.get("delivery_required")
                     and not pending.get("delivery_accepted")):
-                if not self._speak(mid, live, str(pending.get("reason") or "")):
+                if not self._speak(
+                    mid,
+                    live,
+                    str(pending.get("reason") or ""),
+                    evidence=pending.get("evidence"),
+                ):
                     if not live.get("_once_delivery_error_notified"):
                         live["_once_delivery_error_notified"] = True
                         self._notify(
@@ -998,9 +1087,11 @@ class MonitorEngine:
         #   原先 ÷2 + q70 重编码会把屏幕文字压糊 (512px + 双重 JPEG artifact) → 误识别。
         #   帧数已被 ≤32 窗口 + 拥塞降采样控住，无需再靠缩图省 token。
         frame_parts = []
+        model_frames = []
         for f in picked:
             try:
                 frame_parts.append(frame_to_image_content(f))
+                model_frames.append(f)
             except Exception:
                 continue
         if not frame_parts:
@@ -1018,7 +1109,7 @@ class MonitorEngine:
             brief=brief,
             n_new_frames=len(new_frames),
             n_frames=len(frame_parts),
-            frame_ts=[float(f.ts) for f in picked],
+            frame_ts=[float(f.ts) for f in model_frames],
             source_type=str(getattr(buf, "current_source_type", "") or ""),
         )
 
@@ -1123,14 +1214,28 @@ class MonitorEngine:
             len(raw or ""), _completion_tokens, _reasoning_tokens,
             _invalid_preview,
         )
-        self._emit_progress(
-            mid,
-            "verdict",
-            hit=bool(hit),
-            reason=text,
-            raw=(raw or "")[:4000],
-            frame_ts=[float(f.ts) for f in picked],
+        # ★ 2026-08-19: 卸到线程池。build_monitor_evidence 对 6 帧做
+        #   base64 解码 + PIL LANCZOS 缩放 + JPEG 重编码, 实测同步阻塞
+        #   1080p 94ms / 1440p 157ms / MBP Retina 全屏 290ms。这里是 engine
+        #   私有 loop (见模块 docstring: 一线程一 loop, 多 monitor 的 vision
+        #   调用靠 await 重叠), 同步跑会让同 loop 上其它 monitor 的 tick 一起
+        #   等这 0.3s —— 正好削掉"不在一个线程上串行"这个设计点。
+        evidence = (
+            await asyncio.to_thread(build_monitor_evidence, model_frames)
+            if hit else None
         )
+        verdict_payload = {
+            "hit": bool(hit),
+            "reason": text,
+            "raw": (raw or "")[:4000],
+            "frame_ts": [float(f.ts) for f in model_frames],
+        }
+        if evidence:
+            # Memory Debug consumes the same bounded strip. SILENT evaluations
+            # intentionally remain metadata-only so a long-running monitor
+            # cannot accumulate image bytes every tick.
+            verdict_payload["input_frame_count"] = evidence["input_count"]
+            verdict_payload["frames"] = evidence["frames"]
         # Commit the verdict under the same per-monitor lock used by CRUD. The
         # model call intentionally ran without this lock; revision + identity
         # form the CAS that rejects results from an older query/mode. Holding the
@@ -1151,6 +1256,10 @@ class MonitorEngine:
                     current_revision=_monitor_revision(m),
                 )
                 return
+            # Emit only after the revision CAS succeeds. This keeps both the
+            # text verdict and its evidence images out of a replacement
+            # monitor's Debug stream when set_monitor wins the post-LLM race.
+            self._emit_progress(mid, "verdict", **verdict_payload)
 
             # Only a successful response for the currently live contract may
             # clear its error latch/circuit-breaker streak. A stale success from
@@ -1215,6 +1324,7 @@ class MonitorEngine:
                     "delivery_required": not bool(m.get("silent", False)),
                     "delivery_accepted": bool(m.get("silent", False)),
                     "delivered": False,
+                    "evidence": evidence,
                 }
                 self._retry_once_completion(mid, m)
                 return
@@ -1228,8 +1338,11 @@ class MonitorEngine:
                 if not m.get("_agg_buf"):
                     m["_agg_window_start"] = time.time()
                 m.setdefault("_agg_buf", []).append((time.time(), text))
+                m["_agg_evidence"] = merge_monitor_evidence(
+                    m.get("_agg_evidence"), evidence,
+                )
                 return
-            self._speak(mid, m, text)
+            self._speak(mid, m, text, evidence=evidence)
 
     # ------------------------------------------------------------------ #
     async def _flush_aggregate(self, mid: str, m: dict, mm: dict) -> None:
@@ -1241,10 +1354,12 @@ class MonitorEngine:
         """
         buf_list = list(m.get("_agg_buf") or [])
         digest = fmt_agg(buf_list)
-        if digest and self._speak(mid, m, digest):
+        evidence = m.get("_agg_evidence")
+        if digest and self._speak(mid, m, digest, evidence=evidence):
             live = self.monitors.get(mid)
             if live is not None:
                 live["_agg_buf"] = []
+                live.pop("_agg_evidence", None)
                 live["_agg_window_start"] = 0.0
                 if _trigger_mode(live) == "once":
                     self._complete_once(
@@ -1292,14 +1407,31 @@ class MonitorEngine:
             except Exception:
                 return ""
 
-    def _speak(self, mid: str, m: dict, text: str) -> bool:
+    def _speak(
+        self,
+        mid: str,
+        m: dict,
+        text: str,
+        *,
+        evidence: Optional[dict] = None,
+    ) -> bool:
         if self._speak_cb is None:
             return False
+        previous = m.get("_delivery_evidence")
+        if evidence:
+            m["_delivery_evidence"] = evidence
+        else:
+            m.pop("_delivery_evidence", None)
         try:
             return bool(self._speak_cb(mid, m, text))
         except Exception as exc:
             log.debug("[mm-monitor] speak_cb failed (%s): %s", mid, exc)
             return False
+        finally:
+            if previous is None:
+                m.pop("_delivery_evidence", None)
+            else:
+                m["_delivery_evidence"] = previous
 
     def _notify(self, kind: str, mid: str, m: dict, text: str) -> None:
         # Always record to the event file so the timeline stays truthful.

@@ -153,7 +153,7 @@ class Config:
     #   四件套 + 数值参数, 与 memory/monitor/recall 对齐:
     #     embedding_base_url 空 → 全局关闭 embedding: Writer/Reviewer 不算,
     #     MemoryToolBox.search_* 走纯关键词兜底 (与改造前行为一致).
-    #     填了 → 启用混合检索: Writer/Reviewer 后台算并落库, search_micro/entity
+    #     填了 → 启用混合检索: Writer/Reviewer 后台算并落库, search_events/search_entity
     #     用关键词×向量 RRF 融合排序. text-embedding-v3 支持 dimensions 参数
     #     (256/512/768/1024), 默认 1024 与 DashScope 官方推荐一致.
     embedding_provider: str = ""              # "openai" / "custom" / "" (空=关闭)
@@ -208,7 +208,10 @@ class Config:
     # 混合检索融合参数 (只在 embedding 启用时生效)
     recall_hybrid_enabled: bool = True        # False → 只用关键词 (即便 embedding 已算好)
     recall_vector_topk: int = 30              # 关键词 / 向量各路先取 top_k, 再 RRF 融合
-    recall_rrf_k: int = 60                    # RRF 常数, 论文推荐 60
+    # RRF 常数。原论文的 60 是在 ~1000 条结果的 TREC run 上调的; 这里两路各
+    # recall_vector_topk=30 条, k=60 会把 rank1 与 rank30 的差距压到只有 1.47x,
+    # 等于把两路的排序信息大半抹平。k=20 时该比值回到 2.43x。
+    recall_rrf_k: int = 20
     # ★ Gemini 慢 + runway 偶尔挂: 连续 N 次 wake 失败就停掉 MemoryWriter loop,
     #   推 memory_writer_dead 事件给前端弹错 (避免大规模测试时 agent 假活).
     memory_max_consecutive_failures: int = 10

@@ -31,7 +31,7 @@ from io import BytesIO
 from types import SimpleNamespace
 from typing import (
     Any, AsyncIterator, Awaitable, Callable, Deque, Dict, List,
-    Optional, Set, Tuple,
+    Optional, Sequence, Set, Tuple, TypeVar,
 )
 
 try:
@@ -735,6 +735,39 @@ class ToolBox:
 # =========================================================================== #
 _DISTILL_OBS_CAP = 8000  # 内部 distill prompt 证据上限；不把全文复制到 UI 轨迹。
 
+#: 向量路余弦相似度地板。vector_search_* 无论最佳匹配多差都会返回 top-N, 所以
+#: 没有地板时, 一个语义上根本无关的提问也会拿到 N 条"看起来排名不错"的结果。
+_RRF_VEC_MIN_SIM = 0.25
+#: 融合时相似度的加权系数 (见 MemoryToolBox._rrf_fuse)。量级刻意压在
+#: 1/(k+rank) 的差值附近: 只做同 rank 内的次序修正, 不掀翻 rank 主干。
+_RRF_SIM_BONUS_W = 0.02
+
+#: ``get_audio_around`` 的 window_sec / 行数硬上限。这两个参数由召回 LLM 自由
+#: 填写, 而底层 get_audio_observations_in_range 只按时间过滤、不限行数 —— 一个
+#: window_sec=9999 的调用会把整场字幕拉成一个 tool block, 挤掉同轮其他工具的
+#: 证据额度 (见 _pack_obs_blocks)。这里在工具边界上夹一刀。
+_AUDIO_AROUND_MAX_WINDOW_SEC = 180.0
+_AUDIO_AROUND_MAX_ROWS = 40
+
+
+def _clip_audio_rows_around(rows: List["Turn"], t_center: float,
+                            max_rows: int) -> Tuple[List["Turn"], int]:
+    """Keep at most ``max_rows`` turns nearest ``t_center``, back in time order.
+
+    Dropping the tail would silently lose everything after the centre; keeping
+    the temporally closest rows preserves the actual point of a "±window" query.
+    Returns ``(rows, n_dropped)``.
+    """
+    if max_rows <= 0 or len(rows) <= max_rows:
+        return rows, 0
+    n_dropped = len(rows) - max_rows
+    kept = sorted(
+        rows,
+        key=lambda t: abs(float(t.rel_ts or 0.0) - float(t_center)),
+    )[:max_rows]
+    kept.sort(key=lambda t: float(t.rel_ts or 0.0))
+    return kept, n_dropped
+
 
 def _truncate_obs(raw_obs: str, cap: int = _DISTILL_OBS_CAP) -> str:
     """Truncate an observation for the distill prompt, marking the cut visibly.
@@ -753,6 +786,80 @@ def _truncate_obs(raw_obs: str, cap: int = _DISTILL_OBS_CAP) -> str:
         f"\n\n[observation truncated here; {len(raw_obs) - cap} chars omitted. "
         "Later tool output is not fully shown. Distill only the content above "
         "and do not infer that there is no more information.]")
+
+
+#: 单个 tool block 被截断时追加的说明。分配额度时要为它预留位置, 所以预留量
+#: 直接由模板本身算出 (而不是手写一个魔数常量, 那样改文案就会静默超预算)。
+_OBS_CUT_MARKER = (
+    "\n[this tool's output was clipped to its share of the shared evidence "
+    "budget; {n} chars omitted. Do NOT conclude from this block that the tool "
+    "found nothing — narrow the query or the time window to see more.]")
+_OBS_CUT_MARKER_RESERVE = len(_OBS_CUT_MARKER.format(n="9" * 12))
+
+
+def _pack_obs_blocks(blocks: Sequence[Tuple[str, str]],
+                     cap: int = _DISTILL_OBS_CAP) -> str:
+    """Concatenate per-tool observations under ``cap`` with a max-min fair share.
+
+    Running ``_truncate_obs`` over a plain ``"\\n\\n".join(...)`` is
+    first-come-first-served: the blocks sit in tool-call order, so one verbose
+    tool (a wide ``get_audio_around`` window, a keyword hit list of full ASR
+    lines, a big OCR dump) can eat the whole budget and every later tool in the
+    SAME round is cut down to nothing. The distill model then reports "no useful
+    information" for tools that actually returned the answer — and since that
+    verdict is per round and the sentinel makes the round contribute no clue at
+    all, the evidence is lost for good rather than merely deferred.
+
+    Max-min fair allocation fixes the ordering dependency: walk the blocks
+    smallest-first and hand each one an equal share of whatever budget is left,
+    so short blocks always survive whole and their unused share waterfalls down
+    to the long ones. Only blocks that are genuinely oversized get cut, and each
+    such block carries its own visible marker, so the model can tell "this tool
+    was clipped" apart from "this tool found nothing".
+    """
+    if not blocks:
+        return ""
+    n = len(blocks)
+    heads = [str(lbl or "") for lbl, _ in blocks]
+    bodies = [str(body or "") for _, body in blocks]
+    # Label line + its newline for each block, plus the "\n\n" separators.
+    overhead = sum(len(h) + 1 for h in heads) + 2 * (n - 1)
+
+    def _alloc(budget: int) -> List[int]:
+        out = [0] * n
+        left = max(0, budget)
+        for k, i in enumerate(sorted(range(n), key=lambda j: len(bodies[j]))):
+            take = min(len(bodies[i]), left // (n - k))
+            out[i] = take
+            left -= take
+        return out
+
+    body_budget = cap - overhead
+    alloc = _alloc(body_budget)
+    # The cut markers are themselves prompt text; re-allocate once with room
+    # reserved for exactly the blocks that turned out to need one, so the packed
+    # result still respects ``cap`` without over-reserving in the common case
+    # where nothing is truncated.
+    n_cut = sum(1 for b, a in zip(bodies, alloc) if len(b) > a)
+    if n_cut:
+        alloc = _alloc(body_budget - _OBS_CUT_MARKER_RESERVE * n_cut)
+
+    out: List[str] = []
+    really_cut = 0
+    for h, body, a in zip(heads, bodies, alloc):
+        if len(body) <= a:
+            out.append(f"{h}\n{body}")
+            continue
+        really_cut += 1
+        keep = max(0, a)
+        out.append(f"{h}\n{body[:keep]}"
+                   + _OBS_CUT_MARKER.format(n=len(body) - keep))
+    if really_cut:
+        log.info(
+            "[recall] obs budget %d chars over %d tool blocks: %d clipped "
+            "(fair share ~%d chars each)",
+            cap, n, really_cut, max(0, body_budget) // n)
+    return "\n\n".join(out)
 
 
 def _date_preamble() -> str:
@@ -1794,11 +1901,13 @@ summaries and screen/OCR evidence.
 Available tools, all scoped to the ask_ts time snapshot:
 
 Visual / event graph
-- search_by_time(t_start, t_end): find micro events in a time window.
+- search_events(query?, t_start?, t_end?, macro_id?, top_k): the single entry
+  point for micro events. Pass `query` for keyword + semantic search, or
+  `t_start`/`t_end` for a time slice, or `macro_id` (echoed as `macro=mac_xxx`
+  on every event line) to expand that whole segment. You may pass `query`
+  together with a window to search inside it.
 - search_entity(query, top_k): keyword + semantic vector search for objects;
   returns ids like `ent_xxx`.
-- search_micro(query, top_k): keyword + semantic vector search over micro
-  descriptions.
 - search_frames_by_text(query, top_k): text-to-image retrieval over persisted
   key frames. Use it when the query describes how something looked but the text
   description may not contain it, such as "odd vehicle" or "red device".
@@ -1809,22 +1918,25 @@ Visual / event graph
   goals, artifacts, decisions, blockers, next actions, and evidence frames. If
   the task_id is unknown, pass a query or leave it empty for recent tasks.
 - get_entity_context(entity_id, events_limit=20, frames_limit=20,
-  timeline_limit=30): full context for an object/person: events, key frames,
-  and timeline. First call search_entity and copy the `ent_xxx` id.
-- get_artifact_context(entity_id, events_limit=20, frames_limit=20,
-  timeline_limit=30): desktop artifact context for FILE/WEBPAGE/DOCUMENT/
-  SPREADSHEET/TICKET/CODE_SYMBOL entities. First find the `ent_xxx`.
+  timeline_limit=30, include_screen_text=false, include_relations=false): full
+  context for an object/person/artifact: events, key frames, and timeline. First
+  call search_entity and copy the `ent_xxx` id. Optional sections:
+  * include_screen_text=true — also search desktop OCR for this entity's name.
+    Use it for FILE/WEBPAGE/DOCUMENT/SPREADSHEET/TICKET/CODE_SYMBOL entities.
+  * include_relations=true — also list this entity's 1-hop graph edges.
+  * any of events_limit/frames_limit/timeline_limit set to 0 skips that section;
+    e.g. events_limit=0, frames_limit=0 gives the evolution timeline only.
+  Ask for what you need in one call instead of spending a round per section.
 - get_entities_in_micro(micro_id, top_k=15): reverse lookup of PERSON/OBJECT
   entities present in an event.
-- get_relations(node_id, max_hops)
-- get_subgraph(macro_id): use only when you definitely have a macro_id.
 
 ASR transcript
-- search_audio(query, top_k=8): keyword search over ASR transcript. Each hit
-  includes nearby transcript, persisted key frames around the time, OCR,
-  micro/macro context, and related entities. Prefer this evidence bundle for
-  cross-modal questions such as "what was on screen when X was said".
-- get_audio_around(t, window_sec=30): transcript around a timestamp.
+- search_audio(query?, t?, window_sec=30, top_k=8): the single entry point for
+  the ASR transcript. Pass `query` for keyword search — each hit includes nearby
+  transcript, persisted key frames around the time, OCR, micro/macro context,
+  and related entities, so prefer it for cross-modal questions such as "what was
+  on screen when X was said". Pass `t` (with optional window_sec, max 180) for
+  the raw transcript around a timestamp. Pass both to search inside a window.
 
 Speaker-attributed quotes
 - get_quotes_by_entity(entity_id, top_k=10): quotes spoken by one PERSON.
@@ -1836,27 +1948,27 @@ First-round routing for factual attribute questions
   color, configuration, parameter, version, model, function, advantage, or
   drawback that can be verified from the video/history, the first round must
   call these three channels in parallel with the same core entity + attribute:
-  search_micro, search_screen_text, and search_audio.
+  search_events, search_screen_text, and search_audio.
 - A query like "did the video introduce seat heating for this car" is still a
   factual attribute question; do not search only audio/quotes.
 - Use search_quotes_by_text first only for speaker attribution or verbatim quote
   questions such as "who said X" or "what exactly did person Y say".
 - If search_audio or search_quotes_by_text is empty, do not keep repeating it
-  with tiny rewrites. Expand to search_micro/search_screen_text, and if you
+  with tiny rewrites. Expand to search_events/search_screen_text, and if you
   found an entity_id, call get_entity_context.
 
 Standard object lookup
 1. search_entity("keywords") and copy the returned `ent_xxx`.
-2. get_entity_context(ent_xxx) for events, frames, and timeline.
-Do not call get_subgraph(entity_id); it expects a macro_id.
+2. get_entity_context(ent_xxx) for events, frames, and timeline. Add
+   include_relations=true if you also need what it is connected to.
 
 Desktop / screen-share lookup
 1. get_task_context(query="question keywords") for task state and decisions.
 2. search_screen_text("filename/error/function/title/number/PR/table column") for
    exact screen text.
 3. search_entity("file/webpage/PR/ticket/code symbol/document") then
-   get_artifact_context(ent_xxx).
-4. Use search_frames_by_text/search_by_time for visual appearance or only when
+   get_entity_context(ent_xxx, include_screen_text=true).
+4. Use search_frames_by_text/search_events for visual appearance or only when
    text evidence fails. Do not start office questions with frame search.
 
 Paper/PDF/slide/table/figure questions
@@ -1865,7 +1977,8 @@ Paper/PDF/slide/table/figure questions
   names, or numeric labels.
 - If search_screen_text only proves that a figure/table contains the topic but
   not the concrete labels/numbers, do not conclude that the content is absent.
-  Use search_frames_by_text or search_by_time around the matched frame.
+  Use search_frames_by_text, or search_events with a window around the matched
+  frame's timestamp.
 - For small chart labels, legends, pie-slice labels, and table cells, trust
   OCR/visual evidence over paper commonsense or benchmark names.
 - Final useful_info/recall_findings for table questions must include row-level
@@ -1873,21 +1986,23 @@ Paper/PDF/slide/table/figure questions
   OCR snippets. Do not answer table questions from captions alone.
 
 Scene-bound person/object lookup
-1. search_micro("scene keywords") or search_audio("quote keywords") to get a
-   micro_id or timestamp.
+1. search_events(query="scene keywords") or search_audio(query="quote keywords")
+   to get a micro_id or timestamp.
 2. get_entities_in_micro(micro_id) to identify who/what was present.
 3. get_entity_context(ent_xxx) to inspect the entity timeline and earlier/later
    appearance.
+4. If one event is not enough context, take its `macro=mac_xxx` and call
+   search_events(macro_id="mac_xxx") to see the whole segment.
 
 Dialogue lookup
-1. search_audio("keywords") to locate transcript hits with timestamps.
-2. search_by_time(t-N, t+N) for the visual/event context at that time.
-3. get_audio_around(t, 30) for the surrounding dialogue.
+1. search_audio(query="keywords") to locate transcript hits with timestamps.
+2. search_events(t_start=t-N, t_end=t+N) for the visual/event context there.
+3. search_audio(t=t, window_sec=30) for the surrounding dialogue verbatim.
 
 Tool choice
-- search_audio/get_audio_around are on-demand peers of visual tools. Do not
-  ignore visual evidence just because the query says "said/talked/mentioned",
-  and do not ignore audio when the user asks what was heard.
+- search_audio is an on-demand peer of the visual tools. Do not ignore visual
+  evidence just because the query says "said/talked/mentioned", and do not
+  ignore audio when the user asks what was heard.
 - If the query asks what was heard/said/discussed, use audio.
 - If it asks what was seen/held/which object, use visual tools.
 - If it needs both, use both and cross-check.
@@ -2437,6 +2552,30 @@ def _sample_frames_uniform(frames: List[Frame], max_n: int) -> List[Frame]:
         if 0 <= idx < len(frames) and idx not in seen:
             seen.add(idx)
             out.append(frames[idx])
+    return out
+
+
+_T = TypeVar("_T")
+
+
+def _sample_uniform(items: List[_T], max_n: int) -> List[_T]:
+    """Uniformly sample up to ``max_n`` items from a sorted list, keeping the
+    first and last. Same policy as :func:`_sample_frames_uniform` but generic;
+    used for sparse whole-session micro sampling in the Reviewer."""
+    if not items or max_n <= 0:
+        return []
+    if len(items) <= max_n:
+        return list(items)
+    if max_n == 1:
+        return [items[len(items) // 2]]
+    step = (len(items) - 1) / (max_n - 1)
+    seen: Set[int] = set()
+    out: List[_T] = []
+    for i in range(max_n):
+        idx = round(i * step)
+        if 0 <= idx < len(items) and idx not in seen:
+            seen.add(idx)
+            out.append(items[idx])
     return out
 
 
@@ -5250,6 +5389,8 @@ class MemoryReviewer:
     ALLOWED_OPS: Optional[set] = None           # None = 允许全部 op (基类兜底行为)
     ROLE_PROMPT_SUFFIX: str = ""
     INCLUDE_ENTITY_VISUALS: bool = True
+    #: 稀疏全程样本条数 (在 recent 窗之前的整段历史上均匀抽这么多条 micro)。
+    EARLY_MICRO_SAMPLE_N: int = 20
 
     def __init__(self, cfg: Config, store: SearchFactStore, mem: MemoryStore,
                  client: MemoryLLMClient, buf: FrameBuffer,
@@ -5440,20 +5581,41 @@ class MemoryReviewer:
                     f"label={m.label!r} summary={m.summary!r}"
                     f" key_entities=[{ke}]{arc_brief}")
 
-        # early 取最近 20 个稀疏样本, 别太多
-        early_sample = early_micros[-20:]
+        # ★ 采样与时间序修复。改之前这里是 `early_micros[-20:]`, 而
+        #   get_micro_by_time() 返回的是 ORDER BY t_end DESC —— 在降序列表上取尾部
+        #   等于取"最老的 20 条", 于是 EventReviewer 每 120s 醒来都在反复复查会话
+        #   开头那几条 micro, 中间时段永远进不了视野 (recent 窗只覆盖最后 300s)。
+        #   这里改成: 先升序, 再在整个 early 区间上均匀抽样, 这才对得上下面
+        #   "Sparse Whole-Session Micro Samples / for cross-segment merge checks"
+        #   这个 block 的本意。
+        #   另外 recent/early 两个列表都必须升序进 prompt: 主帧那边是
+        #   `sorted(pool.values(), key=lambda f: f.ts)` 升序, 文本却是降序, 同一个
+        #   prompt 里图文时间轴反向。而 EventReviewer 最吃时序的两个 op
+        #   (merge_micros 判"是否相邻同一事件"、split_micro 要产出 t_start/t_end)
+        #   正是被这个错位直接伤到的。
+        recent_micros_asc = sorted(recent_micros, key=lambda m: m.t_start)
+        early_micros_asc = sorted(early_micros, key=lambda m: m.t_start)
+        early_sample = _sample_uniform(early_micros_asc, self.EARLY_MICRO_SAMPLE_N)
 
-        recent_micros_text = "\n".join(_fmt_micro(m) for m in recent_micros) or "  (none)"
+        recent_micros_text = "\n".join(_fmt_micro(m) for m in recent_micros_asc) or "  (none)"
         early_micros_text = "\n".join(_fmt_micro(m) for m in early_sample) or "  (none)"
-        macros_text = "\n".join(_fmt_macro(m) for m in recent_macros) or "  (none)"
+        # macro 同样升序: 让文本时间轴与主帧 (升序) 一致。entities 保持
+        # last_seen DESC —— 那是"最近见过的优先"的相关性排序, 不是时间轴。
+        macros_text = "\n".join(
+            _fmt_macro(m) for m in sorted(recent_macros, key=lambda m: m.t_start)
+        ) or "  (none)"
         ents_text = "\n".join(_fmt_ent(e) for e in recent_ents) or "  (none)"
 
         text = (
             f"### Reviewer Anchor: anchor_ts={anchor_ts:.1f}s "
             f"(round={self._round + 1}, triggered_by={triggered_by})\n\n"
+            "All timeline lists below and the frames further down are in "
+            "chronological order (oldest first).\n\n"
             f"### Recent {int(recent_window_sec)}s Micros ({len(recent_micros)} items)\n"
             f"{recent_micros_text}\n\n"
-            f"### Sparse Whole-Session Micro Samples ({len(early_sample)} items, for cross-segment merge checks)\n"
+            f"### Sparse Whole-Session Micro Samples ({len(early_sample)} items, "
+            f"evenly spaced over the {len(early_micros)} micros before the recent "
+            f"window, for cross-segment merge checks)\n"
             f"{early_micros_text}\n\n"
             f"### Recent Macros ({len(recent_macros)} items)\n"
             f"{macros_text}\n\n"
@@ -8644,12 +8806,17 @@ class MemoryToolBox:
         multiple tools in the same round run truly concurrently."""
         name = (name or "").strip()
         try:
-            if name == "search_by_time":
-                t_start = float(args.get("t_start", 0.0))
-                t_end = float(args.get("t_end", ask_ts))
-                t_end = min(t_end, ask_ts)
-                rows = self.mem.get_micro_by_time(t_start, t_end, ask_ts, limit=20)
-                return self._fmt_micros(rows, header=f"search_by_time [{t_start:.1f},{t_end:.1f}]")
+            # ★ 2026-08-19 合并: search_events 吸收 search_micro + search_by_time
+            #   + get_subgraph。三者查的都是 micro_events (L1), 只是入口不同 ——
+            #   语义检索 / 时间切片 / 按 macro 的时间跨度切片。合成一个工具后:
+            #     - 模型少记两个名字, prompt 少两段路由;
+            #     - macro_id 入参让"看整个宏事件"这条路重新可达 (原 get_subgraph
+            #       的唯一价值), 而且比它准 —— 原实现的 entities/edges 是纯时间
+            #       区间过滤, 会把跨全片的实体全捞回来;
+            #     - query + 窗口可以**同时**给, 这是原来两个工具都做不到的
+            #       ("刚才那段里他提到的那个东西"这类提问以前只能分两轮)。
+            if name == "search_events":
+                return self._tool_search_events(args, ask_ts)
             if name == "search_entity":
                 q = str(args.get("query", "")).strip()
                 # ★ 深度路径默认 top_k 提高 (recall_topk_entity): OR 分词 + 相关性
@@ -8658,80 +8825,37 @@ class MemoryToolBox:
                                      getattr(self.mem.cfg, "recall_topk_entity", 12)))
                 rows = self._hybrid_search_entity(q, ask_ts, top_k)
                 return self._fmt_entities(rows, header=f"search_entity {q!r}")
-            if name == "search_micro":
-                q = str(args.get("query", "")).strip()
-                top_k = int(args.get("top_k",
-                                     getattr(self.mem.cfg, "recall_topk_micro", 12)))
-                rows = self._hybrid_search_micro(q, ask_ts, top_k)
-                return self._fmt_micros(rows, header=f"search_micro {q!r}")
-            if name == "get_subgraph":
-                mid = str(args.get("macro_id", "")).strip()
-                sg = self.mem.get_subgraph_for_macro(mid, ask_ts)
-                return self._fmt_subgraph(sg, header=f"get_subgraph {mid}")
-            if name == "get_relations":
-                requested_nid = str(args.get("node_id", "")).strip()
-                entity, chain = self._resolve_entity_arg(requested_nid)
-                nid = entity.id if entity is not None else requested_nid
-                max_hops = int(args.get("max_hops", 1))
-                edges = self.mem.get_relations(nid, ask_ts, max_hops=max_hops)
-                header = (
-                    self._entity_tool_header(name, requested_nid, entity, chain)
-                    if entity is not None else f"get_relations {requested_nid}"
-                )
-                return self._fmt_edges(edges, header=header)
+            # ★ 2026-08-19 移除 get_subgraph 工具: 它需要 macro_id, 而整个
+            #   MemoryToolBox 的格式化层只有 _fmt_audio_evidence 的 MACRO_CONTEXT
+            #   一处回显过 macro_id —— _fmt_micros / _fmt_entity_context 的 events
+            #   行都不输出它。也就是说纯视觉/OCR 类提问永远拿不到合法入参, 工具
+            #   实际不可达, 只在 prompt 里持续占预算并诱导模型用 entity_id 误调。
+            #   内容层面它也是冗余的: get_subgraph_for_macro 的 micros 就是
+            #   get_micro_by_time (= search_by_time 同一方法), entities/edges 是
+            #   纯时间区间过滤而非沿 macro→micro→entity_event 外键, 精度还不如
+            #   search_by_time + get_relations。store 侧 get_subgraph_for_macro
+            #   保留不动 (search_events 的 macro_id 分支不用它, 见那里的说明)。
+            # ★ 2026-08-19 合并: get_entity_context 吸收 get_artifact_context +
+            #   get_entity_timeline + get_relations。四者都是"给定 ent_xxx 后的
+            #   下钻", 共用 _resolve_entity_arg 的 merged_into 链解析, 而且原来
+            #   get_artifact_context 与 get_entity_context 的 store 调用逐行相同
+            #   (events/frames/states + 同样的 20/20/30 默认值), 差异只有一次按
+            #   entity.name 的 OCR 检索; get_entity_timeline 更是同一个
+            #   get_entity_states + 同一 limit=30 + 同构渲染。合并后:
+            #     - include_screen_text=True 取代 get_artifact_context, 并且顺手
+            #       修掉原来的不对称 —— artifact 路径过去丢了 L3 后缀;
+            #     - events_limit=0 / frames_limit=0 取代 get_entity_timeline
+            #       (旧代码到处 max(1, ...), 想只看时间线也办不到);
+            #     - include_relations=True 取代 get_relations, 省掉"实体已经解析
+            #       过一遍、再为了看边重解析一遍"的一整轮。
             if name == "get_entity_context":
-                requested_eid = str(args.get("entity_id", "")).strip()
-                entity, chain = self._resolve_entity_arg(requested_eid)
-                if entity is None:
-                    return self._unresolved_entity_obs(
-                        name, requested_eid, chain)
-                eid = entity.id
-                events_limit = int(args.get("events_limit", 20))
-                frames_limit = int(args.get("frames_limit", 20))
-                timeline_limit = int(args.get("timeline_limit", 30))
-                events = self.mem.get_events_by_entity(
-                    eid, ask_ts, limit=max(1, events_limit))
-                frame_ids = self.mem.get_frames_by_entity(
-                    eid, ask_ts, limit_events=max(1, events_limit))
-                states = self.mem.get_entity_states(
-                    eid, ask_ts=ask_ts, limit=max(1, timeline_limit))
-                return self._fmt_entity_context(
-                    eid,
-                    entity=entity,
-                    requested_id=requested_eid,
-                    resolution_chain=chain,
-                    events=events,
-                    frame_ids=frame_ids[:max(1, frames_limit)],
-                    states=states,
-                    header=self._entity_tool_header(
-                        name, requested_eid, entity, chain),
-                )
-            if name == "get_events_by_entity":
-                requested_eid = str(args.get("entity_id", "")).strip()
-                entity, chain = self._resolve_entity_arg(requested_eid)
-                if entity is None:
-                    return self._unresolved_entity_obs(
-                        name, requested_eid, chain)
-                eid = entity.id
-                rows = self.mem.get_events_by_entity(eid, ask_ts, limit=20)
-                return self._fmt_micros(
-                    rows, header=self._entity_tool_header(
-                        name, requested_eid, entity, chain))
-            if name == "get_frames_by_entity":
-                requested_eid = str(args.get("entity_id", "")).strip()
-                entity, chain = self._resolve_entity_arg(requested_eid)
-                if entity is None:
-                    return self._unresolved_entity_obs(
-                        name, requested_eid, chain)
-                eid = entity.id
-                fids = self.mem.get_frames_by_entity(eid, ask_ts)
-                header = self._entity_tool_header(
-                    name, requested_eid, entity, chain)
-                if not fids:
-                    return (f"[{header}] (this object has no linked frames yet; "
-                            f"it may not be finalized or no representative frame was extracted)")
-                return (f"[{header}] {len(fids)} frame(s): "
-                        + ",".join(fids))
+                return self._tool_entity_context(args, ask_ts)
+            # ★ 2026-08-19 移除 get_events_by_entity / get_frames_by_entity 两个
+            #   分发分支: 它们从来不在 RecallAgent._RECALL_TOOL_NAMES 白名单里,
+            #   _normalize_decision_tool_calls 的 `if name not in
+            #   cls._RECALL_TOOL_NAMES: continue` 会先把调用静默丢掉, 所以这里
+            #   永远走不到。内容上两者也分别等于 get_entity_context 的 events 段
+            #   与 frames 段 (同 store 方法、同默认 limit=20)。
             # ★ FIX 2026-06-26: 反向查 — 拿某个事件里出现过的所有 entity (PERSON/OBJECT)
             #   典型用法: search_micro("二楼喝酒") → 拿 micro_id → get_entities_in_micro(mid)
             #            → 看在场都有谁/什么物体 → 选定 entity_id 后再 get_entity_context 看演进
@@ -8801,70 +8925,13 @@ class MemoryToolBox:
                 label = task_id or query or "latest"
                 return self._fmt_task_states(
                     rows, header=f"get_task_context {label!r}")
-            if name == "get_artifact_context":
-                requested_eid = str(args.get("entity_id", "")).strip()
-                entity, chain = self._resolve_entity_arg(requested_eid)
-                if entity is None:
-                    return self._unresolved_entity_obs(
-                        name, requested_eid, chain)
-                eid = entity.id
-                events_limit = int(args.get("events_limit", 20))
-                frames_limit = int(args.get("frames_limit", 20))
-                timeline_limit = int(args.get("timeline_limit", 30))
-                events = self.mem.get_events_by_entity(
-                    eid, ask_ts, limit=max(1, events_limit))
-                frame_ids = self.mem.get_frames_by_entity(
-                    eid, ask_ts, limit_events=max(1, events_limit))
-                states = self.mem.get_entity_states(
-                    eid, ask_ts=ask_ts, limit=max(1, timeline_limit))
-                screen_hits = []
-                if entity is not None and self.screen_text_store is not None:
-                    screen_hits = self.screen_text_store.search(
-                        entity.name, ask_ts, limit=6)
-                return self._fmt_artifact_context(
-                    eid,
-                    entity=entity,
-                    requested_id=requested_eid,
-                    resolution_chain=chain,
-                    events=events,
-                    frame_ids=frame_ids[:max(1, frames_limit)],
-                    states=states,
-                    screen_hits=screen_hits,
-                    header=self._entity_tool_header(
-                        name, requested_eid, entity, chain),
-                )
-            # ★ FIX 2026-06-26: 拿某 entity 的演进时间线 (entity_states 表),
-            #   每条带 evidence_frame_ids → LLM 看演进 + 可直接拉真图给用户.
-            if name == "get_entity_timeline":
-                requested_eid = str(args.get("entity_id", "")).strip()
-                entity, chain = self._resolve_entity_arg(requested_eid)
-                if entity is None:
-                    return self._unresolved_entity_obs(
-                        name, requested_eid, chain)
-                eid = entity.id
-                limit = int(args.get("limit", 30))
-                rows = self.mem.get_entity_states(
-                    eid, ask_ts=ask_ts, limit=limit)
-                return self._fmt_entity_timeline(
-                    rows, header=self._entity_tool_header(
-                        name, requested_eid, entity, chain))
-            # ★ E8 (evolve): 新增 ASR 字幕查询工具
+            # ★ E8 (evolve): ASR 字幕查询工具。
+            # ★ 2026-08-19 合并: search_audio 吸收 get_audio_around。两者本来就
+            #   共用 _audio_in_window, 而 search_audio 的证据束已经固定按 ±12s
+            #   附了同一份 ASR 上下文 —— get_audio_around 的唯一增量是"自己选
+            #   中心点 + 更宽的窗口(≤180s)", 那是两个参数, 不是一个工具。
             if name == "search_audio":
-                q = str(args.get("query", "")).strip()
-                top_k = int(args.get("top_k", 8))
-                rows = self._search_audio(q, ask_ts, top_k)
-                return self._fmt_audio_evidence(
-                    rows, query=q, ask_ts=ask_ts,
-                    header=f"search_audio {q!r}")
-            if name == "get_audio_around":
-                t_center = float(args.get("t", 0.0))
-                window = float(args.get("window_sec", 30.0))
-                t_start = max(0.0, t_center - window)
-                t_end = min(ask_ts, t_center + window)
-                rows = self._audio_in_window(t_start, t_end, ask_ts)
-                return self._fmt_audio_obs(
-                    rows,
-                    header=f"get_audio_around t={t_center:.1f}s ±{window:.0f}s")
+                return self._tool_search_audio(args, ask_ts)
             # ★ OMNI-Q: 拿某 entity 说过的话 (Writer omni 从原始音频落地的 quotes)
             if name == "get_quotes_by_entity":
                 requested_eid = str(args.get("entity_id", "")).strip()
@@ -8875,9 +8942,13 @@ class MemoryToolBox:
                 eid = entity.id
                 top_k = int(args.get("top_k", 10))
                 rows = self.mem.get_quotes_by_entity(eid, ask_ts, top_k=top_k)
-                return self._fmt_quotes(
-                    rows, header=self._entity_tool_header(
-                        name, requested_eid, entity, chain))
+                header = self._entity_tool_header(
+                    name, requested_eid, entity, chain)
+                if not rows:
+                    hint = self._quotes_unwired_hint(header)
+                    if hint:
+                        return hint
+                return self._fmt_quotes(rows, header=header)
             # ★ OMNI-Q: 按文本反查 quotes (顺带带回 speaker entity 信息)
             if name == "search_quotes_by_text":
                 q = str(args.get("query", "")).strip()
@@ -8885,13 +8956,330 @@ class MemoryToolBox:
                 exclude_unknown = bool(args.get("exclude_unknown", False))
                 rows = self.mem.search_quotes_by_text(
                     q, ask_ts, top_k=top_k, exclude_unknown=exclude_unknown)
-                return self._fmt_quote_hits(
-                    rows, header=f"search_quotes_by_text {q!r}")
+                header = f"search_quotes_by_text {q!r}"
+                if not rows:
+                    hint = self._quotes_unwired_hint(header)
+                    if hint:
+                        return hint
+                return self._fmt_quote_hits(rows, header=header)
             return f"[mem_tool] unknown tool: {name!r}"
         except AssertionError as e:
             return f"[mem_tool {name}] timestamp out of bounds: {e}"
         except Exception as e:
             return f"[mem_tool {name}] exception: {e}"
+
+    # ------------------------------------------------------------------ #
+    # 2026-08-19 合并工具的实现体。抽成独立方法而不是继续堆在 call() 里:
+    # call() 的 if 链已经很长, 而这三个工具各自有多分支的入参解析, 混进去会
+    # 让"哪个 return 属于哪个工具"变得难读, 也没法单独单测。
+    # ------------------------------------------------------------------ #
+
+    def _tool_search_events(self, args: Dict[str, Any],
+                            ask_ts: float) -> str:
+        """search_events(query?, t_start?, t_end?, macro_id?, top_k) — L1 统一入口。
+
+        三种模式 (可组合):
+          - 只给 query      → 语义 + 关键词 RRF 混合检索 (原 search_micro)
+          - 只给时间窗      → 时间切片 (原 search_by_time)
+          - 给 macro_id     → 解析成该 macro 的 [t_start, t_end] 再走时间切片
+                              (取代 get_subgraph, 且不再附它那份按时间区间近似
+                              出来的 entities/edges —— 那份东西会把跨全片出现
+                              的实体全捞进来, 是误导而不是信息)
+          - query + 时间窗  → 先在全局做混合检索, 再筛到窗口内; 若窗口内命中
+                              不足 top_k, 用窗口里的时间序行补齐。这是原来两个
+                              工具都做不到的组合, "刚才那段里他提到的那个东西"
+                              以前必须拆两轮。
+
+        L3 后缀按模式取对应的 reader: 有窗口用 get_supers_overlapping_time,
+        纯 query 用命中行的 macro_id 走 get_supers_for_macro_ids (真实外键链)。
+        """
+        query = str(args.get("query", "") or "").strip()
+        macro_id = str(args.get("macro_id", "") or "").strip()
+
+        has_window = ("t_start" in args) or ("t_end" in args)
+        t_start: Optional[float] = None
+        t_end: Optional[float] = None
+        window_src = ""
+
+        if macro_id:
+            mac = self.mem.get_macro(macro_id, ask_ts)
+            if mac is None:
+                return (f"[search_events macro_id={macro_id}] macro not found "
+                        "or outside the ask_ts snapshot; drop macro_id and use "
+                        "query or an explicit t_start/t_end instead")
+            t_start, t_end = float(mac.t_start), float(mac.t_end)
+            window_src = f" (window from macro {mac.id} {mac.label!r})"
+        elif has_window:
+            t_start = float(args.get("t_start", 0.0))
+            t_end = float(args.get("t_end", ask_ts))
+
+        if t_start is None and not query:
+            return ("[search_events] needs at least one of: query, "
+                    "t_start/t_end, or macro_id. Use query for semantic "
+                    "lookup, a time window for a slice of the timeline, or "
+                    "macro_id to expand a whole macro segment.")
+
+        if t_start is not None:
+            # D3 防脏读: 时间上界永远夹到 ask_ts 之后再进 store 的 assert。
+            t_start = max(0.0, t_start)
+            t_end = min(float(t_end if t_end is not None else ask_ts), ask_ts)
+            if t_end < t_start:
+                t_start, t_end = t_end, t_start
+
+        # 纯时间模式沿用旧 search_by_time 的 20; 带 query 时用 recall_topk_micro
+        # (12) —— 混合检索的排序有意义, 给太多反而挤占证据预算。
+        default_k = (
+            20 if not query
+            else int(getattr(self.mem.cfg, "recall_topk_micro", 12))
+        )
+        top_k = max(1, int(args.get("top_k", default_k)))
+
+        supers: List[Any] = []
+        if query and t_start is None:
+            rows = self._hybrid_search_micro(query, ask_ts, top_k)
+            header = f"search_events query={query!r}"
+            supers = self.mem.get_supers_for_macro_ids(
+                [m.macro_id for m in rows if m.macro_id], ask_ts, limit=2)
+            why = f"L3 spanning the hits for {query!r}"
+        elif query and t_start is not None:
+            # 混合检索池开大再筛窗口: 直接对窗口内的行重跑打分需要把 SQL 侧的
+            # 字段权重表达式再实现一遍, 没必要。
+            hits = self._hybrid_search_micro(query, ask_ts, top_k * 4)
+            in_win = [
+                m for m in hits
+                if float(m.t_end) >= t_start and float(m.t_start) <= t_end
+            ]
+            picked = list(in_win[:top_k])
+            filler = 0
+            if len(picked) < top_k:
+                seen_ids = {m.id for m in picked}
+                for m in self.mem.get_micro_by_time(
+                        t_start, t_end, ask_ts, limit=top_k * 2):
+                    if m.id in seen_ids:
+                        continue
+                    picked.append(m)
+                    seen_ids.add(m.id)
+                    filler += 1
+                    if len(picked) >= top_k:
+                        break
+            rows = picked
+            header = (
+                f"search_events query={query!r} window=[{t_start:.1f},"
+                f"{t_end:.1f}]{window_src}"
+            )
+            if filler:
+                # 说清哪些行是"窗口补齐"而非"query 命中", 否则模型会把补齐行
+                # 当成检索命中, 高估相关性。
+                header += (
+                    f" ({len(in_win[:top_k])} query hit(s) inside the window + "
+                    f"{filler} chronological filler row(s))")
+            supers = self.mem.get_supers_overlapping_time(
+                t_start, t_end, ask_ts, limit=2)
+            why = f"L3 covering [{t_start:.1f},{t_end:.1f}]"
+        else:
+            rows = self.mem.get_micro_by_time(
+                t_start, t_end, ask_ts, limit=top_k)
+            header = (f"search_events window=[{t_start:.1f},{t_end:.1f}]"
+                      f"{window_src}")
+            supers = self.mem.get_supers_overlapping_time(
+                t_start, t_end, ask_ts, limit=2)
+            why = f"L3 covering [{t_start:.1f},{t_end:.1f}]"
+
+        return self._with_supers(
+            self._fmt_micros(rows, header=header), supers, why=why)
+
+    def _tool_entity_context(self, args: Dict[str, Any],
+                             ask_ts: float) -> str:
+        """get_entity_context(entity_id, ..., include_screen_text/relations)。
+
+        吸收了 get_artifact_context (include_screen_text=True)、
+        get_entity_timeline (events_limit=0, frames_limit=0) 与 get_relations
+        (include_relations=True)。
+
+        limit=0 现在表示"这一段不要"; 旧代码到处 max(1, ...) 所以永远至少查一行。
+        被跳过的段落在输出里渲染成 "(not requested)" 而**不是** "(empty)" ——
+        后者会让模型判定"这个实体没有事件", 是最典型的一类假阴性。
+        """
+        requested_eid = str(args.get("entity_id", "")
+                            or args.get("node_id", "")).strip()
+        entity, chain = self._resolve_entity_arg(requested_eid)
+        if entity is None:
+            return self._unresolved_entity_obs(
+                "get_entity_context", requested_eid, chain)
+        eid = entity.id
+
+        events_limit = max(0, int(args.get("events_limit", 20)))
+        frames_limit = max(0, int(args.get("frames_limit", 20)))
+        timeline_limit = max(0, int(args.get("timeline_limit", 30)))
+        include_screen_text = bool(args.get("include_screen_text", False))
+        include_relations = bool(args.get("include_relations", False))
+        relations_limit = max(1, int(args.get("relations_limit", 10)))
+
+        if not (events_limit or frames_limit or timeline_limit
+                or include_screen_text or include_relations):
+            # 全关等于什么都没问; 与其返回一个只有 header 的空观测, 不如说清楚。
+            return (f"[get_entity_context {eid}] every section was disabled "
+                    "(events_limit=frames_limit=timeline_limit=0 and no "
+                    "include_* flag). Set at least one of them.")
+
+        events = (
+            self.mem.get_events_by_entity(eid, ask_ts, limit=events_limit)
+            if events_limit else []
+        )
+        frame_ids = (
+            self.mem.get_frames_by_entity(
+                eid, ask_ts, limit_events=max(1, events_limit or frames_limit))
+            if frames_limit else []
+        )
+        states = (
+            self.mem.get_entity_states(eid, ask_ts=ask_ts,
+                                       limit=timeline_limit)
+            if timeline_limit else []
+        )
+        edges = (
+            self.mem.get_relations(eid, ask_ts, max_hops=1,
+                                   limit_per_hop=relations_limit)
+            if include_relations else []
+        )
+        screen_hits: List[Any] = []
+        if include_screen_text and self.screen_text_store is not None:
+            screen_hits = self.screen_text_store.search(
+                entity.name, ask_ts, limit=6)
+
+        obs = self._fmt_entity_context(
+            eid,
+            entity=entity,
+            requested_id=requested_eid,
+            resolution_chain=chain,
+            events=events,
+            frame_ids=frame_ids[:frames_limit] if frames_limit else [],
+            states=states,
+            header=self._entity_tool_header(
+                "get_entity_context", requested_eid, entity, chain),
+            show_events=bool(events_limit),
+            show_frames=bool(frames_limit),
+            show_timeline=bool(timeline_limit),
+            edges=edges if include_relations else None,
+            screen_hits=screen_hits if include_screen_text else None,
+        )
+        # ★ L3: 走 micro.macro_id → macro.super_id 这条真实外键链, 拿到"这个实体
+        #   活跃的那几段整体在讲什么"。比按 first_seen/last_seen 时间范围找 L3
+        #   精确 —— 跨全片出现的实体会把整场 L3 全捞回来。
+        #   合并后 artifact 路径也走这里了, 修掉了旧 get_artifact_context 丢 L3
+        #   的不对称。
+        macro_ids = [m.macro_id for m in events if m.macro_id]
+        return self._with_supers(
+            obs,
+            self.mem.get_supers_for_macro_ids(macro_ids, ask_ts, limit=2)
+            if macro_ids else [],
+            why=f"L3 spanning {eid}'s events")
+
+    def _tool_search_audio(self, args: Dict[str, Any], ask_ts: float) -> str:
+        """search_audio(query?, t?, window_sec?, top_k) — ASR 统一入口。
+
+        - 只给 query      → 相关性排序的命中 + 每条的跨模态证据束 (帧/OCR/
+                            micro/macro/entities), 原 search_audio
+        - 只给 t          → t 附近 ±window_sec 的字幕原文 (原 get_audio_around),
+                            保留 180s 窗口与 40 行的夹取, 且把"夹过"写进 header
+        - query + t       → 先按 query 检索, 再筛到窗口内; 用于"刚才那段里他说
+                            的那个词"这类既有语义又有时间锚的提问
+        """
+        query = str(args.get("query", "") or "").strip()
+        has_center = any(k in args for k in ("t", "ts", "time", "timestamp"))
+        top_k = max(1, int(args.get("top_k", 8)))
+
+        if not query and not has_center:
+            return ("[search_audio] needs a query (keyword search over the ASR "
+                    "transcript) or t (transcript around a timestamp). Pass "
+                    "both to search inside a time window.")
+
+        t_center: Optional[float] = None
+        window = _AUDIO_AROUND_MAX_WINDOW_SEC
+        window_req = 0.0
+        if has_center:
+            raw_t = args.get("t", args.get("ts", args.get(
+                "time", args.get("timestamp", 0.0))))
+            t_center = max(0.0, min(float(raw_t), ask_ts))
+            window_req = float(args.get("window_sec", 30.0))
+            window = min(max(1.0, window_req), _AUDIO_AROUND_MAX_WINDOW_SEC)
+
+        if query and t_center is None:
+            rows = self._search_audio(query, ask_ts, top_k)
+            return self._fmt_audio_evidence(
+                rows, query=query, ask_ts=ask_ts,
+                header=f"search_audio {query!r}")
+
+        t_lo = max(0.0, t_center - window)
+        t_hi = min(ask_ts, t_center + window)
+
+        if query:
+            # 全局检索后筛窗口: _search_audio 没有 t_window 形参, 而它的打分要
+            # 用到全量 turns 做 token 覆盖归一化, 不适合先切窗口再喂给它。
+            hits = self._search_audio(query, ask_ts, top_k * 4)
+            rows = [t for t in hits
+                    if t_lo <= float(t.rel_ts or 0.0) <= t_hi][:top_k]
+            hdr = (f"search_audio {query!r} within t={t_center:.1f}s "
+                   f"±{window:.0f}s")
+            if not rows:
+                # 区分"窗口内没这个词"和"全片没这个词": 后者该换词, 前者该挪窗口。
+                hdr += (f" (no hit inside the window; {len(hits)} hit(s) exist "
+                        "elsewhere in the recording — widen window_sec or drop "
+                        "t to see them)" if hits else
+                        " (no hit anywhere in the transcript)")
+                return self._fmt_audio_obs(rows, header=hdr)
+            return self._fmt_audio_evidence(
+                rows, query=query, ask_ts=ask_ts, header=hdr)
+
+        rows = self._audio_in_window(t_lo, t_hi, ask_ts)
+        rows, n_dropped = _clip_audio_rows_around(
+            rows, t_center, _AUDIO_AROUND_MAX_ROWS)
+        hdr = f"search_audio around t={t_center:.1f}s ±{window:.0f}s"
+        # 把夹过的事实写进 header: 否则 LLM 会把"被裁掉的那段"当成"那段没有
+        # 字幕", 并据此下结论。
+        if window < window_req:
+            hdr += (f" (window_sec clamped from {window_req:.0f}s to "
+                    f"{_AUDIO_AROUND_MAX_WINDOW_SEC:.0f}s; call again "
+                    "at another center for more)")
+        if n_dropped:
+            hdr += (f" (kept the {len(rows)} turns nearest t; "
+                    f"{n_dropped} farther ones omitted — narrow "
+                    "window_sec to see them)")
+        return self._fmt_audio_obs(rows, header=hdr)
+
+    def _quotes_unwired_hint(self, header: str) -> Optional[str]:
+        """★ 2026-08-19 quotes 空表护栏。
+
+        `entity_quotes` 的唯一写入口 `insert_quote` 目前没有调用方 —— 说话人
+        归属要等人脸识别 / 声纹识别落地后才会按 face_id 逐句写入。在那之前
+        get_quotes_by_entity / search_quotes_by_text 结构性恒空, 而 RECALL_SYSTEM
+        仍然把 search_quotes_by_text 列为 "who said X" 的首选 → 模型会先空转
+        一轮, 再按 "do not keep repeating it with tiny rewrites" 那条指引改写
+        重试, 最坏情况连烧两轮 (recall_max_rounds 只有 4)。
+
+        这里在**结果为空时**才去探一次表, 区分两种空:
+          - 表里有行但没匹配上 → 交给 _fmt_quotes/_fmt_quote_hits 的原文案,
+            模型改写 query 重试是合理的;
+          - 表整体为空 → 返回明确的 "capability not wired, do not retry",
+            让 distill 和下一轮 decide 直接放弃这条通道。
+
+        `_quotes_seen_rows` 是**单向粘滞**缓存: 只缓存"已接通"这个正结果, 未
+        接通时每次重新探 (LIMIT 1, 可忽略), 这样人脸/声纹上线后不需要重启
+        进程就能自动恢复正常文案。
+        """
+        if getattr(self, "_quotes_seen_rows", False):
+            return None
+        if self.mem.has_any_quotes():
+            self._quotes_seen_rows = True
+            return None
+        return (
+            f"[{header}] (empty — speaker-attributed quotes are NOT wired yet: "
+            "the entity_quotes table has no writer until face-ID / "
+            "voiceprint-ID lands, so it is structurally empty for every query. "
+            "Do NOT retry get_quotes_by_entity or search_quotes_by_text with a "
+            "reworded query. For 'who said X' use search_audio (ASR transcript "
+            "plus the frames/OCR/entities around that time) and infer the "
+            "speaker from that evidence bundle.)"
+        )
 
     @staticmethod
     def _parse_time_range(
@@ -9422,17 +9810,8 @@ class MemoryToolBox:
         vec_hits: List[Tuple[MicroEvent, float]],
         k: int, top_k: int,
     ) -> List[MicroEvent]:
-        # 关键词路: 传入顺序即 rank 排序 (search_micro_by_keyword 已按相关性排好)
-        scores: Dict[str, float] = {}
-        keep: Dict[str, MicroEvent] = {}
-        for rank, m in enumerate(kw_rows, start=1):
-            scores[m.id] = scores.get(m.id, 0.0) + 1.0 / (k + rank)
-            keep.setdefault(m.id, m)
-        for rank, (m, _sim) in enumerate(vec_hits, start=1):
-            scores[m.id] = scores.get(m.id, 0.0) + 1.0 / (k + rank)
-            keep.setdefault(m.id, m)
-        ordered = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
-        return [keep[mid] for mid, _ in ordered[:top_k]]
+        return MemoryToolBox._rrf_fuse(
+            kw_rows=kw_rows, vec_hits=vec_hits, k=k, top_k=top_k)
 
     @staticmethod
     def _rrf_fuse_entities(
@@ -9440,16 +9819,62 @@ class MemoryToolBox:
         vec_hits: List[Tuple[Entity, float]],
         k: int, top_k: int,
     ) -> List[Entity]:
+        return MemoryToolBox._rrf_fuse(
+            kw_rows=kw_rows, vec_hits=vec_hits, k=k, top_k=top_k)
+
+    @staticmethod
+    def _rrf_fuse(
+        *, kw_rows: List[_T],
+        vec_hits: List[Tuple[_T, float]],
+        k: int, top_k: int,
+    ) -> List[_T]:
+        """Reciprocal-rank fusion of the keyword and vector arms.
+
+        Both arms contribute ``1/(k + rank)``. Two things beyond plain RRF:
+
+        1. **Similarity floor.** Vector hits below :data:`_RRF_VEC_MIN_SIM` are
+           dropped instead of being fused in. ``vector_search_micro`` always
+           returns its top-N regardless of how bad the best match is, so on a
+           query with no semantic match in memory the vector arm used to inject
+           N arbitrary rows that then looked well-ranked after fusion. That
+           false confidence is what the long Chinese "can't answer" blacklist in
+           ``_distilled_clue_seems_answerable`` has been compensating for
+           downstream.
+        2. **Similarity kept as a bonus.** Plain RRF throws the cosine away
+           (this function used to literally unpack it as ``_sim``), so a 0.95
+           match and a 0.30 match at the same rank scored identically. A small
+           ``_RRF_SIM_BONUS_W * sim`` term restores that ordering without
+           letting a single arm dominate the rank-based backbone.
+
+        Note on ``k``: it flattens rank differences, and the effect is severe
+        relative to short lists. At k=60 over a 30-item list, rank 1 beats
+        rank 30 by only 1.47x; at k=20 that becomes 2.43x. k=60 comes from the
+        original paper, where it was tuned for TREC runs of ~1000 results.
+        """
         scores: Dict[str, float] = {}
-        keep: Dict[str, Entity] = {}
-        for rank, e in enumerate(kw_rows, start=1):
-            scores[e.id] = scores.get(e.id, 0.0) + 1.0 / (k + rank)
-            keep.setdefault(e.id, e)
-        for rank, (e, _sim) in enumerate(vec_hits, start=1):
-            scores[e.id] = scores.get(e.id, 0.0) + 1.0 / (k + rank)
-            keep.setdefault(e.id, e)
+        keep: Dict[str, _T] = {}
+        # 关键词路: 传入顺序即 rank 排序 (search_micro_by_keyword 已按相关性排好)
+        for rank, m in enumerate(kw_rows, start=1):
+            mid = getattr(m, "id")
+            scores[mid] = scores.get(mid, 0.0) + 1.0 / (k + rank)
+            keep.setdefault(mid, m)
+        n_dropped = 0
+        rank = 0
+        for m, sim in vec_hits:
+            if sim is not None and float(sim) < _RRF_VEC_MIN_SIM:
+                n_dropped += 1
+                continue
+            rank += 1
+            mid = getattr(m, "id")
+            scores[mid] = (scores.get(mid, 0.0)
+                           + 1.0 / (k + rank)
+                           + _RRF_SIM_BONUS_W * float(sim or 0.0))
+            keep.setdefault(mid, m)
+        if n_dropped:
+            log.debug("[mem_tool rrf] 相似度低于 %.2f 被丢弃: %d/%d 条向量命中",
+                      _RRF_VEC_MIN_SIM, n_dropped, len(vec_hits))
         ordered = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
-        return [keep[eid] for eid, _ in ordered[:top_k]]
+        return [keep[mid] for mid, _ in ordered[:top_k]]
 
     @staticmethod
     def _fmt_micros(rows: List[MicroEvent], *, header: str) -> str:
@@ -9459,12 +9884,67 @@ class MemoryToolBox:
         for r in rows:
             # ★ 附 frame_ids: 让 RecallWorker / 前端续写能反查到关键帧
             frames_str = (" frames=" + ",".join(r.frame_ids)) if r.frame_ids else ""
+            # ★ FIX 2026-08-19: 回显 macro_id。在此之前整个格式化层只有
+            #   _fmt_audio_evidence 的 MACRO_CONTEXT 输出过 macro_id, 所以纯
+            #   视觉/OCR 类提问永远拿不到合法的 macro_id, "展开整个宏事件"这条
+            #   路结构性不可达 (这正是老 get_subgraph 沦为死工具的直接原因)。
+            #   现在每条 L1 都带上它所属的 L2, 模型可以从任意一条命中直接
+            #   search_events(macro_id=...) 展开整段。
+            macro_str = f" macro={r.macro_id}" if r.macro_id else ""
             lines.append(
                 f"- id={r.id} [{fmt_ts(r.t_start)}-{fmt_ts(r.t_end)}] "
-                f"subj={r.subject} act={r.action} obj={r.object}{frames_str} "
+                f"subj={r.subject} act={r.action} obj={r.object}"
+                f"{macro_str}{frames_str} "
                 f"| {r.description[:200]}"
             )
         return "\n".join(lines)
+
+    @staticmethod
+    def _fmt_supers_block(rows: List["SuperEvent"], *, why: str) -> str:
+        """Render L3 narratives as an appendable block, or "" when there are none.
+
+        L3 is the only tier that answers "what was this whole stretch about" in
+        one row. Until now nothing on the recall path read super_events at all
+        (the writer paid agg_l3_frames images per aggregation to produce them and
+        the sole readers were the dashboard's raw SQL and the call-less
+        dump_all), so the recall LLM had to re-derive session-level context by
+        stitching L1/L2 rows together — several extra tool rounds for something
+        already summarized.
+
+        Deliberately a *suffix* on existing observations rather than its own
+        tool: L3 is background framing, not an answer. Giving it a tool of its
+        own would invite the model to spend a round on it, and its rows are
+        broad enough to look like a plausible answer to almost anything, which
+        is exactly the kind of over-general evidence distill should not chase.
+        The label spells out that it is background so the model does not quote
+        it as observed detail.
+        """
+        if not rows:
+            return ""
+        lines = [f"L3_SESSION_NARRATIVE ({why}; background framing only — "
+                 "do NOT cite it as an observed detail, drill into L1/L2 or "
+                 "frames for specifics):"]
+        for s in rows:
+            arc = ""
+            if s.narrative_arc:
+                beats = [
+                    str(b.get("beat") or b.get("label") or b.get("text") or "")
+                    for b in s.narrative_arc[:4]
+                    if isinstance(b, dict)
+                ]
+                beats = [b for b in beats if b]
+                if beats:
+                    arc = " arc=" + " → ".join(b[:40] for b in beats)
+            lines.append(
+                f"- id={s.id} [{fmt_ts(s.t_start)}-{fmt_ts(s.t_end)}] "
+                f"label={s.label}{arc} | {s.description[:300]}")
+        return "\n".join(lines)
+
+    def _with_supers(self, obs: str, rows: List["SuperEvent"], *,
+                     why: str) -> str:
+        """Append the L3 block to a formatted observation when there is one."""
+        block = self._fmt_supers_block(rows, why=why)
+        return f"{obs}\n\n{block}" if block else obs
 
     @staticmethod
     def _fmt_entities(rows: List[Entity], *, header: str) -> str:
@@ -9481,30 +9961,8 @@ class MemoryToolBox:
             )
         return "\n".join(lines)
 
-    @staticmethod
-    def _fmt_subgraph(sg: Dict[str, Any], *, header: str) -> str:
-        if sg.get("macro") is None:
-            return f"[{header}] macro not found or outside the time snapshot"
-        m: MacroEvent = sg["macro"]
-        lines = [
-            f"[{header}]",
-            f"  macro: id={m.id} [{fmt_ts(m.t_start)}-{fmt_ts(m.t_end)}] "
-            f"label={m.label} summary={m.summary[:400]}",
-            f"  micros ({len(sg['micros'])}):",
-        ]
-        for r in sg["micros"][:10]:
-            frames_str = (" frames=" + ",".join(r.frame_ids)) if r.frame_ids else ""
-            lines.append(
-                f"    - {r.id} [{fmt_ts(r.t_start)}-{fmt_ts(r.t_end)}]{frames_str} "
-                f"{r.description[:160]}")
-        lines.append(f"  entities ({len(sg['entities'])}):")
-        for r in sg["entities"][:10]:
-            attr = ", ".join(f"{k}={v}" for k, v in list(r.attributes.items())[:4])
-            lines.append(f"    - {r.id} [{r.type}] {r.name} {{{attr}}}")
-        lines.append(f"  edges ({len(sg['edges'])}):")
-        for e in sg["edges"][:15]:
-            lines.append(f"    - {e.src_id} --[{e.label} {e.rel_type}]--> {e.dst_id} @{fmt_ts(e.t_observed)}")
-        return "\n".join(lines)
+    # ★ 2026-08-19: _fmt_subgraph 随 get_subgraph 工具一起移除 (唯一调用点就是
+    #   那个分发分支)。store 侧 MemoryStore.get_subgraph_for_macro 仍保留。
 
     @staticmethod
     def _fmt_edges(edges: List[Edge], *, header: str) -> str:
@@ -9527,23 +9985,67 @@ class MemoryToolBox:
         frame_ids: List[str],
         states: List["EntityState"],
         header: str,
+        show_events: bool = True,
+        show_frames: bool = True,
+        show_timeline: bool = True,
+        edges: Optional[List[Edge]] = None,
+        screen_hits: Optional[List["ScreenTextRecord"]] = None,
     ) -> str:
         """Format the common entity drill-down as one recall observation.
 
         This intentionally keeps frame_id tokens in plain text so RecallAgent's
         existing FrameStore.extract_frame_ids(raw_obs) path still collects them
         for visual verification and UI thumbnails.
+
+        ★ 2026-08-19: show_* / edges / screen_hits 是合并 get_entity_timeline、
+        get_relations、get_artifact_context 进来后加的。show_*=False 渲染成
+        "(not requested)" 而**不是** "(empty)" —— 后者会被模型读成"这个实体没有
+        事件/帧/时间线", 是最典型的一类假阴性。edges / screen_hits 传 None 表示
+        本次没要这一段, 传 [] 表示要了但真的没有。
         """
+        def _sec_summary() -> str:
+            bits = [f"entity_id={entity_id}"]
+            bits.append(f"events={len(events)}" if show_events
+                        else "events=(not requested)")
+            bits.append(f"frames={len(frame_ids)}" if show_frames
+                        else "frames=(not requested)")
+            bits.append(f"timeline={len(states)}" if show_timeline
+                        else "timeline=(not requested)")
+            if edges is not None:
+                bits.append(f"relations={len(edges)}")
+            if screen_hits is not None:
+                bits.append(f"screen_text={len(screen_hits)}")
+            return " ".join(bits)
+
         lines = [
             f"[{header}]",
-            (f"summary: entity_id={entity_id} events={len(events)} "
-             f"frames={len(frame_ids)} timeline={len(states)}"),
+            f"summary: {_sec_summary()}",
         ]
-        if requested_id and requested_id != entity_id:
-            lines.append(
-                f"resolution: {requested_id} -> {entity_id} "
-                f"({' -> '.join(resolution_chain or [])})"
+        # ★ FIX 2026-08-19 (输出去重 + 崩溃隐患):
+        #   旧实现把 resolution 行打印两遍 (requested_id != entity_id 一次、
+        #   len(resolution_chain) > 1 又一次), 并且把 canonical entity 块打印
+        #   两遍 —— 一次在 `if entity is not None` 分支里, 紧接着又来一段
+        #   **无条件**的同内容 extend。get_artifact_context 还会在下游再叠一次
+        #   属性行, 于是同一个实体在一次观测里出现三遍, 白烧 _pack_obs_blocks
+        #   的 8000 字证据预算 (刚做完的 max-min 公平配额收益被它抵消)。
+        #   那段无条件代码还直接访问 entity.attributes 和 len(resolution_chain),
+        #   而两者的签名默认值都是 None → entity=None 时 AttributeError、
+        #   不传 chain 时 TypeError。只因现存两处调用点都实传才一直没炸。
+        #   现在: resolution 合并成一行 (merge 场景补 merged note), canonical
+        #   块只在 entity 非空时打印一次。
+        chain = list(resolution_chain or [])
+        merged = len(chain) > 1
+        if merged or (requested_id and requested_id != entity_id):
+            arrow = (
+                " -> ".join(chain) if merged
+                else (f"{requested_id} -> {entity_id}" if requested_id
+                      else entity_id)
             )
+            merged_note = (
+                " (old entity was merged; use only the canonical current "
+                "state below)" if merged else ""
+            )
+            lines.append(f"resolution: {arrow}{merged_note}")
 
         if entity is not None:
             attr = ", ".join(
@@ -9559,41 +10061,33 @@ class MemoryToolBox:
                  f"last={fmt_ts(entity.last_seen)}"),
             ])
 
-        if len(resolution_chain) > 1:
-            lines.append(
-                "resolution: " + " -> ".join(resolution_chain)
-                + " (old entity was merged; use only the canonical current state below)"
-            )
-        attr = ", ".join(
-            f"{k}={v}" for k, v in list((entity.attributes or {}).items())[:16]
-        )
-        aliases = ", ".join((entity.aliases or [])[:12])
-        lines.extend([
-            "",
-            "canonical entity (authoritative current state):",
-            (f"- id={entity.id} type={entity.type} name={entity.name!r} "
-             f"attrs={{{attr}}} aliases=[{aliases}] "
-             f"seen={entity.seen_count} first={fmt_ts(entity.first_seen)} "
-             f"last={fmt_ts(entity.last_seen)}"),
-        ])
-
         lines.append("")
-        lines.append(f"events ({len(events)}, recent first):")
-        if events:
-            for r in events:
-                frames_str = (
-                    " frames=" + ",".join(r.frame_ids)) if r.frame_ids else ""
-                lines.append(
-                    f"- micro_id={r.id} [{fmt_ts(r.t_start)}-{fmt_ts(r.t_end)}] "
-                    f"subj={r.subject} act={r.action} obj={r.object}"
-                    f"{frames_str} | {r.description[:200]}"
-                )
+        if not show_events:
+            lines.append("events: (not requested — events_limit=0; call again "
+                         "with events_limit>0 to see them)")
         else:
-            lines.append("- (empty)")
+            lines.append(f"events ({len(events)}, recent first):")
+            if events:
+                for r in events:
+                    frames_str = (
+                        " frames=" + ",".join(r.frame_ids)) if r.frame_ids else ""
+                    # ★ FIX 2026-08-19: 同 _fmt_micros —— 回显 macro_id, 让
+                    #   search_events(macro_id=...) 这条展开整段的路可达。
+                    macro_str = f" macro={r.macro_id}" if r.macro_id else ""
+                    lines.append(
+                        f"- micro_id={r.id} [{fmt_ts(r.t_start)}-{fmt_ts(r.t_end)}] "
+                        f"subj={r.subject} act={r.action} obj={r.object}"
+                        f"{macro_str}{frames_str} | {r.description[:200]}"
+                    )
+            else:
+                lines.append("- (empty)")
 
         lines.append("")
-        lines.append(f"frames ({len(frame_ids)}, representative/linked first):")
-        if frame_ids:
+        if not show_frames:
+            lines.append("frames: (not requested — frames_limit=0)")
+        elif frame_ids:
+            lines.append(
+                f"frames ({len(frame_ids)}, representative/linked first):")
             for idx, fid in enumerate(frame_ids):
                 role = "representative" if idx == 0 else "linked"
                 sf = None
@@ -9615,62 +10109,57 @@ class MemoryToolBox:
             lines.append("- (empty; this entity has no linked frames yet, possibly not finalized or no representative frame was extracted)")
 
         lines.append("")
-        lines.append(f"timeline ({len(states)}, ascending):")
-        if states:
-            for s in states:
-                delta_pairs = list((s.attributes_delta or {}).items())[:5]
-                delta_str = ", ".join(f"{k}={v}" for k, v in delta_pairs)
-                ali_str = ", ".join((s.new_aliases or [])[:5])
-                fids = (s.evidence_frame_ids or [])[:5]
-                fid_suf = f" frames=[{','.join(fids)}]" if fids else ""
-                mid_suf = f" micro={s.micro_id}" if s.micro_id else ""
-                seg = [f"- t={fmt_ts(s.t_observed)} {s.state_label}"]
-                if delta_str:
-                    seg.append(f"delta={{{delta_str}}}")
-                if ali_str:
-                    seg.append(f"aliases+=[{ali_str}]")
-                if s.note:
-                    seg.append(f"note={s.note[:80]!r}")
-                lines.append(" ".join(seg) + mid_suf + fid_suf)
+        if not show_timeline:
+            lines.append("timeline: (not requested — timeline_limit=0)")
         else:
-            lines.append("- (empty; this entity has no timeline states yet, possibly newly created or not seen again)")
+            lines.append(f"timeline ({len(states)}, ascending):")
+            if states:
+                for s in states:
+                    delta_pairs = list((s.attributes_delta or {}).items())[:5]
+                    delta_str = ", ".join(f"{k}={v}" for k, v in delta_pairs)
+                    ali_str = ", ".join((s.new_aliases or [])[:5])
+                    fids = (s.evidence_frame_ids or [])[:5]
+                    fid_suf = f" frames=[{','.join(fids)}]" if fids else ""
+                    mid_suf = f" micro={s.micro_id}" if s.micro_id else ""
+                    seg = [f"- t={fmt_ts(s.t_observed)} {s.state_label}"]
+                    if delta_str:
+                        seg.append(f"delta={{{delta_str}}}")
+                    if ali_str:
+                        seg.append(f"aliases+=[{ali_str}]")
+                    if s.note:
+                        seg.append(f"note={s.note[:80]!r}")
+                    lines.append(" ".join(seg) + mid_suf + fid_suf)
+            else:
+                lines.append("- (empty; this entity has no timeline states yet, possibly newly created or not seen again)")
+
+        # ★ 2026-08-19: relations 段 —— 取代独立的 get_relations 工具。单跳边,
+        #   附在同一次观测里, 省掉"为了看边把实体再解析一遍"的一整轮。
+        if edges is not None:
+            lines.append("")
+            lines.append(
+                self._fmt_edges(edges, header=f"relations of {entity_id} "
+                                              "(1 hop)"))
+
+        # ★ 2026-08-19: screen_text 段 —— 取代 get_artifact_context。按实体名在
+        #   OCR 文本里检索, 用于 PDF/幻灯片/表格这类"东西本身就是屏幕上的字"。
+        if screen_hits is not None:
+            lines.append("")
+            name_for_hdr = entity.name if entity is not None else entity_id
+            if screen_hits:
+                lines.append(self._fmt_screen_text(
+                    screen_hits,
+                    header=f"related_screen_text {name_for_hdr!r}"))
+            else:
+                lines.append(
+                    f"[related_screen_text {name_for_hdr!r}] "
+                    "(empty; no screen text matched this name — the entity may "
+                    "be a physical object rather than an on-screen artifact)")
 
         return "\n".join(lines)
 
-    def _fmt_artifact_context(
-        self, entity_id: str, *,
-        entity: Optional["Entity"],
-        requested_id: str,
-        resolution_chain: List[str],
-        events: List[MicroEvent],
-        frame_ids: List[str],
-        states: List["EntityState"],
-        screen_hits: List["ScreenTextRecord"],
-        header: str,
-    ) -> str:
-        if entity is None:
-            return self._unresolved_entity_obs(
-                "get_artifact_context", requested_id, resolution_chain)
-        parts = [self._fmt_entity_context(
-            entity_id, entity=entity, requested_id=requested_id,
-            resolution_chain=resolution_chain, events=events,
-            frame_ids=frame_ids, states=states, header=header)]
-        if entity is not None:
-            attr = ", ".join(
-                f"{k}={v}" for k, v in list(entity.attributes.items())[:8])
-            parts.append(
-                "\nartifact entity:\n"
-                f"- id={entity.id} type={entity.type} name={entity.name!r} "
-                f"attrs={{{attr}}} aliases={entity.aliases[:6]}")
-        if screen_hits:
-            parts.append(self._fmt_screen_text(
-                screen_hits,
-                header=f"artifact_related_screen_text {entity.name if entity else entity_id!r}"))
-        else:
-            parts.append(
-                f"[artifact_related_screen_text {entity_id}] "
-                "(empty; no screen text matched this artifact name)")
-        return "\n".join(parts)
+    # ★ 2026-08-19: _fmt_artifact_context 已移除。它的全部内容 =
+    #   _fmt_entity_context(...) + 一段按实体名检索的 OCR 文本, 现在由
+    #   _fmt_entity_context(screen_hits=...) 直接渲染, 不需要包一层。
 
     @staticmethod
     def _fmt_audio_obs(rows: List["Turn"], *, header: str) -> str:
@@ -9869,33 +10358,10 @@ class MemoryToolBox:
                 f"id={q.entity_id}: {text[:200]}")
         return "\n".join(lines)
 
-    @staticmethod
-    def _fmt_entity_timeline(rows: List["EntityState"], *, header: str) -> str:
-        """Format an entity's evolution timeline for the Recall LLM.
-        Each line: ts state_label delta=... aliases+=... frames=[...].
-        evidence_frame_ids are included so the LLM can hand fids to the frontend
-        to show real images.
-        """
-        if not rows:
-            return (f"[{header}] (empty; this entity has no timeline states yet, "
-                    f"or the id does not exist)")
-        lines = [f"[{header}] {len(rows)} item(s), chronological:"]
-        for s in rows:
-            delta_pairs = list((s.attributes_delta or {}).items())[:5]
-            delta_str = ", ".join(f"{k}={v}" for k, v in delta_pairs)
-            ali_str = ", ".join((s.new_aliases or [])[:5])
-            fids = (s.evidence_frame_ids or [])[:5]
-            fid_suf = f" frames=[{','.join(fids)}]" if fids else ""
-            mid_suf = f" micro={s.micro_id}" if s.micro_id else ""
-            seg = [f"- t={fmt_ts(s.t_observed)} {s.state_label}"]
-            if delta_str:
-                seg.append(f"delta={{{delta_str}}}")
-            if ali_str:
-                seg.append(f"aliases+=[{ali_str}]")
-            if s.note:
-                seg.append(f"note={s.note[:80]!r}")
-            lines.append(" ".join(seg) + mid_suf + fid_suf)
-        return "\n".join(lines)
+    # ★ 2026-08-19: _fmt_entity_timeline 已移除。它与 _fmt_entity_context
+    #   的 timeline 段是同一份渲染 (同 entity_states、同 delta/aliases/
+    #   frames 字段、同截断长度), 现在由 get_entity_context(events_limit=0,
+    #   frames_limit=0) 走那一段输出。
 
 
 @asynccontextmanager
@@ -9980,24 +10446,81 @@ class RecallAgent:
         #   通过 _channel_ctx() 上下文串行化, 让 writer 优先。
         self.llm_channel_lock: Optional[asyncio.Lock] = None
 
+    # ★ 2026-08-19 收敛: 16 → 10。合并前这份白名单里有 4 组做同一件事的工具
+    #   (search_by_time/search_micro/get_subgraph 都查 L1;
+    #   get_entity_context/get_artifact_context/get_entity_timeline/get_relations
+    #   都是 ent_xxx 下钻; search_audio/get_audio_around 都查同一张 ASR 表),
+    #   模型每轮要在十几个名字里挑, 挑错就白烧一轮 (recall_max_rounds 只有 4)。
+    #   现在按"问什么"而不是"怎么查"分:
+    #     L1 事件 → search_events            (query / 时间窗 / macro_id)
+    #     实体    → search_entity → get_entity_context (include_* 控制附加段)
+    #     反查    → get_entities_in_micro
+    #     视觉    → search_frames_by_text
+    #     桌面    → search_screen_text / get_task_context
+    #     语音    → search_audio             (query / t+window_sec)
+    #     引语    → get_quotes_by_entity / search_quotes_by_text (待人脸+声纹接入)
     _RECALL_TOOL_NAMES: Set[str] = {
-        "search_by_time",
+        "search_events",
         "search_entity",
-        "search_micro",
+        "get_entity_context",
+        "get_entities_in_micro",
         "search_frames_by_text",
         "search_screen_text",
         "get_task_context",
-        "get_entity_context",
-        "get_artifact_context",
-        "get_entities_in_micro",
-        "get_relations",
-        "get_subgraph",
-        "get_entity_timeline",
         "search_audio",
-        "get_audio_around",
         "get_quotes_by_entity",
         "search_quotes_by_text",
     }
+
+    # ★ 旧名 → 新名 + 入参重映射。留这层别名不是为了兼容外部调用方 (工具名只
+    #   在 prompt 与 LLM 输出之间流动, 没有外部 caller), 而是因为 LLM 见过太多
+    #   遍旧名: prompt 改了之后模型仍会偶发吐 search_micro / get_audio_around,
+    #   尤其是少样本模仿历史对话时。没有别名层, 这类调用会被
+    #   _normalize_decision_tool_calls 的白名单过滤**静默丢弃** —— 模型看不到
+    #   任何错误, 只看到"空了一轮", 然后倾向于原样重试, 4 轮预算直接烧光。
+    #   映射后一次正常返回, 代价是一个 dict 查表。
+    _LEGACY_TOOL_ALIASES: Dict[str, Tuple[str, Dict[str, str]]] = {
+        # (新工具名, {旧参数名: 新参数名})
+        "search_micro": ("search_events", {}),
+        "search_by_time": ("search_events", {}),
+        "get_subgraph": ("search_events", {}),          # macro_id 现在是合法入参
+        "get_artifact_context": ("get_entity_context", {}),
+        "get_entity_timeline": ("get_entity_context", {"limit": "timeline_limit"}),
+        "get_relations": ("get_entity_context", {"node_id": "entity_id"}),
+        "get_events_by_entity": ("get_entity_context", {}),
+        "get_frames_by_entity": ("get_entity_context", {}),
+        "get_audio_around": ("search_audio", {}),
+    }
+
+    # 别名命中时要补上的默认值 —— 否则 get_relations→get_entity_context 会退化成
+    # "查了实体但没给边", 语义和模型的意图不符。
+    _LEGACY_TOOL_ARG_DEFAULTS: Dict[str, Dict[str, Any]] = {
+        "get_artifact_context": {"include_screen_text": True},
+        "get_relations": {
+            "include_relations": True,
+            "events_limit": 0, "frames_limit": 0, "timeline_limit": 0,
+        },
+        "get_entity_timeline": {"events_limit": 0, "frames_limit": 0},
+        "get_frames_by_entity": {"events_limit": 0, "timeline_limit": 0},
+        "get_events_by_entity": {"frames_limit": 0, "timeline_limit": 0},
+    }
+
+    @classmethod
+    def _apply_legacy_tool_alias(
+        cls, name: str, args: Dict[str, Any],
+    ) -> Tuple[str, Dict[str, Any]]:
+        """Map a pre-2026-08-19 tool name onto its merged replacement."""
+        entry = cls._LEGACY_TOOL_ALIASES.get(name)
+        if entry is None:
+            return name, args
+        new_name, arg_map = entry
+        out = dict(args or {})
+        for old_key, new_key in arg_map.items():
+            if old_key in out and new_key not in out:
+                out[new_key] = out.pop(old_key)
+        for k, v in cls._LEGACY_TOOL_ARG_DEFAULTS.get(name, {}).items():
+            out.setdefault(k, v)
+        return new_name, out
 
     @classmethod
     def _parse_decision_json(
@@ -10139,8 +10662,12 @@ class RecallAgent:
             r'["\']?can_answer["\']?\s*[:=]\s*["\']?false["\']?',
             signal_text, flags=re.IGNORECASE,
         ))
+        # ★ 2026-08-19: 这里连旧名一起扫。这个函数只用于 fail-closed 判定
+        #   ("模型提到了任何检索工具 → 不许 can_answer=true"), 提到 search_micro
+        #   同样说明它想检索, 漏掉旧名会让 fail-closed 在别名场景下失效。
         mentioned = {
-            name for name in cls._RECALL_TOOL_NAMES
+            name for name in (set(cls._RECALL_TOOL_NAMES)
+                              | set(cls._LEGACY_TOOL_ALIASES))
             if re.search(rf"(?<![A-Za-z0-9_]){re.escape(name)}(?![A-Za-z0-9_])",
                          signal_text, flags=re.IGNORECASE)
         }
@@ -10170,7 +10697,12 @@ class RecallAgent:
             return None
         signal_text = text.replace('\\"', '"').replace("\\'", "'")
         tool_calls: List[Dict[str, Any]] = []
-        for name in sorted(cls._RECALL_TOOL_NAMES, key=len, reverse=True):
+        # ★ 2026-08-19: 旧名也参与文本兜底提取, 提取到后立刻映射成新名 —— 这条
+        #   路径产出的 tool_calls 直接进执行, 不再过 _normalize_decision_tool_calls
+        #   的别名层, 所以必须在这里自己映射。
+        for name in sorted(set(cls._RECALL_TOOL_NAMES)
+                           | set(cls._LEGACY_TOOL_ALIASES),
+                           key=len, reverse=True):
             # search_audio("...") / search_audio: ...
             for m in re.finditer(
                 rf"\b{re.escape(name)}\b\s*(?:\(|:|：)\s*"
@@ -10180,9 +10712,16 @@ class RecallAgent:
                 flags=re.IGNORECASE,
             ):
                 q = " ".join((m.group(1) or "").strip(" ,，。;；").split())
-                if q and not any(tc["name"] == name and tc["args"].get("query") == q
-                                 for tc in tool_calls):
-                    tool_calls.append({"name": name, "args": {"query": q}})
+                if not q:
+                    continue
+                call_name, call_args = cls._apply_legacy_tool_alias(
+                    name, {"query": q})
+                if call_name not in cls._RECALL_TOOL_NAMES:
+                    continue
+                if any(tc["name"] == call_name
+                       and tc["args"].get("query") == q for tc in tool_calls):
+                    continue
+                tool_calls.append({"name": call_name, "args": call_args})
         can_answer_match = re.search(
             r'["\']?can_answer["\']?\s*[:=]\s*["\']?'
             r'(true|false|是|否)["\']?',
@@ -10243,15 +10782,14 @@ class RecallAgent:
             else:
                 shorthand = [
                     (k, v) for k, v in raw.items()
-                    if isinstance(k, str) and k in cls._RECALL_TOOL_NAMES
+                    if isinstance(k, str)
+                    and (k in cls._RECALL_TOOL_NAMES
+                         or k in cls._LEGACY_TOOL_ALIASES)
                 ]
                 if len(shorthand) != 1:
                     continue
                 name, args_raw = shorthand[0]
                 repair_reason = "shorthand_tool_object"
-
-            if name not in cls._RECALL_TOOL_NAMES:
-                continue
 
             if isinstance(args_raw, dict):
                 args = dict(args_raw)
@@ -10262,27 +10800,40 @@ class RecallAgent:
             else:
                 args = {"query": str(args_raw)}
 
-            if name in {
-                "search_entity",
-                "search_micro",
-                "search_frames_by_text",
-                "search_screen_text",
-                "search_audio",
-                "search_quotes_by_text",
-                "get_task_context",
-            } and "query" not in args:
+            # 通用 query 同义键修复要在别名映射**之前**做: 旧名的 query 同义词
+            # (text/keyword/q) 跟新名的一样, 而下面的别名表只负责改真正变了的
+            # 参数名 (limit→timeline_limit、node_id→entity_id)。
+            if "query" not in args:
                 for key in ("text", "keyword", "keywords", "q"):
                     val = args.get(key)
-                    if val:
+                    if val and name in {
+                        "search_events", "search_entity",
+                        "search_frames_by_text", "search_screen_text",
+                        "search_audio", "search_quotes_by_text",
+                        "get_task_context",
+                        # 旧名同样接受, 映射后仍是 query
+                        "search_micro", "get_audio_around",
+                    }:
                         args["query"] = str(val)
                         repair_reason = repair_reason or f"{key}_to_query"
                         break
-            if name == "get_audio_around" and "t" not in args:
+            if name in ("search_audio", "get_audio_around") and "t" not in args:
                 for key in ("ts", "time", "timestamp", "t_center"):
                     if key in args:
                         args["t"] = args[key]
                         repair_reason = repair_reason or f"{key}_to_t"
                         break
+
+            # ★ 2026-08-19: 别名层放在白名单过滤**之前**。放在之后等于没放 ——
+            #   旧名根本进不了白名单, 会在上面那个 continue 被静默丢掉, 模型只
+            #   看到"空了一轮"而不是一次可用的返回。
+            if name in cls._LEGACY_TOOL_ALIASES:
+                new_name, args = cls._apply_legacy_tool_alias(name, args)
+                repair_reason = repair_reason or f"legacy_alias_{name}"
+                name = new_name
+
+            if name not in cls._RECALL_TOOL_NAMES:
+                continue
 
             normalized_call = {"name": name, "args": args}
             normalized.append(normalized_call)
@@ -10684,13 +11235,29 @@ class RecallAgent:
                         time_budget_sec, time.time() - t0, len(clues), round_idx)
                     final_findings = "\n".join(safe_budget_clues or clues)
                     break
+            # ★ 同一个预算墙, 但 clues 为空的分支。上面两处 early-finalize 都以
+            #   ``clues`` 非空为前提, 所以"连续几轮工具都返回哨兵句"这条路径完全
+            #   不设防: 循环会照常开下一轮, 撞穿外层 45s 墙, 调用方拿到的是硬
+            #   超时 (ok=False) 而不是一个干净的"没找到"。对主 Agent 来说这两者
+            #   差别很大 —— 硬超时会触发重试/升级 set_live_watcher, 而 45s 已经
+            #   花掉了。这里在 90% 预算处主动收尾, 让循环尾部的
+            #   ``final_findings = ... or RECALL_NO_CLUES`` 正常生效。
+            if (time_budget_sec and not clues and round_idx > 0
+                    and (time.time() - t0) > time_budget_sec * 0.9):
+                log.info(
+                    "[recall] budget %.0fs*0.9 reached with 0 clues after %d "
+                    "round(s) (%.1fs); stop instead of blowing the outer wall",
+                    time_budget_sec, round_idx, time.time() - t0)
+                break
             if pending_calls:
                 # ★ 同轮 pending_calls 真并行 (Level 1 并行):
                 #   - MemoryToolBox.call 内部全是同步 SQLite IO (WAL 多读并发)
                 #   - 用 asyncio.to_thread 把每个 tool 扔进线程池, asyncio.gather 等齐
                 #   - 配合 MemoryStore 纯读 API 已摘掉 self._lock, 真正并发到 SQLite
                 #   - 同一个 ask_ts 严格透传, 保证 D3 防脏读语义不变
-                obs_blocks: List[str] = []
+                # (label, body) 而不是拼好的整串: 让 _pack_obs_blocks 能按
+                # tool 粒度做公平配额, 而不是先拼后一刀切 (见其 docstring)。
+                obs_blocks: List[Tuple[str, str]] = []
                 ev_list: List[Dict[str, Any]] = []
                 round_fids: List[str] = []
                 round_frame_groups: List[Tuple[str, List[str]]] = []
@@ -10760,7 +11327,7 @@ class RecallAgent:
                                     round_idx, n, res)
                     else:
                         raw_obs = res
-                    obs_blocks.append(f"[mem_tool {n} args={a}]\n{raw_obs}")
+                    obs_blocks.append((f"[mem_tool {n} args={a}]", raw_obs))
                     # ★ 从 obs 文本里扫 frame_ids, 累积到 RecallResult
                     obs_fids = _dedupe_frame_ids(
                         FrameStore.extract_frame_ids(raw_obs))
@@ -10809,7 +11376,7 @@ class RecallAgent:
 
                 # 蒸馏 (★ brief / user_text 分两段传, 让 LLM 明确"只蒸馏 brief 那一件",
                 #   user_text 仅供消解 brief 里"这个/那个"指代不清)
-                raw_concat = "\n\n".join(obs_blocks)
+                raw_concat = _pack_obs_blocks(obs_blocks)
                 distilled = await self._distill(
                     raw_obs=raw_concat, brief=brief, user_text=user_text,
                     evidence_frame_ids=round_fids,
@@ -10965,13 +11532,25 @@ class RecallAgent:
         if _skip_verify:
             log.info("[recall] skip frame verify (%.1fs/%.0fs budget used)",
                      time.time() - t0, time_budget_sec)
+        # ★ 选帧顺序修复。跨工具公平配额是刻意的 (保证证据多样性), 但组内原先
+        #   取的是 fids[:quota] —— 工具返回的原始顺序, 与"哪几帧真被证据点名"
+        #   无关。而唯一的相关性排序 _rank_frame_ids_by_text 直到 verify 之后
+        #   (见下方) 才跑, 只能给幸存者重排, 管不到 8 张预算花在谁身上。
+        #   这里先在每个组内部按证据文本排一遍, 再走配额: 跨工具的多样性不变,
+        #   每个工具的名额花在它自己最被点名的帧上。
+        evidence_for_ranking = "\n".join([final_findings] + clues)
+        ranked_frame_groups = [
+            (label, _rank_frame_ids_by_text(fids, evidence_for_ranking))
+            for label, fids in (collected_frame_groups or [])
+        ]
         if (self.cfg.recall_verify_enabled and collected_fids
                 and self.frame_store is not None and not _skip_verify):
             frame_budget = max(1, int(self.cfg.recall_verify_max_frames))
             verify_candidates = _allocate_frame_ids_across_tools(
-                collected_frame_groups, cap=frame_budget)
+                ranked_frame_groups, cap=frame_budget)
             if not verify_candidates:
-                verify_candidates = collected_fids[:frame_budget]
+                verify_candidates = _rank_frame_ids_by_text(
+                    collected_fids, evidence_for_ranking)[:frame_budget]
             pre_verify_fids = list(collected_fids)
             verified, visual_correction = await self._verify_frames_with_grounding(
                 verify_candidates,
@@ -11026,8 +11605,9 @@ class RecallAgent:
         elif collected_fids:
             frame_budget = max(1, int(self.cfg.recall_verify_max_frames))
             selected = _allocate_frame_ids_across_tools(
-                collected_frame_groups, cap=frame_budget)
-            collected_fids = selected or collected_fids[:frame_budget]
+                ranked_frame_groups, cap=frame_budget)
+            collected_fids = selected or _rank_frame_ids_by_text(
+                collected_fids, evidence_for_ranking)[:frame_budget]
 
         collected_fids = _rank_frame_ids_by_text(
             collected_fids, "\n".join([final_findings] + clues))

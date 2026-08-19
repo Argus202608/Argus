@@ -78,6 +78,39 @@ def db(tmp_path):
 # =========================================================================
 
 class TestSessionLifecycle:
+    def test_monitor_alert_evidence_round_trips_outside_main_history(self, db):
+        db.create_session(session_id="monitor-session", source="desktop")
+        evidence = {
+            "input_count": 12,
+            "shown_count": 2,
+            "frames": [
+                {"ts": 1.0, "source_type": "screen", "thumb_b64": "dGh1bWIx"},
+                {"ts": 9.0, "source_type": "screen", "thumb_b64": "dGh1bWIy"},
+            ],
+        }
+
+        db.insert_mm_monitor_alert(
+            "monitor-session",
+            "mon-1",
+            "Target appeared",
+            label="Target",
+            wall_ts=123.0,
+            evidence=evidence,
+        )
+
+        assert db.list_mm_monitor_alerts("monitor-session") == [{
+            "monitor_id": "mon-1",
+            "text": "Target appeared",
+            "label": "Target",
+            "wall_ts": 123.0,
+            "evidence": evidence,
+        }]
+        message_count = db._conn.execute(
+            "SELECT COUNT(*) FROM messages WHERE session_id = ?",
+            ("monitor-session",),
+        ).fetchone()[0]
+        assert message_count == 0
+
     def test_create_and_get_session(self, db):
         sid = db.create_session(
             session_id="s1",

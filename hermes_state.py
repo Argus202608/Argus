@@ -691,7 +691,8 @@ CREATE TABLE IF NOT EXISTS mm_monitor_alerts (
     monitor_id TEXT NOT NULL,
     text TEXT NOT NULL,
     label TEXT,
-    wall_ts REAL NOT NULL
+    wall_ts REAL NOT NULL,
+    evidence TEXT
 );
 
 CREATE TABLE IF NOT EXISTS mm_watcher_reports (
@@ -1546,26 +1547,47 @@ class SessionDB:
     def insert_mm_monitor_alert(
         self, session_id: str, monitor_id: str, text: str,
         label: str | None = None, wall_ts: float | None = None,
+        evidence: dict | None = None,
     ) -> None:
         ts = float(wall_ts) if wall_ts is not None else time.time()
+        evidence_json = (
+            json.dumps(evidence, ensure_ascii=False, separators=(",", ":"))
+            if isinstance(evidence, dict) else None
+        )
         def _do(conn):
             conn.execute(
                 "INSERT INTO mm_monitor_alerts "
-                "(session_id, monitor_id, text, label, wall_ts) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (session_id, monitor_id, text, label, ts),
+                "(session_id, monitor_id, text, label, wall_ts, evidence) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (session_id, monitor_id, text, label, ts, evidence_json),
             )
         self._execute_write(_do)
 
     def list_mm_monitor_alerts(self, session_id: str) -> list[dict]:
         with self._lock:
             cur = self._conn.execute(
-                "SELECT monitor_id, text, label, wall_ts FROM mm_monitor_alerts "
+                "SELECT monitor_id, text, label, wall_ts, evidence "
+                "FROM mm_monitor_alerts "
                 "WHERE session_id = ? ORDER BY wall_ts ASC, id ASC",
                 (session_id,),
             )
-            return [{"monitor_id": r[0], "text": r[1], "label": r[2],
-                     "wall_ts": r[3]} for r in cur.fetchall()]
+            rows = []
+            for r in cur.fetchall():
+                evidence = None
+                if r[4]:
+                    try:
+                        decoded = json.loads(r[4])
+                        evidence = decoded if isinstance(decoded, dict) else None
+                    except (TypeError, ValueError):
+                        evidence = None
+                rows.append({
+                    "monitor_id": r[0],
+                    "text": r[1],
+                    "label": r[2],
+                    "wall_ts": r[3],
+                    "evidence": evidence,
+                })
+            return rows
 
     def insert_mm_watcher_report(
         self, session_id: str, watcher_id: str, text: str,

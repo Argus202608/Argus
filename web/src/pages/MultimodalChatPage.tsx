@@ -18,12 +18,15 @@
 import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FC, type UIEvent } from "react";
 import { ArrowDown, Camera, ChevronDown, Database, Loader2, MessagesSquare, Mic, Monitor, NotebookPen, Play, Send, Square, Terminal, Volume2 } from "lucide-react";
 import { ChatModelPill } from "@/components/ChatModelPill";
+import { MonitorEvidenceStrip } from "@/components/MonitorEvidenceStrip";
 import { ChatSessionContext } from "@/contexts/chat-session-context";
 import { useSearchParams } from "react-router-dom";
 import { Button } from "@nous-research/ui/ui/components/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@nous-research/ui/ui/components/card";
 import { Badge } from "@nous-research/ui/ui/components/badge";
 import { GatewayClient } from "@/lib/gatewayClient";
+import { SlashPopover, type SlashPopoverHandle } from "@/components/SlashPopover";
+import { executeSlash } from "@/lib/slashExec";
 import { HERMES_BASE_PATH, api } from "@/lib/api";
 import { Markdown } from "@/components/Markdown";
 import { MmReadinessBanner, type MmReadinessReport } from "@/components/MmReadinessBanner";
@@ -38,6 +41,7 @@ import { preferLightCapture } from "@/lib/perf-hints";
 import { formatElapsed, useElapsedSeconds } from "@/hooks/useElapsedSeconds";
 import { visualCaptureProfile } from "@/lib/visual-capture-profile";
 import { RECALL_NO_CLUES, isSynthSaw } from "@/lib/mm-sentinels";
+import { normalizeMonitorEvidence, type MonitorEvidence } from "@/lib/monitor-evidence";
 import {
   isEphemeralControl,
   monitorPresentation,
@@ -201,6 +205,9 @@ const QUERY_WORKER_IMAGE_TASK_LIMIT = 4;
 const QUERY_WORKER_IMAGE_CHAR_BUDGET = 4_000_000;
 const QUERY_WORKER_OCR_RECORD_LIMIT = 3;
 const QUERY_WORKER_OCR_TEXT_LIMIT = 1_800;
+// 切换/恢复会话时向后端要的轨迹行数 (后端硬上限 2000)。见 fetchTrajectory 的注释:
+// 拉满会在切换瞬间搬运一大堆随后就被 compactQueryWorkerTrajectory 丢掉的 base64 图。
+const TRAJECTORY_RESUME_LIMIT = 200;
 
 function frameImageChars(frame: MmTrajectoryFrame): number {
   return (typeof frame.jpeg_b64 === "string" ? frame.jpeg_b64.length : 0)
@@ -310,6 +317,31 @@ export function isCurrentTrajectoryHydration(
   return Boolean(requestedSessionId)
     && requestedSessionId === currentSessionId
     && requestedGeneration === currentGeneration;
+}
+
+/** 恢复历史时首屏先渲染的气泡条数 (剩下的下一帧补齐到 MAX_MESSAGES 窗口)。 */
+export const HISTORY_FIRST_PAINT = 60;
+
+/**
+ * 把恢复出来的历史切成"首屏 + 补齐"两段的下标。
+ *
+ * 聊天列表是非虚拟化的普通 div (见 MAX_MESSAGES 处的注释), 所以一次性 setMessages
+ * 400 条会在切换会话时同步解析 400 份 Markdown、一帧内交付 —— 这就是"切换后要等一下
+ * 才出内容"的前端那一半原因。改成先渲染尾部 HISTORY_FIRST_PAINT 条 (用户视线本来就
+ * 落在最新消息上), 下一帧再把窗口补到 MAX_MESSAGES。
+ *
+ * 返回的 firstStart / fullStart 都是对同一个 restored 数组的下标, 且 firstStart >=
+ * fullStart。当历史本来就不超过首屏时两者相等, 调用方可据此跳过第二段 (不多余渲染一次)。
+ */
+// eslint-disable-next-line react-refresh/only-export-components
+export function historyPaintWindow(
+  total: number,
+  maxMessages: number,
+  firstPaint: number = HISTORY_FIRST_PAINT,
+): { firstStart: number; fullStart: number; needsSecondPaint: boolean } {
+  const fullStart = Math.max(0, total - maxMessages);
+  const firstStart = Math.max(fullStart, total - Math.max(1, firstPaint));
+  return { firstStart, fullStart, needsSecondPaint: firstStart > fullStart };
 }
 
 /** Apply the bounded cache to already-rendered tool cards without losing steps. */
@@ -912,12 +944,15 @@ const _mmWelcomeMsg = (): ChatMsg => ({
   text: "Turn on the camera or share your screen, then just ask. One-shot visual questions go to QueryWorker, which reads the frames from the moment you asked and, when needed, recalls history or searches for reference material.",
 });
 const ChatComposer = memo(function ChatComposer({
-  micState, onSend, onMicToggle, generating, onStop,
+  micState, onSend, onSlash, gw, onMicToggle, generating, onStop,
   ttsEnabled, onTtsToggle,
   voiceDialogEnabled, onVoiceDialogToggle,
 }: {
   micState: MicLifecycleState;
   onSend: (text: string) => void;
+  // `/`-prefixed lines run the gateway slash pipeline instead of a chat turn.
+  onSlash: (command: string) => void;
+  gw: GatewayClient | null;
   onMicToggle: () => void;
   generating: boolean;
   onStop: () => void;
@@ -929,10 +964,14 @@ const ChatComposer = memo(function ChatComposer({
   const { t } = useI18n();
   const [askText, setAskText] = useState("");
   const taRef = useRef<HTMLTextAreaElement | null>(null);
+  const slashRef = useRef<SlashPopoverHandle>(null);
   const submit = () => {
     const txt = askText.trim();
     if (!txt) return;
-    onSend(txt);
+    // A leading "/" is a system command → gateway slash pipeline; everything
+    // else is a normal question. Mirrors the desktop composer / Ink TUI.
+    if (txt.startsWith("/")) onSlash(txt);
+    else onSend(txt);
     setAskText("");
   };
   // 单行起步, 内容换行时长高到 max-h-24 为止 —— 否则 rows={1} 的可视高度固定,
@@ -948,8 +987,11 @@ const ChatComposer = memo(function ChatComposer({
   const recording = micState === "recording";
   const finalizing = micState === "finalizing";
   return (
-    // items-end: composer surface 现在比三个 icon 按钮高, 按钮贴底对齐才不会飘在
-    // 输入框中部 (desktop 同样用 items-end)。
+    // relative wrapper: SlashPopover pops up `bottom-full` above the composer.
+    <div className="relative">
+      <SlashPopover ref={slashRef} input={askText} gw={gw} onApply={setAskText} />
+    {/* items-end: composer surface 现在比三个 icon 按钮高, 按钮贴底对齐才不会飘在
+        输入框中部 (desktop 同样用 items-end)。 */}
     <div className="flex items-end gap-2 border-t p-3">
       <Button size="icon"
         // Red only when actually recording. Connecting stays clickable so a
@@ -1004,6 +1046,9 @@ const ChatComposer = memo(function ChatComposer({
           value={askText}
           onChange={(e) => setAskText(e.target.value)}
           onKeyDown={(e) => {
+            // Let the slash popover claim ↑/↓/Tab/Esc first; it lets Enter fall
+            // through so Enter still submits the (possibly completed) command.
+            if (slashRef.current?.handleKey(e)) return;
             if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); }
           }}
           rows={1}
@@ -1024,6 +1069,7 @@ const ChatComposer = memo(function ChatComposer({
       <Button className="shrink-0" size="sm" prefix={<Send />} onClick={submit}>
         {generating ? t.multimodal.composer.queued : t.multimodal.composer.send}
       </Button>
+    </div>
     </div>
   );
 });
@@ -1698,6 +1744,11 @@ export const BgBlock = memo(function BgBlock({ items, thinking }: {
   useLocaleRevision();  // labels come from translateNow — see AsrBar
   const running = items.some((it) => it.kind === "tool"
     && (!it.toolDone || it.workerStatus === "running"));
+  // ★ 计时器搬到这里 (从上方那条纯思考行迁来): 工具卡一出就吞掉思考行后, 卡片自己
+  //   就是这段耗时的唯一归属。key 绑本段第一个条目 id → 走 useElapsedSeconds 的模块
+  //   注册表, 虚拟滚动卸载/重挂不会倒退; running=false 后停表, 定格总时长。
+  const timerKey = items[0]?.id ? `bg:${items[0].id}` : undefined;
+  const elapsed = useElapsedSeconds(running, timerKey);
   const containerRef = useRef<HTMLDivElement>(null);
   const [allExpanded, setAllExpanded] = useState(false);
   // Collapsed by default: the header line already names the step count, so the
@@ -1741,6 +1792,11 @@ export const BgBlock = memo(function BgBlock({ items, thinking }: {
             ? <span className="text-red-400">✕</span>
             : <span className="text-emerald-500">✓</span>}
         {stepLabel}
+        {elapsed > 0 && (
+          <span className="font-normal tabular-nums text-violet-400/70">
+            {formatElapsed(elapsed)}
+          </span>
+        )}
         {hasExpandable && (
           <span
             className="ml-auto cursor-pointer select-none text-[11px] font-medium text-violet-400 hover:text-violet-300"
@@ -2460,42 +2516,53 @@ const SegmentCard = memo(function SegmentCard({ s, defaultOpen, terminal }: {
 // 现固定渲染在"深度分析 · 标签"标题下方的一行, 不再夹在段卡片之间随内容滚走。
 function WaitingBanner({ waiting }: { waiting: NonNullable<BgItem["waiting"]> }) {
   const segPrefix = typeof waiting.seg === "number" ? `Seg ${waiting.seg} · ` : "";
-  // paused: 无新帧且 ttl 到 → 后端暂停攒帧, 不倒计时。显示 "Waiting for new frames…", 无进度条。
-  if (waiting.paused) {
-    return (
-      <div className="flex items-center gap-1.5 text-[11px] text-violet-200/60">
-        <span className="inline-flex gap-0.5">
-          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-violet-400/60" />
-        </span>
-        <span>{segPrefix}Waiting for new frames…</span>
-      </div>
-    );
-  }
+  const paused = !!waiting.paused;
+  // ★ paused: ttl 已耗尽、零新帧 → 后端在等画面变化 (不烧 VLM)。以前这里把整条
+  //   攒帧条塌成一行、恢复时又整块重挂 → 观感就是"倒计时藏了又突然跳出个小数字"。
+  //   现在【统一布局】: paused/active 都渲染同一套 (帧计数行 + 帧进度条 + ttl 条),
+  //   paused 时只把 ⏱ 换成 ⏸ 文案、ttl 条置 0, 数字原位更新, 不再 mount/unmount 闪。
+  //   注: 屏幕一动"倒计时跳到很小 + 秒完成"是场景重分级 (slow 200s→live 10s) 的
+  //   自适应节奏, 属设计行为, 不在本显示修复范围内。
+  const hasTtl = typeof waiting.ttlSec === "number"
+    && typeof waiting.ttlRemaining === "number" && waiting.ttlSec > 0;
+  const framePct = Math.min(100, waiting.need ? (waiting.have / waiting.need) * 100 : 0);
+  const ttlPct = hasTtl
+    ? Math.min(100, Math.max(0, (waiting.ttlRemaining! / waiting.ttlSec!)) * 100)
+    : 0;
   return (
     <div className="flex flex-col gap-1 text-[11px] text-violet-200/80">
       <div className="flex items-center gap-1.5">
         <span className="inline-flex gap-0.5">
-          <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-violet-400 [animation-delay:-0.3s]" />
-          <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-violet-400 [animation-delay:-0.15s]" />
-          <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-violet-400" />
+          {paused ? (
+            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-violet-400/60" />
+          ) : (
+            <>
+              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-violet-400 [animation-delay:-0.3s]" />
+              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-violet-400 [animation-delay:-0.15s]" />
+              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-violet-400" />
+            </>
+          )}
         </span>
         <span>
-          {segPrefix}Buffering frames… {waiting.have}/{waiting.need}
-          {typeof waiting.ttlRemaining === "number" && (
-            <span className="ml-1 text-violet-300/70">· ⏱ {Math.max(0, Math.ceil(waiting.ttlRemaining))}s left</span>
+          {segPrefix}
+          {paused ? (
+            <>Waiting for new frames… <span className="ml-1 text-violet-300/70">⏸ 等待画面变化</span></>
+          ) : (
+            <>Buffering frames… {waiting.have}/{waiting.need}
+              {typeof waiting.ttlRemaining === "number" && (
+                <span className="ml-1 text-violet-300/70">· ⏱ {Math.max(0, Math.ceil(waiting.ttlRemaining))}s left</span>
+              )}</>
           )}
         </span>
       </div>
       <div className="h-1 w-full overflow-hidden rounded bg-violet-400/15">
         <div className="h-full rounded bg-violet-400/70 transition-all duration-300"
-          style={{ width: `${Math.min(100, waiting.need ? (waiting.have / waiting.need) * 100 : 0)}%` }} />
+          style={{ width: `${framePct}%` }} />
       </div>
-      {typeof waiting.ttlSec === "number" && typeof waiting.ttlRemaining === "number" && waiting.ttlSec > 0 && (
-        <div className="h-0.5 w-full overflow-hidden rounded bg-amber-400/15">
-          <div className="h-full rounded bg-amber-400/60 transition-all duration-300"
-            style={{ width: `${Math.min(100, Math.max(0, waiting.ttlRemaining / waiting.ttlSec) * 100)}%` }} />
-        </div>
-      )}
+      <div className="h-0.5 w-full overflow-hidden rounded bg-amber-400/15">
+        <div className="h-full rounded bg-amber-400/60 transition-all duration-300"
+          style={{ width: `${ttlPct}%` }} />
+      </div>
     </div>
   );
 }
@@ -2759,7 +2826,13 @@ type WatcherReg = { watcher_id: string; label?: string; task_instruction?: strin
 type MonitorReg = MonitorRegistryItem;
 // One proactive alert emitted by a monitor. Alerts render inline under their
 // monitor row in the right registry (never as center-chat bubbles).
-type MonitorAlert = { id: string; text: string; ts: number; streaming?: boolean };
+type MonitorAlert = {
+  id: string;
+  text: string;
+  ts: number;
+  streaming?: boolean;
+  evidence?: MonitorEvidence;
+};
 type MmToast = { id: string; level: string; text: string };
 type AnchorFrame = { ts: number | null; jpeg_b64: string };
 
@@ -2789,6 +2862,11 @@ const LeftPanels = memo(function LeftPanels({
       <Card>
         <CardContent className="p-3">
           <div className="relative aspect-[4/3] overflow-hidden rounded-md bg-black [contain:strict]">
+            {/* Live preview. NOTE: hiding this / throttling it does NOT reduce the
+                screen-share mouse lag — that lag is macOS ScreenCaptureKit
+                capturing the whole Retina display contending with the WindowServer
+                compositor (cursor), which the web layer can't touch. So keep the
+                smoothest, simplest preview: the raw <video> at the source's 4fps. */}
             <video ref={videoRef} autoPlay playsInline muted
               className="h-full w-full object-cover [transform:translateZ(0)]" />
             {!sourceType && (
@@ -2913,7 +2991,7 @@ const ChatColumn = memo(function ChatColumn({
   chatAtBottomRef, isRecordingUI, asrPartial, asrBuffer,
   micState, ttsEnabled, onTtsToggle,
   voiceDialogEnabled, onVoiceDialogToggle,
-  generating, onStop, onSend, onMicToggle,
+  generating, onStop, onSend, onSlash, gw, onMicToggle,
 }: {
   rows: Row[];
   renderRow: (i: number, row: Row) => React.ReactNode;
@@ -2934,6 +3012,8 @@ const ChatColumn = memo(function ChatColumn({
   generating: boolean;
   onStop: () => void;
   onSend: (text: string) => void;
+  onSlash: (command: string) => void;
+  gw: GatewayClient | null;
   onMicToggle: () => void;
 }) {
   useLocaleRevision();  // labels come from translateNow — see AsrBar
@@ -2978,6 +3058,8 @@ const ChatColumn = memo(function ChatColumn({
         generating={generating}
         onStop={onStop}
         onSend={onSend}
+        onSlash={onSlash}
+        gw={gw}
         onMicToggle={onMicToggle}
       />
     </Card>
@@ -3166,6 +3248,7 @@ const MonitorPanel = memo(function MonitorPanel({
                 <div className="whitespace-pre-wrap break-words text-[12px] leading-relaxed text-amber-50">
                   {a.text || (a.streaming ? "…" : "")}
                 </div>
+                {a.evidence && <MonitorEvidenceStrip evidence={a.evidence} />}
               </div>
             ))}
           </div>
@@ -4690,6 +4773,7 @@ export default function MultimodalChatPage() {
       text?: string; source?: string; request_id?: string;
       monitor_id?: string; monitor_label?: string; status?: string; brief?: string;
       history_policy?: unknown; ephemeral_control?: unknown; ephemeral?: unknown;
+      evidence?: unknown;
     }>(
       "message.complete", (ev) => {
         if (!isMine(ev)) return;
@@ -4716,7 +4800,12 @@ export default function MultimodalChatPage() {
             // If deltas already accumulated, keep that; else use the payload's
             // full text (single-complete case).
             const text = cur.text.trim() ? cur.text : finalText;
-            cp[at] = { ...cur, text, streaming: false };
+            cp[at] = {
+              ...cur,
+              text,
+              streaming: false,
+              evidence: normalizeMonitorEvidence(p.evidence),
+            };
             next.set(rec.monitorId, cp);
             return next;
           });
@@ -5412,7 +5501,15 @@ export default function MultimodalChatPage() {
     // these — they live in dedicated DB tables.
     const fetchMmSidechannel = (sid: string) => {
       if (!sid) return;
-      gw.request<{ alerts?: { monitor_id: string; text: string; label?: string; wall_ts: number }[] }>(
+      gw.request<{
+        alerts?: {
+          monitor_id: string;
+          text: string;
+          label?: string;
+          wall_ts: number;
+          evidence?: unknown;
+        }[];
+      }>(
         "multimodal.list_monitor_alerts", { session_id: sid },
       ).then((r) => {
         const list = Array.isArray(r?.alerts) ? r!.alerts! : [];
@@ -5425,6 +5522,7 @@ export default function MultimodalChatPage() {
             id: `${a.monitor_id}_${a.wall_ts}_${cur.length}`,
             text: a.text,
             ts: Math.round((a.wall_ts || 0) * 1000),
+            evidence: normalizeMonitorEvidence(a.evidence),
           });
           grouped.set(a.monitor_id, cur);
         }
@@ -5485,8 +5583,13 @@ export default function MultimodalChatPage() {
     const fetchTrajectory = (sid: string) => {
       if (!sid) return;
       const generation = ++trajectoryHydrationGenerationRef.current;
+      // ★ 切换会话只取尾部一段, 不要一次拉满 2000 条。后端上限仍是 2000, 但轨迹行
+      //   会带 base64 证据缩略图 (每行最多 12 帧), 拉满时单帧 WS payload 实测 ~8.5MB
+      //   → 切换瞬间白等一大段网络 + json 解析。而前端 compactQueryWorkerTrajectory
+      //   本来就只保留最近几个 task 的图 (QUERY_WORKER_IMAGE_CHAR_BUDGET=4MB), 多拉的
+      //   那部分图解析完立刻被丢掉, 纯浪费。往回翻/开 Debug 面板时再按需补。
       gw.request<{ entries?: MmTrajectoryEntry[] }>(
-        "multimodal.trajectory.list", { session_id: sid, limit: 2000 },
+        "multimodal.trajectory.list", { session_id: sid, limit: TRAJECTORY_RESUME_LIMIT },
       ).then((res) => {
         if (!isCurrentTrajectoryHydration(
           sid,
@@ -5557,11 +5660,40 @@ export default function MultimodalChatPage() {
             const now = Date.now();
             for (const m of restored) if (m.createdAt == null) m.createdAt = now;
             fullHistoryRef.current = restored;
-            const start = Math.max(0, restored.length - MAX_MESSAGES);
+            const { firstStart, fullStart, needsSecondPaint } = historyPaintWindow(
+              restored.length, MAX_MESSAGES);
             // ★ 置顶欢迎气泡 (纯前端引导, 不入 backend history)。老 session 刷新走这里
             //   恢复历史, 若不主动 prepend 会被 restored 冲掉。
-            setMessages([_mmWelcomeMsg(), ...restored.slice(start)]);
-            setHasMoreHistory(start > 0);
+            // ★ 两段式首屏: 先只交付尾部一屏 (用户视线本来就落在最新那条上), 让气泡立刻
+            //   可见; 下一帧再把渲染窗补到 MAX_MESSAGES。列表是非虚拟化的普通 div, 一次
+            //   交付 400 条要同步解析 400 份 Markdown —— 这是"切换后要等一下才出内容"的
+            //   前端那一半原因。
+            setMessages([_mmWelcomeMsg(), ...restored.slice(firstStart)]);
+            // 首屏之上还有内容 → 先允许上翻 (第二段补齐后由 loadOlderHistory 自己更新)。
+            setHasMoreHistory(firstStart > 0);
+            if (needsSecondPaint) {
+              requestAnimationFrame(() => {
+                // 期间用户可能又切走了 → 别把上一会话的历史补进新会话。
+                if (refs.current.sessionId !== liveSid) return;
+                // 不用像 loadOlderHistory 那样补 scrollTop: 那是"用户停在顶部往上翻"的
+                // 场景 (要锚住视线); 这里刚切完会话, 用户在底部, ChatColumn 里跟随底部的
+                // useLayoutEffect 会因 rows 变化再拉一次到底 —— 视线始终在最新那条上。
+                const older = restored.slice(fullStart, firstStart);
+                setMessages((cur) => {
+                  // 把 older prepend 到【首屏那批之前】, 保留 cur 里已有的一切 (欢迎气泡在
+                  // 头部, 尾部可能已经流进来了新的实时气泡)。按 id 去重防重复补。
+                  const have = new Set(cur.map((m) => m.id));
+                  const add = older.filter((m) => !have.has(m.id));
+                  if (add.length === 0) return cur;
+                  const welcomeAtHead = cur[0]?.role === "system"
+                    && cur[0]?.text === _mmWelcomeMsg().text ? 1 : 0;
+                  return welcomeAtHead
+                    ? [cur[0], ...add, ...cur.slice(1)]
+                    : [...add, ...cur];
+                });
+                setHasMoreHistory(fullStart > 0);
+              });
+            }
           } else {
             // 空 history 也要留一条欢迎气泡 (与 resetSessionUi 一致)。
             setMessages([_mmWelcomeMsg()]);
@@ -6647,6 +6779,26 @@ export default function MultimodalChatPage() {
       });
   }, []);
 
+  // Slash commands: a `/`-prefixed composer line runs the SAME gateway pipeline
+  // the desktop composer / Ink TUI use — try slash.exec (the full command
+  // registry: /help, /model, /compress, /resume, …), then fall back to
+  // command.dispatch (exec/plugin/alias/skill/send). Output renders as a system
+  // bubble; skill/send directives submit a normal turn via sendAsk. Non-slash
+  // text never reaches here (ChatComposer.submit routes it to onSend).
+  const runSlash = useCallback((command: string) => {
+    const r = refs.current;
+    if (!r.gw) return;
+    void executeSlash({
+      command,
+      sessionId: r.sessionId || "",
+      gw: r.gw,
+      callbacks: {
+        sys: (text: string) => addMsg({ id: nid(), role: "system", text }),
+        send: (message: string) => sendAsk(message),
+      },
+    });
+  }, [addMsg, sendAsk]);
+
   // Stop button: interrupt the in-flight turn (session.interrupt aborts the live
   // turn + clears any queued prompt). Optimistically clear streaming flags so the
   // composer flips Stop→Send immediately even if the server's final events race.
@@ -6832,6 +6984,13 @@ export default function MultimodalChatPage() {
     const { inToolCall, toolActivity } = deriveTurnToolPresentation(
       nextRow?.type === "bg" ? nextRow.items : undefined,
     );
+    // ★ 工具卡一旦出现 (相邻 bg 行含 tool → inToolCall), 上方这条纯思考状态行就整体
+    //   不再显示 —— 即使正文气泡还没落地。理由: 工具卡本身已经实时呈现进度 (◌ 旋转 /
+    //   ✓ 耗时 / 结果摘要), 再在它上面叠一行 "Thinking…" / "Waiting response…" 既冗余,
+    //   又会在"工具已全部跑完、正文未到"的空窗期被误读成"模型正在思考推理"。卡片仍由
+    //   它自己的 bg 行渲染, 这里只吞掉这条状态行 (pureThinking 时 ChatBubble 只渲染
+    //   ThinkingLine, 所以直接不出这一行即可)。
+    if (pureThinking && inToolCall) return null;
     // 紧凑收纳: 纯思考行 (含工具调用态) 只是一行小状态文字, 上下都不需要 12px 大间距,
     // 用 -mt-3 抵消 space-y-3 让它紧贴上一条 UserMessage, 用 pb-0 拿掉底部 padding ——
     // 下一条 (最终气泡) 靠 space-y-3 自己拿间距。
@@ -6996,6 +7155,8 @@ export default function MultimodalChatPage() {
           generating={generating}
           onStop={stopAsk}
           onSend={sendAsk}
+          onSlash={runSlash}
+          gw={refs.current.gw}
           onMicToggle={onMicToggle}
         />
         </ChatSessionContext.Provider>

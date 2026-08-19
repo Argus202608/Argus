@@ -667,6 +667,7 @@ interface MessagePayload {
   monitor_label?: string
   status?: string
   brief?: string
+  evidence?: unknown
 }
 
 // Monitor + watcher are BOTH decoupled from the center chat now. Monitor
@@ -844,7 +845,7 @@ export function attachMultimodalGateway(): Off {
         const rec = curMonitorAlertId.get(key)
         curMonitorAlertId.delete(key)
         if (!rec) return
-        finalizeMonitorAlert(rec.monitorId, rec.alertId, p.text || '')
+        finalizeMonitorAlert(rec.monitorId, rec.alertId, p.text || '', p.evidence)
         return
       }
       // (Watcher no longer streams into the center chat via message.* — those

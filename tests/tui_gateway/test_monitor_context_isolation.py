@@ -125,10 +125,17 @@ def test_plain_monitor_alert_is_only_emitted_and_persisted_to_sidechannel(
     session, original_history = _session()
     emitted = []
     inserted = []
+    evidence = {
+        "input_count": 3,
+        "shown_count": 1,
+        "frames": [{"ts": 1.5, "source_type": "screen", "thumb_b64": "dGh1bWI="}],
+    }
 
     class _SideDb:
-        def insert_mm_monitor_alert(self, session_id, monitor_id, text, label=None):
-            inserted.append((session_id, monitor_id, text, label))
+        def insert_mm_monitor_alert(
+            self, session_id, monitor_id, text, label=None, evidence=None,
+        ):
+            inserted.append((session_id, monitor_id, text, label, evidence))
 
     @contextlib.contextmanager
     def _side_db(_session):
@@ -141,7 +148,11 @@ def test_plain_monitor_alert_is_only_emitted_and_persisted_to_sidechannel(
 
     delivered = engine.speak_cb(
         "mon-plain",
-        {"brief": "watch for a phone", "hook_main_agent": False},
+        {
+            "brief": "watch for a phone",
+            "hook_main_agent": False,
+            "_delivery_evidence": evidence,
+        },
         "A phone appeared.",
     )
 
@@ -158,6 +169,8 @@ def test_plain_monitor_alert_is_only_emitted_and_persisted_to_sidechannel(
         "durable-monitor-session", "mon-plain", "A phone appeared.",
     )
     assert inserted[0][3].startswith("watch for")
+    assert inserted[0][4] == evidence
+    assert emitted[-1][2]["evidence"] == evidence
     assert session["history"] == original_history
     assert session["history_version"] == 7
 

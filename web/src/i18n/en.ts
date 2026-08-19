@@ -1067,6 +1067,8 @@ export const en: Translations = {
       completedOnceShort: "Single-trigger monitor completed",
       noHitsYet: "Monitoring, no hits yet…",
       paused: "Monitor paused",
+      evidenceSummary: (inputCount, shownCount) => `Model input: ${inputCount} frames · showing ${shownCount} evidence thumbnails`,
+      evidenceFrame: (index) => `Monitor evidence frame ${index}`,
       collapseEarly: "▾ Collapse earlier",
       showMore: (n: number) => `▸ Show more (${n})`,
     },

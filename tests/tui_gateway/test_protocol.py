@@ -1770,3 +1770,62 @@ def test_slow_completion_does_not_block_fast_handler(completion_method, server):
     assert fast_elapsed < 0.5, f"fast handler blocked for {fast_elapsed:.2f}s behind {completion_method}"
 
     released.set()
+
+
+# The dashboard fires all four of these immediately after session.resume returns
+# (fetchRegistries / fetchMmSidechannel / fetchTrajectory in MultimodalChatPage).
+SESSION_SWITCH_HYDRATION_METHODS = [
+    "multimodal.list_registries",
+    "multimodal.list_monitor_alerts",
+    "multimodal.list_watcher_content",
+    "multimodal.trajectory.list",
+]
+
+
+@pytest.mark.parametrize("hydration_method", SESSION_SWITCH_HYDRATION_METHODS)
+def test_session_switch_hydration_is_pool_routed(hydration_method, server):
+    """Session-switch hydration RPCs must run on the pool, not the reader thread.
+
+    Regression for "web 端切换 session 时候内容加载速度非常的慢": session.resume was
+    already pool-routed, but these four ran inline on the reader thread — the same
+    thread that flushes streaming tokens — so switching sessions stalled the event
+    loop (`ws write slow (loop stalled >10.0s)`, max_send=9.47s in agent.log) and
+    the restored bubbles arrived later than the resume response carrying them.
+    """
+    assert hydration_method in server._LONG_HANDLERS
+
+
+@pytest.mark.parametrize("hydration_method", SESSION_SWITCH_HYDRATION_METHODS)
+def test_slow_hydration_does_not_block_fast_handler(hydration_method, server):
+    """A slow hydration RPC must not block concurrent fast RPCs on the reader thread."""
+    released = threading.Event()
+
+    def slow_hydration(rid, params):
+        released.wait(timeout=5)
+        return server._ok(rid, {"entries": []})
+
+    # The `server` fixture deliberately does NOT restore _methods (it's populated
+    # at import time), so patch.dict is what keeps this stub from leaking into
+    # tests that call the real handler directly (e.g.
+    # test_trajectory_image_budget.py's snapshot test).
+    with patch.dict(
+        server._methods,
+        {
+            hydration_method: slow_hydration,
+            "fast.ping": lambda rid, params: server._ok(rid, {"pong": True}),
+        },
+    ):
+        t0 = time.monotonic()
+        assert server.dispatch(
+            {"id": "slow", "method": hydration_method, "params": {}}
+        ) is None
+
+        fast_resp = server.dispatch({"id": "fast", "method": "fast.ping", "params": {}})
+        fast_elapsed = time.monotonic() - t0
+
+        assert fast_resp["result"] == {"pong": True}
+        assert fast_elapsed < 0.5, (
+            f"fast handler blocked for {fast_elapsed:.2f}s behind {hydration_method}"
+        )
+
+        released.set()

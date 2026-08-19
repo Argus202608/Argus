@@ -2546,6 +2546,8 @@ export const zh: Translations = {
       completedOnceHint: '单次监控已完成；如需再次等待，请新建监控',
       fallbackLabel: '监控',
       alertsTitle: '监控命中',
+      evidenceSummary: (inputCount, shownCount) => `本轮模型输入 ${inputCount} 帧 · 展示 ${shownCount} 张证据缩略图`,
+      evidenceFrame: index => `Monitor 证据帧 ${index}`,
       expandMore: (n: number) => `▸ 展开更多 (${n})`,
       collapse: '▾ 收起'
     },

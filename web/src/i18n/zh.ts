@@ -1052,6 +1052,8 @@ export const zh: Translations = {
       completedOnceShort: "单次监控已完成",
       noHitsYet: "监控中,暂无命中…",
       paused: "监控已暂停",
+      evidenceSummary: (inputCount, shownCount) => `本轮模型输入 ${inputCount} 帧 · 展示 ${shownCount} 张证据缩略图`,
+      evidenceFrame: (index) => `Monitor 证据帧 ${index}`,
       collapseEarly: "▾ 收起早期",
       showMore: (n: number) => `▸ 展开更多 (${n})`,
     },

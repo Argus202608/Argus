@@ -407,6 +407,11 @@ function fmtClock(ms?: number): string {
   return `${h}:${m}:${s}`
 }
 
+function fmtFrameTs(ts: number): string {
+  const sec = Math.max(0, Math.round(ts))
+  return `${String(Math.floor(sec / 60)).padStart(2, '0')}:${String(sec % 60).padStart(2, '0')}`
+}
+
 /** Per-monitor proactive-alert list. Each monitor gets its own card; alerts
  *  stream in via message.* handlers (curMonitorAlertId → $mmMonitorAlerts) and
  *  hydrate on session enter via list_monitor_alerts. Default: newest 2 alerts
@@ -469,6 +474,36 @@ function MonitorAlertsPanel() {
                     <div className="whitespace-pre-wrap break-words text-[11px] leading-relaxed text-(--ui-text-primary)">
                       {a.text || (a.streaming ? '…' : '')}
                     </div>
+                    {a.evidence && (
+                      <div className="mt-1.5">
+                        <div className="mb-1 text-[9px] text-(--ui-text-tertiary)">
+                          {mo.evidenceSummary(a.evidence.input_count, a.evidence.frames.length)}
+                        </div>
+                        <div className="grid grid-cols-3 gap-1">
+                          {a.evidence.frames.map((frame, index) => {
+                            const src = `data:image/jpeg;base64,${frame.thumb_b64}`
+                            return (
+                              <button
+                                className="group relative overflow-hidden rounded border border-(--ui-stroke-secondary) bg-black"
+                                key={`${frame.ts}_${index}`}
+                                onClick={() => window.open(src, '_blank')}
+                                title={`${fmtFrameTs(frame.ts)}${frame.source_type ? ` · ${frame.source_type}` : ''}`}
+                                type="button"
+                              >
+                                <img
+                                  alt={mo.evidenceFrame(index + 1)}
+                                  className="aspect-video w-full object-cover"
+                                  src={src}
+                                />
+                                <span className="absolute bottom-0 right-0 bg-black/70 px-1 py-px font-mono text-[8px] text-white">
+                                  {fmtFrameTs(frame.ts)}
+                                </span>
+                              </button>
+                            )
+                          })}
+                        </div>
+                      </div>
+                    )}
                   </li>
                 ))}
               </ul>

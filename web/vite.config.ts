@@ -62,6 +62,9 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
+      // ★ 2026-08-19: 与 apps/desktop/vite.config.ts 同款 —— 指向源码目录而不是
+      // 包根, apps/shared 没有 build 步骤 (private, type:module, 直接出 .ts)。
+      "@hermes/shared": path.resolve(__dirname, "../apps/shared/src"),
     },
     // When @nous-research/ui is symlinked via `file:../../design-language`,
     // Node's module resolution would pick up shared deps from

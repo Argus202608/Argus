@@ -8,23 +8,28 @@ real thread + add_monitor/remove_monitor job lifecycle.
 """
 
 import asyncio
+import base64
+from io import BytesIO
 import time
 import types
 import unittest
 from unittest.mock import patch
 
 from agent.multimodal.monitor_engine import (
-    MonitorEngine, parse_monitor_verdict, should_flush, pick_window, sample_frames,
+    MonitorEngine, build_monitor_evidence, merge_monitor_evidence,
+    parse_monitor_verdict, should_flush, pick_window, sample_frames,
 )
+from PIL import Image
 
 
 # --------------------------------------------------------------------------- #
 # Fakes
 # --------------------------------------------------------------------------- #
 class _Frame:
-    def __init__(self, ts):
+    def __init__(self, ts, *, jpeg_b64="AAAA", source_type="screen"):
         self.ts = ts
-        self.jpeg_b64 = "AAAA"
+        self.jpeg_b64 = jpeg_b64
+        self.source_type = source_type
 
 
 class _Buf:
@@ -146,6 +151,45 @@ class TestTickBehavior(unittest.TestCase):
         })
         # cursor advanced to newest frame shown
         self.assertEqual(mons["m1"]["last_seen_ts"], 3.0)
+
+    def test_speak_evidence_is_bounded_and_comes_from_exact_model_batch(self):
+        delivered = []
+        trajectory = []
+        frames = [_Frame(float(i), jpeg_b64=f"raw-{i}") for i in range(1, 11)]
+        buf = _Buf(frames)
+        mons = {"m1": {"brief": "x", "enabled": True, "last_seen_ts": 0.5}}
+
+        def _speak(_mid, monitor, _text):
+            delivered.append(monitor.get("_delivery_evidence"))
+            return True
+
+        eng = MonitorEngine(
+            buf,
+            monitors_ref=mons,
+            sid="s1",
+            speak_cb=_speak,
+            emit_cb=lambda event, payload: trajectory.append((event, payload)),
+        )
+        eng.client = _FakeAsyncClient("SPEAK: target")
+        eng.model = "m"
+        with patch(
+            "agent.multimodal.monitor_engine._monitor_evidence_thumb",
+            side_effect=lambda raw: f"thumb-{raw}",
+        ):
+            self._tick(eng, "m1")
+
+        evidence = delivered[0]
+        self.assertEqual(evidence["input_count"], 10)
+        self.assertEqual(evidence["shown_count"], 6)
+        self.assertEqual(
+            [row["ts"] for row in evidence["frames"]],
+            [1.0, 3.0, 5.0, 6.0, 8.0, 10.0],
+        )
+        verdict = next(payload for event, payload in trajectory
+                       if event == "multimodal.trajectory"
+                       and payload.get("phase") == "verdict")
+        self.assertEqual(verdict["frames"], evidence["frames"])
+        self.assertNotIn("_delivery_evidence", mons["m1"])
 
     def test_silent_does_not_record_or_emit(self):
         spoken = []
@@ -705,6 +749,40 @@ class TestJobLifecycle(unittest.TestCase):
 
 
 class TestHelpers(unittest.TestCase):
+    def test_monitor_evidence_reencodes_a_small_thumbnail_not_the_model_image(self):
+        original = BytesIO()
+        Image.new("RGB", (1280, 720), (20, 80, 160)).save(original, format="JPEG")
+        original_b64 = base64.b64encode(original.getvalue()).decode("ascii")
+
+        evidence = build_monitor_evidence([
+            _Frame(4.25, jpeg_b64=original_b64, source_type="camera"),
+        ])
+
+        assert evidence["input_count"] == 1
+        assert evidence["shown_count"] == 1
+        row = evidence["frames"][0]
+        assert row["thumb_b64"] != original_b64
+        assert row["source_type"] == "camera"
+        with Image.open(BytesIO(base64.b64decode(row["thumb_b64"]))) as thumb:
+            assert thumb.size == (320, 180)
+
+    def test_aggregated_evidence_keeps_six_images_but_counts_all_model_inputs(self):
+        left = {
+            "input_count": 12,
+            "frames": [{"ts": float(i), "thumb_b64": f"a{i}"} for i in range(6)],
+        }
+        right = {
+            "input_count": 8,
+            "frames": [{"ts": float(i + 6), "thumb_b64": f"b{i}"} for i in range(6)],
+        }
+
+        merged = merge_monitor_evidence(left, right)
+
+        self.assertEqual(merged["input_count"], 20)
+        self.assertEqual(merged["shown_count"], 6)
+        self.assertEqual(merged["frames"][0]["ts"], 0.0)
+        self.assertEqual(merged["frames"][-1]["ts"], 11.0)
+
     def test_monitor_prompt_requires_direct_evidence_and_exact_delivery(self):
         from agent.multimodal.monitor_agent import MONITOR_AGENT_SYSTEM
 

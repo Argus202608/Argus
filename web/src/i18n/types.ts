@@ -1044,6 +1044,8 @@ export interface Translations {
       completedOnceShort: string;
       noHitsYet: string;
       paused: string;
+      evidenceSummary: (inputCount: number, shownCount: number) => string;
+      evidenceFrame: (index: number) => string;
       collapseEarly: string;
       showMore: (n: number) => string;
     };

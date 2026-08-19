@@ -27,7 +27,7 @@ from difflib import SequenceMatcher
 from io import BytesIO
 from typing import (
     Any, AsyncIterator, Awaitable, Callable, Deque, Dict, List,
-    Optional, Set, Tuple,
+    Optional, Sequence, Set, Tuple,
 )
 
 import numpy as np
@@ -120,6 +120,94 @@ def mm_tokenize_query(query: str) -> List[str]:
         seen.add(tok)
         out.append(tok)
     return out
+
+
+#: 超过这么多字的 CJK 整块 token 才启用二元组兜底 ("红色耳机" 这种 4 字词
+#: 直接 LIKE 是准的, 不需要退化)。
+_MM_CJK_WHOLE_MAX = 5
+_MM_CJK_RUN_RE = re.compile(r"[一-鿿]{2,}")
+
+
+def mm_cjk_bigram_groups(terms: List[str]) -> List[List[str]]:
+    """Character bigrams for over-long CJK tokens, as a keyword-recall fallback.
+
+    :func:`mm_tokenize_query` keeps a CJK run whole, which is correct for short
+    noun phrases but fatal for a natural-language question: "红色外套的男人把背包
+    放哪了" becomes ONE token, and the keyword arm then requires that entire
+    string to appear verbatim inside description/subject/object/action. It never
+    does, so the keyword arm silently returns nothing and hybrid retrieval
+    degenerates to vector-only for every unspaced Chinese query.
+
+    Returning bigrams as separate concept groups lets the existing
+    distinct-concept scoring rank by how many of them a row covers, so noise
+    from any single bigram stays diluted. Only used as a retry when the strict
+    pass finds nothing.
+    """
+    groups: List[List[str]] = []
+    seen: Set[str] = set()
+    for t in terms:
+        for run in _MM_CJK_RUN_RE.findall(t or ""):
+            if len(run) <= _MM_CJK_WHOLE_MAX:
+                continue
+            for i in range(len(run) - 1):
+                bg = run[i:i + 2]
+                if bg in _MM_STOP_TOKENS or bg in seen:
+                    continue
+                seen.add(bg)
+                groups.append([bg])
+    return groups
+
+
+def mm_keyword_pool_sql(
+    fields: Tuple[str, ...],
+    field_weights: Dict[str, float],
+    groups: List[List[str]],
+    all_variants: List[str],
+    *,
+    recency_col: str,
+    fixed_params: int = 2,
+    var_budget: int = 900,
+) -> Tuple[str, List[str], str, List[str]]:
+    """Build the shared WHERE/ORDER BY for a keyword candidate pool.
+
+    Returns ``(where_or, likes, order_by, rank_params)``; bind order is
+    ``(..., *likes, *rank_params, pool_cap)``.
+
+    ★ 2026-08-19: 抽出来是因为 search_micro_by_keyword 与
+    search_entity_by_keyword 本该是同一套检索, 实际却各写了一份, 然后**漂了**:
+    micro 侧把相关性表达式下推到了 ORDER BY, entity 侧还停在
+    ``ORDER BY {recency} DESC LIMIT pool_cap`` —— 于是 entity 的字段权重打分只在
+    "最近 pool_cap 条命中"里生效, 一条久远但精确命中的实体根本进不了池子, 真正
+    的排序信号是"新"而不是"像"。同理 CJK 二元组兜底也只加在了 micro 一侧。
+    两份实现 = 两倍的漂移面, 所以合并成一个 builder, 差异只留 recency_col。
+
+    相关性下推的代价: 原来 ``ORDER BY {recency} DESC LIMIT n`` 可借索引提前收敛,
+    现在要把所有 WHERE 命中行都算一遍分。但命中集本来就得全扫 (``LIKE '%..%'``
+    用不上索引), 多出来的只是每行一次表达式求值。
+
+    ``var_budget``: SQLite 默认变量上限 999。词表爆炸时放弃 rank 表达式、退回
+    时间序, 别让查询直接报错 (纯词表的 where_or 一定保留)。
+    """
+    if not all_variants:
+        return "", [], "", []
+    where_or = " OR ".join(f"{f} LIKE ?" for f in fields for _ in all_variants)
+    likes = [f"%{v}%" for _ in fields for v in all_variants]
+
+    rank_sql = ""
+    rank_params: List[str] = []
+    for f in fields:
+        for grp in groups:
+            ors = " OR ".join(f"{f} LIKE ?" for _ in grp)
+            rank_params.extend(f"%{v}%" for v in grp)
+            rank_sql += (
+                f" + (CASE WHEN ({ors}) THEN {field_weights[f]} ELSE 0 END)")
+    if not rank_sql or (len(likes) + len(rank_params)
+                        + fixed_params) > var_budget:
+        rank_sql, rank_params = "", []
+
+    order_by = (f"({rank_sql.lstrip(' +')}) DESC, {recency_col} DESC"
+                if rank_sql else f"{recency_col} DESC")
+    return where_or, likes, order_by, rank_params
 
 
 def mm_expand_terms(terms: List[str]) -> List[str]:
@@ -649,7 +737,7 @@ class FrameBuffer:
 # ★ 工作流:
 #   - MemoryWriter._finalize_micro 时, 调用 frame_store.maybe_store(代表帧, micro_id=mid)
 #     拿到 frame_id, 回填到 MicroEvent.frame_ids 写入 SQLite.
-#   - Recall 调 search_micro / search_by_time 等工具, 输出里把 frame_ids 透传出来.
+#   - Recall 调 search_events / get_entity_context 等工具, 输出里把 frame_ids 透传出来.
 #   - RecallWorker 在 raw_obs 里正则提取 frame_ids → 累积到 RecallResult.frame_ids.
 #   - FrontWorker._stream_continuation 续写时, 从 frame_store 拉真图加进续写 prompt.
 # =========================================================================== #
@@ -1985,6 +2073,37 @@ class TaskStateRecord:
     created_at: float = field(default_factory=time.time)
 
 
+def _apply_conn_pragmas(c: sqlite3.Connection, *, set_wal: bool = False) -> None:
+    """Per-connection PRAGMA setup. MUST be called on every new connection.
+
+    ``synchronous`` is a per-connection setting that is NOT persisted in the
+    database file, so setting it once during schema creation or migration only
+    affects that one short-lived connection -- every later connection silently
+    falls back to the default. Under WAL that default is FULL, i.e. an fsync on
+    every single commit. This DB holds rebuildable observation memory written by
+    a 10s-interval writer, so per-commit fsync is not worth its cost; NORMAL
+    only fsyncs at checkpoints.
+
+    ``busy_timeout`` is set here as an explicit guard only. Python's
+    ``sqlite3.connect()`` already defaults to ``timeout=5.0``, which maps to
+    busy_timeout=5000ms, so this line is a no-op under the default -- it exists
+    so that behaviour stays pinned if a caller ever passes ``timeout=0``. (The
+    four pre-existing ``PRAGMA busy_timeout=5000`` calls elsewhere in this file
+    are no-ops for the same reason.)
+
+    ``journal_mode`` IS persisted at the database level, so it only needs to be
+    set once per process (pass ``set_wal=True`` on the first connection) as a
+    safety net in case this store is the first thing to open a fresh DB file.
+    """
+    try:
+        c.execute("PRAGMA synchronous=NORMAL")
+        c.execute("PRAGMA busy_timeout=5000")
+        if set_wal:
+            c.execute("PRAGMA journal_mode=WAL")
+    except sqlite3.Error as e:
+        log.warning("[memory] PRAGMA setup failed: %s", e)
+
+
 class _DesktopSQLiteMixin:
     """Small helper for desktop-memory side stores sharing MemoryStore's DB."""
 
@@ -2001,10 +2120,13 @@ class _DesktopSQLiteMixin:
         if parent:
             os.makedirs(parent, exist_ok=True)
         self._lock = threading.RLock()
+        self._wal_ready = False
 
     def _conn(self) -> sqlite3.Connection:
         c = sqlite3.connect(self.db_path)
         c.row_factory = sqlite3.Row
+        _apply_conn_pragmas(c, set_wal=not self._wal_ready)
+        self._wal_ready = True
         return c
 
     @contextmanager
@@ -3214,6 +3336,10 @@ class MemoryStore:
                 os.makedirs(parent, exist_ok=True)
             log.info("[mem] 使用 SQLite: %s", self.db_path)
         self._lock = threading.RLock()
+        # 必须在 _init_db() 之前置位: _init_db 会走 _conn(), 让第一条连接顺手
+        # 兜底把 journal_mode=WAL 落到库上; 同时每条连接都补 synchronous=NORMAL
+        # (per-connection 设置, 别处设过的不算)。
+        self._wal_ready = False
         self._init_db()
         # in-memory 缓存最近的 micro 边界, 用于 finalize
         self._pending_micros: List[MicroEvent] = []   # 已 finalize 但未聚合到 macro 的 L1
@@ -3443,6 +3569,8 @@ class MemoryStore:
     def _conn(self) -> sqlite3.Connection:
         c = sqlite3.connect(self.db_path)
         c.row_factory = sqlite3.Row
+        _apply_conn_pragmas(c, set_wal=not self._wal_ready)
+        self._wal_ready = True
         return c
 
     @contextmanager
@@ -4222,6 +4350,30 @@ class MemoryStore:
             c.commit()
             return int(cur.lastrowid)
 
+    def has_any_quotes(self) -> bool:
+        """True iff entity_quotes has at least one row (ignores ask_ts / D3).
+
+        Speaker-attributed quotes are a **reserved** capability: the schema,
+        indexes and merge-time entity_id rewrite are all in place, but the only
+        writer (`insert_quote`) has no caller yet — it waits on face-ID /
+        voiceprint-ID landing, which is what will supply the speaker entity per
+        utterance. Until then the table is structurally empty, and the two quote
+        recall tools can only ever return "(empty)".
+
+        MemoryToolBox uses this to tell the Recall LLM the difference between
+        "no quote matched your query" (worth rewording) and "this capability is
+        not wired yet" (never worth retrying). Cheap: LIMIT 1 on a rowid table.
+        """
+        try:
+            with self._lock, self._connect() as c:
+                row = c.execute(
+                    "SELECT 1 FROM entity_quotes LIMIT 1").fetchone()
+            return row is not None
+        except Exception:
+            # Missing table / closed db must not break a recall round; behave
+            # as "not populated" so the caller emits the do-not-retry hint.
+            return False
+
     def get_quotes_by_entity(self, entity_id: str, ask_ts: float, *,
                              t_window: Optional[Tuple[float, float]] = None,
                              top_k: int = 10) -> List[EntityQuote]:
@@ -4589,26 +4741,50 @@ class MemoryStore:
                     (ask_ts, top_k),
                 )
                 return [self._row_to_micro(r) for r in cur.fetchall()]
-        groups = mm_expand_groups(base_terms)   # scoring by concept
-        all_variants = mm_expand_terms(base_terms)   # SQL candidate pool
         # Candidate pool: any variant hitting any field. Cap generously so
         # scoring has room but SQLite stays cheap.
         fields = ("description", "subject", "object", "action")
-        where_or = " OR ".join(f"{f} LIKE ?" for f in fields for _ in all_variants)
-        likes = [f"%{v}%" for _ in fields for v in all_variants]
-        pool_cap = max(top_k * 6, 60)
-        with self._connect() as c:
-            cur = c.execute(
-                f"""SELECT * FROM micro_events
-                    WHERE t_end <= ?
-                      AND (superseded_by IS NULL OR superseded_by='')
-                      AND ({where_or})
-                    ORDER BY t_end DESC LIMIT ?""",
-                (ask_ts, *likes, pool_cap),
-            )
-            rows = cur.fetchall()
         # Field weights: description/subject/object are richer signal than action.
         fw = {"description": 3.0, "subject": 2.5, "object": 2.0, "action": 1.0}
+        pool_cap = max(top_k * 8, 120)
+
+        def _fetch_pool(groups: List[List[str]],
+                        all_variants: List[str]) -> List[sqlite3.Row]:
+            """候选池: 任一变体命中任一字段, 按粗相关性 (而非时间) 截断。
+
+            SQL 构造见 mm_keyword_pool_sql (与 search_entity_by_keyword 共用,
+            那里有为什么必须把相关性下推到 ORDER BY 的说明)。
+            """
+            where_or, likes, order_by, rank_params = mm_keyword_pool_sql(
+                fields, fw, groups, all_variants, recency_col="t_end")
+            if not where_or:
+                return []
+            with self._connect() as c:
+                return c.execute(
+                    f"""SELECT * FROM micro_events
+                        WHERE t_end <= ?
+                          AND (superseded_by IS NULL OR superseded_by='')
+                          AND ({where_or})
+                        ORDER BY {order_by} LIMIT ?""",
+                    (ask_ts, *likes, *rank_params, pool_cap),
+                ).fetchall()
+
+        groups = mm_expand_groups(base_terms)        # scoring by concept
+        rows = _fetch_pool(groups, mm_expand_terms(base_terms))
+        if not rows:
+            # ★ CJK 兜底: mm_tokenize_query 把整块中文保留为一个 token, 所以
+            #   "红色外套的男人把背包放哪了" 这种自然提问会要求整句原样出现在
+            #   字段里 —— 永不命中, 关键词路静默返回空, 混合检索退化成纯向量。
+            #   严格匹配无果时降级到字二元组, 让打分按覆盖了几个二元组来排序。
+            bigram_groups = mm_cjk_bigram_groups(base_terms)
+            if bigram_groups:
+                groups = bigram_groups
+                rows = _fetch_pool(
+                    bigram_groups, [v for g in bigram_groups for v in g])
+                if rows:
+                    log.debug(
+                        "[mem kw] 严格匹配为空, 已降级到 CJK 二元组: %d 组 → %d 行",
+                        len(bigram_groups), len(rows))
         scored = []
         for r in rows:
             blob = {f: str(r[f] or "").lower() for f in fields}
@@ -4644,23 +4820,45 @@ class MemoryStore:
                     (ask_ts, top_k),
                 )
                 return [self._row_to_entity(r) for r in cur.fetchall()]
-        groups = mm_expand_groups(base_terms)
-        all_variants = mm_expand_terms(base_terms)
         fields = ("name", "aliases", "attributes")
-        where_or = " OR ".join(f"{f} LIKE ?" for f in fields for _ in all_variants)
-        likes = [f"%{v}%" for _ in fields for v in all_variants]
-        pool_cap = max(top_k * 6, 60)
-        with self._connect() as c:
-            cur = c.execute(
-                f"""SELECT * FROM entities
-                    WHERE first_seen <= ?
-                      AND (merged_into IS NULL OR merged_into='')
-                      AND ({where_or})
-                    ORDER BY last_seen DESC LIMIT ?""",
-                (ask_ts, *likes, pool_cap),
-            )
-            rows = cur.fetchall()
         fw = {"name": 3.0, "aliases": 2.5, "attributes": 1.5}
+        pool_cap = max(top_k * 6, 60)
+
+        def _fetch_pool(groups: List[List[str]],
+                        all_variants: List[str]) -> List[sqlite3.Row]:
+            where_or, likes, order_by, rank_params = mm_keyword_pool_sql(
+                fields, fw, groups, all_variants, recency_col="last_seen")
+            if not where_or:
+                return []
+            with self._connect() as c:
+                return c.execute(
+                    f"""SELECT * FROM entities
+                        WHERE first_seen <= ?
+                          AND (merged_into IS NULL OR merged_into='')
+                          AND ({where_or})
+                        ORDER BY {order_by} LIMIT ?""",
+                    (ask_ts, *likes, *rank_params, pool_cap),
+                ).fetchall()
+
+        groups = mm_expand_groups(base_terms)
+        rows = _fetch_pool(groups, mm_expand_terms(base_terms))
+        if not rows:
+            # ★ FIX 2026-08-19: CJK 二元组兜底。此前只有 search_micro_by_keyword
+            #   有这一层, 而 search_entity 是 RECALL_SYSTEM "Standard object
+            #   lookup" 的**第一步** —— mm_tokenize_query 把整块中文保留为一个
+            #   token, 所以"红色外套的男人把背包放哪了"这种自然提问会要求整句原样
+            #   出现在 name/aliases/attributes 里, 永不命中。结果是整条实体链的
+            #   关键词臂静默返回空, RRF 只剩向量单臂 (且 _RRF_VEC_MIN_SIM=0.25
+            #   还会再滤掉一批), 而调用方看不到任何降级信号。
+            bigram_groups = mm_cjk_bigram_groups(base_terms)
+            if bigram_groups:
+                groups = bigram_groups
+                rows = _fetch_pool(
+                    bigram_groups, [v for g in bigram_groups for v in g])
+                if rows:
+                    log.debug(
+                        "[mem kw] entity 严格匹配为空, 已降级到 CJK 二元组: "
+                        "%d 组 → %d 行", len(bigram_groups), len(rows))
         scored = []
         for r in rows:
             blob = {f: str(r[f] or "").lower() for f in fields}
@@ -4698,6 +4896,77 @@ class MemoryStore:
                 (ask_ts, limit),
             )
             return [self._row_to_macro(r) for r in cur.fetchall()]
+
+    # ----- ★ L3 召回读者。写入侧 (aggregate_l3) 一直在花 agg_l3_frames 张图的
+    #   LLM 成本产出 super_events, 但读者只有 dashboard 的裸 SQL
+    #   (hermes_cli/web_server.py) 和 dump_all (无调用方) —— 召回链路上
+    #   零读者, 等于纯成本。下面三个 reader 让 L3 进入召回, 并沿用与
+    #   L1/L2 完全一致的两条不变量: D3 防脏读 (t_end <= ask_ts) +
+    #   软删过滤 (superseded_by 为空)。
+    def get_supers_overlapping_time(
+        self, t_start: float, t_end: float, ask_ts: float,
+        limit: int = 3,
+    ) -> List[SuperEvent]:
+        """L3 super_events overlapping [t_start, t_end], newest first.
+
+        Overlap (not containment): a super spans minutes, so a point-in-time
+        question almost never falls inside one by containment alone.
+        """
+        with self._connect() as c:
+            rows = c.execute(
+                """SELECT * FROM super_events
+                   WHERE t_end <= ? AND t_start <= ? AND t_end >= ?
+                     AND (superseded_by IS NULL OR superseded_by='')
+                   ORDER BY t_end DESC LIMIT ?""",
+                (ask_ts, float(t_end), float(t_start), max(1, limit)),
+            ).fetchall()
+        return [self._row_to_super(r) for r in rows]
+
+    def get_recent_supers(self, ask_ts: float,
+                          limit: int = 2) -> List[SuperEvent]:
+        """The most recent valid L3 narratives (session-level "what's going on")."""
+        with self._connect() as c:
+            rows = c.execute(
+                """SELECT * FROM super_events WHERE t_end <= ?
+                     AND (superseded_by IS NULL OR superseded_by='')
+                   ORDER BY t_end DESC LIMIT ?""",
+                (ask_ts, max(1, limit)),
+            ).fetchall()
+        return [self._row_to_super(r) for r in rows]
+
+    def get_supers_for_macro_ids(
+        self, macro_ids: Sequence[str], ask_ts: float,
+        limit: int = 3,
+    ) -> List[SuperEvent]:
+        """The L3 narratives that own the given L2 macros, newest first.
+
+        Joins on ``macro_events.super_id`` rather than on the ``super_events
+        .macro_ids`` JSON blob: ``insert_super`` back-fills that FK for every
+        macro inside the super's span, it is a real indexed column, and a LIKE
+        over the JSON text would false-positive on id prefixes.
+        """
+        wanted = [str(m) for m in (macro_ids or []) if m]
+        if not wanted:
+            return []
+        with self._connect() as c:
+            ph = ",".join("?" for _ in wanted)
+            sids = [r[0] for r in c.execute(
+                f"""SELECT DISTINCT super_id FROM macro_events
+                    WHERE id IN ({ph}) AND super_id IS NOT NULL
+                      AND super_id != ''""",
+                wanted,
+            ).fetchall()]
+            if not sids:
+                return []
+            ph2 = ",".join("?" for _ in sids)
+            rows = c.execute(
+                f"""SELECT * FROM super_events
+                    WHERE id IN ({ph2}) AND t_end <= ?
+                      AND (superseded_by IS NULL OR superseded_by='')
+                    ORDER BY t_end DESC LIMIT ?""",
+                (*sids, ask_ts, max(1, limit)),
+            ).fetchall()
+        return [self._row_to_super(r) for r in rows]
 
     def get_macro(self, macro_id: str, ask_ts: float) -> Optional[MacroEvent]:
         with self._connect() as c:
@@ -5153,6 +5422,89 @@ class MemoryStore:
         ))
         return new_id
 
+    @staticmethod
+    def _rebind_refs_after_split(
+        c: sqlite3.Connection, old_micro_id: str,
+        split_specs: List[Tuple[str, float, float, List[str]]],
+    ) -> Dict[str, int]:
+        """Rebind entity_event / entity_frame / edges from a split micro onto the
+        specific new micro each row belongs to.
+
+        Assignment policy, most specific first:
+          1. entity_frame rows whose frame_id was handed to a split go to that
+             split (frame ownership is authoritative);
+          2. otherwise the row goes to the split whose [t_start, t_end] contains
+             its t_observed;
+          3. otherwise the split with the nearest midpoint (LLM-provided ranges
+             may leave gaps, and dropping the row would lose the link).
+
+        The decision is made in Python rather than as a chain of time-ranged
+        UPDATEs on purpose: each row must be evaluated against the ORIGINAL
+        micro_id, but the first UPDATE would already have rewritten it, so a
+        cascade would only ever rebind to the first split.
+
+        ``UPDATE OR IGNORE`` is used where a primary key could collide, matching
+        :meth:`merge_micros`. Returns per-table rebound row counts.
+        """
+        if not split_specs:
+            return {}
+        # frame_id → new micro id (先到先得: 同一 fid 被多个 split 声明时归第一个)
+        fid_owner: Dict[str, str] = {}
+        for nid, _ts, _te, fids in split_specs:
+            for fid in fids:
+                fid_owner.setdefault(str(fid), nid)
+
+        def _pick(t_observed: float, frame_id: Optional[str] = None) -> str:
+            if frame_id:
+                owner = fid_owner.get(str(frame_id))
+                if owner:
+                    return owner
+            for nid, ts, te, _f in split_specs:
+                if ts <= t_observed <= te:
+                    return nid
+            return min(
+                split_specs,
+                key=lambda s: abs(((s[1] + s[2]) / 2.0) - t_observed),
+            )[0]
+
+        counts: Dict[str, int] = {}
+
+        ef_rows = c.execute(
+            "SELECT entity_id, frame_id, t_observed FROM entity_frame "
+            "WHERE micro_id=?", (old_micro_id,)).fetchall()
+        for row in ef_rows:
+            c.execute(
+                "UPDATE OR IGNORE entity_frame SET micro_id=? "
+                "WHERE entity_id=? AND frame_id=?",
+                (_pick(float(row["t_observed"]), row["frame_id"]),
+                 row["entity_id"], row["frame_id"]),
+            )
+        counts["entity_frame"] = len(ef_rows)
+
+        # entity_event 的 PK 是 (entity_id, micro_id), 每个 entity 对同一个老
+        # micro 只有一行, 所以按 entity_id 逐行改是安全的。
+        ee_rows = c.execute(
+            "SELECT entity_id, t_observed FROM entity_event WHERE micro_id=?",
+            (old_micro_id,)).fetchall()
+        for row in ee_rows:
+            c.execute(
+                "UPDATE OR IGNORE entity_event SET micro_id=? "
+                "WHERE entity_id=? AND micro_id=?",
+                (_pick(float(row["t_observed"])), row["entity_id"], old_micro_id),
+            )
+        counts["entity_event"] = len(ee_rows)
+
+        ed_rows = c.execute(
+            "SELECT id, t_observed FROM edges WHERE micro_id=?",
+            (old_micro_id,)).fetchall()
+        for row in ed_rows:
+            c.execute(
+                "UPDATE edges SET micro_id=? WHERE id=?",
+                (_pick(float(row["t_observed"])), row["id"]),
+            )
+        counts["edges"] = len(ed_rows)
+        return counts
+
     def split_micro(self, micro_id: str, *,
                     splits: List[Dict[str, Any]],
                     reviewer_round: int = 0,
@@ -5164,7 +5516,14 @@ class MemoryStore:
         Missing per-split fields inherit the old micro's; missing frame_ids are
         divided evenly across splits. facts_keys go to split 0 only. The old
         micro is soft-deleted (superseded_by = the first new id). Returns the new
-        ids, or [] if fewer than 2 splits or the micro isn't found."""
+        ids, or [] if fewer than 2 splits or the micro isn't found.
+
+        The old micro's entity_event / entity_frame / edges rows are rebound to
+        the specific split they belong to (see :meth:`_rebind_refs_after_split`),
+        mirroring what :meth:`merge_micros` does. Without that rebind those rows
+        keep pointing at the soft-deleted micro and the entity-event links are
+        silently lost.
+        """
         if not splits or len(splits) < 2:
             return []
         with self._lock, self._connect() as c:
@@ -5177,6 +5536,8 @@ class MemoryStore:
             old_facts = json.loads(r["facts_keys"] or "[]")
             old_fids = json.loads(r["frame_ids"] or "[]")
             new_ids: List[str] = []
+            # (new_id, t_start, t_end, frame_ids) —— 供下面重绑外键时判定归属
+            split_specs: List[Tuple[str, float, float, List[str]]] = []
             for i, sp in enumerate(splits):
                 ts = float(sp.get("t_start", r["t_start"]))
                 te = float(sp.get("t_end", r["t_end"]))
@@ -5192,6 +5553,7 @@ class MemoryStore:
                 ] if old_fids else []
                 nid = f"micro_split_{int(te * 1000)}_{i}_{uuid.uuid4().hex[:6]}"
                 new_ids.append(nid)
+                split_specs.append((nid, ts, te, list(fids)))
                 c.execute(
                     """INSERT INTO micro_events
                        (id, t_start, t_end, description, subject, object, action,
@@ -5203,6 +5565,9 @@ class MemoryStore:
                      json.dumps(fids, ensure_ascii=False),
                      time.time(), time.time(), 0),
                 )
+            # ★ 把老 micro 的 entity_event / entity_frame / edges 重绑到具体 split
+            #   (merge_micros 早就这么做了, split 这边原先漏了)
+            n_rebound = self._rebind_refs_after_split(c, micro_id, split_specs)
             # 软删除老 micro, 指向第一个新 id
             c.execute(
                 """UPDATE micro_events SET superseded_by=?, revised_at=?,
@@ -5214,6 +5579,7 @@ class MemoryStore:
             t_applied=time.time(), reviewer_round=reviewer_round,
             op="split_micro", target_ids=[micro_id], new_ids=new_ids,
             payload={"n_splits": len(splits),
+                     "rebound_refs": n_rebound,
                      "split_briefs": [str(s.get("description", ""))[:120] for s in splits]},
             reason=reason,
         ))
@@ -5732,31 +6098,56 @@ class MemoryStore:
         return {"micros": micros, "macros": macros,
                 "supers": supers, "entities": entities}
 
+    #: Tables that must SURVIVE reset(). Everything else in the DB file is
+    #: session-scoped observation data and gets wiped on video-source switch.
+    #: A denylist (rather than the old hardcoded allowlist) is deliberate: the
+    #: previous allowlist named 10 tables while the schema had grown to 17, so
+    #: screen_texts / screen_tables / frame_embeddings / memory_frames /
+    #: entity_quotes / entity_rep_frames / task_states all leaked across
+    #: sessions -- last video's OCR text and frame vectors stayed queryable by
+    #: the next video's recall. New tables are now covered automatically.
+    _RESET_KEEP_TABLES = frozenset({
+        "meta",             # migration bookkeeping; wiping it re-runs migrations
+    })
+
     def reset(self) -> Dict[str, int]:
         """Clear all memory (called on video-source switch to guarantee session
-        isolation). Wipes 9 tables (micro/macro/super events, entities, edges,
-        entity_event, entity_frame, entity_states, revision_log) plus the pending
-        caches. Returns per-table deleted row counts, for driver logging."""
-        tables = ["micro_events", "macro_events", "super_events",
-                  "entities", "edges", "entity_event", "entity_frame",
-                  # ★ E1/E2 (evolve): 新表也要清, 保证 session-scoped 隔离
-                  "entity_states", "revision_log", "audio_observations"]
+        isolation).
+
+        Enumerates the live schema from sqlite_master and wipes every table
+        except :attr:`_RESET_KEEP_TABLES`, so tables added later are covered
+        without touching this method. Also clears the pending L1/L2 caches.
+        Returns per-table deleted row counts, for driver logging.
+        """
         deleted: Dict[str, int] = {}
         with self._lock, self._connect() as c:
+            rows = c.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' "
+                "AND name NOT LIKE 'sqlite_%'"
+            ).fetchall()
+            tables = sorted(
+                str(r[0]) for r in rows
+                if str(r[0]) not in self._RESET_KEEP_TABLES
+            )
             for tbl in tables:
+                # 表名来自 sqlite_master, 不是外部输入, 拼接安全
                 try:
-                    cur = c.execute(f"SELECT COUNT(*) FROM {tbl}")
+                    cur = c.execute(f'SELECT COUNT(*) FROM "{tbl}"')
                     n = int(cur.fetchone()[0])
                 except sqlite3.OperationalError:
                     n = 0
                 try:
-                    c.execute(f"DELETE FROM {tbl}")
+                    c.execute(f'DELETE FROM "{tbl}"')
                 except sqlite3.OperationalError:
-                    pass
+                    log.warning("[mem reset] 清表失败, 跳过: %s", tbl)
+                    continue
                 deleted[tbl] = n
             c.commit()
         self._pending_micros.clear()
         self._pending_macros.clear()
+        nonzero = {k: v for k, v in deleted.items() if v}
+        log.info("[mem reset] 清空 %d 张表, 其中有数据的: %s",
+                 len(deleted), nonzero or "(none)")
         return deleted
 
     def close(self) -> None:

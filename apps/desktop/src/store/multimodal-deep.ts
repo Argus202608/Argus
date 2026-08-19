@@ -1,3 +1,8 @@
+import {
+  normalizeMonitorEvidence,
+  type MonitorEvidence,
+  type MonitorEvidenceFrame
+} from '@hermes/shared'
 import { atom } from 'nanostores'
 
 import { translateNow } from '@/i18n'
@@ -101,7 +106,14 @@ export interface MonitorAlert {
   text: string
   ts: number
   streaming?: boolean
+  evidence?: MonitorEvidence
 }
+
+// ★ 2026-08-19: 实现搬到 @hermes/shared/monitor-evidence, web 侧那份逐字副本
+// 一并指向同一处 (两个 cap 之前是两边各写一遍的字面量)。这里保留 re-export,
+// 所以 `from './multimodal-deep'` 的既有 import 面不变。
+export { normalizeMonitorEvidence, type MonitorEvidence, type MonitorEvidenceFrame }
+
 export const $mmMonitorAlerts = atom<Record<string, MonitorAlert[]>>({})
 let _alertSeq = 0
 function _nextAlertId(): string {
@@ -139,14 +151,19 @@ export function appendMonitorAlertDelta(monitorId: string, alertId: string, delt
 /** Finalize a streaming alert. If deltas already accumulated we keep them;
  *  otherwise use the payload's full text (single-complete case where no
  *  deltas arrived). Flips streaming → false either way. */
-export function finalizeMonitorAlert(monitorId: string, alertId: string, finalText: string): void {
+export function finalizeMonitorAlert(
+  monitorId: string,
+  alertId: string,
+  finalText: string,
+  evidence?: unknown
+): void {
   const list = $mmMonitorAlerts.get()
   const cur = list[monitorId]
   if (!cur) return
   const next = cur.map(a => {
     if (a.id !== alertId) return a
     const text = a.text.trim() ? a.text : finalText
-    return { ...a, text, streaming: false }
+    return { ...a, text, streaming: false, evidence: normalizeMonitorEvidence(evidence) }
   })
   $mmMonitorAlerts.set({ ...list, [monitorId]: next })
 }
@@ -689,7 +706,13 @@ export async function fetchMmSidechannel(): Promise<void> {
   // Monitor alerts → group by monitor_id, oldest-first.
   try {
     const res = await gw.request<{
-      alerts?: Array<{ monitor_id: string; text: string; wall_ts: number; label?: string }>
+      alerts?: Array<{
+        monitor_id: string
+        text: string
+        wall_ts: number
+        label?: string
+        evidence?: unknown
+      }>
     }>('multimodal.list_monitor_alerts', { session_id: sid })
     if ($gateway.get() !== gw || $mmSessionId.get() !== sid) return
     const rows = Array.isArray(res?.alerts) ? res!.alerts : []
@@ -700,7 +723,13 @@ export async function fetchMmSidechannel(): Promise<void> {
       const ts = typeof r.wall_ts === 'number' ? r.wall_ts * 1000 : Date.now()
       const id = _nextAlertId()
       const list = byMon[mid] || (byMon[mid] = [])
-      list.push({ id, text: String(r.text || ''), ts, streaming: false })
+      list.push({
+        id,
+        text: String(r.text || ''),
+        ts,
+        streaming: false,
+        evidence: normalizeMonitorEvidence(r.evidence)
+      })
     }
     // The backend persists and emits alerts on separate async paths. A live
     // alert can arrive after this request starts but before its older snapshot

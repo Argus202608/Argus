@@ -2392,6 +2392,8 @@ export const en: Translations = {
       completedOnceHint: 'Single-trigger monitor completed; create a new one to watch again',
       fallbackLabel: 'Monitor',
       alertsTitle: 'Monitor hits',
+      evidenceSummary: (inputCount, shownCount) => `Model input: ${inputCount} frames · showing ${shownCount} evidence thumbnails`,
+      evidenceFrame: index => `Monitor evidence frame ${index}`,
       expandMore: n => `▸ Show more (${n})`,
       collapse: '▾ Collapse'
     },

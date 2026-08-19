@@ -56,4 +56,37 @@ describe('desktop watcher registry presentation', () => {
 
     expect(container.innerHTML).toBe('')
   })
+
+  it('renders bounded Monitor evidence with the true model-input count', () => {
+    $mmMonitors.set([{
+      monitor_id: 'mon-evidence',
+      brief: '看到手机时提醒',
+      status: 'running'
+    }])
+    $mmMonitorAlerts.set({
+      'mon-evidence': [{
+        id: 'alert-evidence',
+        text: '手机出现了',
+        ts: Date.now(),
+        evidence: {
+          input_count: 18,
+          shown_count: 2,
+          frames: [
+            { ts: 2, source_type: 'screen', thumb_b64: 'dGh1bWIx' },
+            { ts: 8, source_type: 'screen', thumb_b64: 'dGh1bWIy' }
+          ]
+        }
+      }]
+    })
+
+    renderZh(<DeepPanel />)
+
+    expect(screen.getByText('本轮模型输入 18 帧 · 展示 2 张证据缩略图')).toBeTruthy()
+    expect(screen.getByAltText('Monitor 证据帧 1').getAttribute('src')).toBe(
+      'data:image/jpeg;base64,dGh1bWIx'
+    )
+    expect(screen.getByAltText('Monitor 证据帧 2').getAttribute('src')).toBe(
+      'data:image/jpeg;base64,dGh1bWIy'
+    )
+  })
 })

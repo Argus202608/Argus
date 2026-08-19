@@ -5213,20 +5213,59 @@ def _write_desktop_build_stamp(project_root: Path, *, source_mode: bool) -> None
 def _desktop_packaged_executable(desktop_dir: Path) -> Optional[Path]:
     """Return the current platform's unpacked Electron app executable."""
     release_dir = desktop_dir / "release"
+    names: list[str] = ["Hermes"]
+    package_json = desktop_dir / "package.json"
+    if package_json.is_file():
+        try:
+            package_data = json.loads(package_json.read_text(encoding="utf-8"))
+            build_info = package_data.get("build", {})
+            for key in ("productName", "executableName"):
+                raw_name = build_info.get(key) or package_data.get(key)
+                if isinstance(raw_name, str) and raw_name.strip():
+                    names.append(raw_name.strip())
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.debug("Failed to read desktop package.json for launch artifact names: %s", exc)
+
+    names = list(dict.fromkeys(names))
+    binary_variants = []
+    for name in names:
+        for variant in (name, name.lower(), name.capitalize()):
+            if variant not in binary_variants:
+                binary_variants.append(variant)
+
     if sys.platform == "darwin":
-        candidates = list(release_dir.glob("mac*/Hermes.app/Contents/MacOS/Hermes"))
+        candidates: list[Path] = []
+        for app_name in names:
+            for exe_name in names:
+                candidates.extend(
+                    release_dir.glob(f"mac*/{app_name}.app/Contents/MacOS/{exe_name}")
+                )
     elif sys.platform == "win32":
+        exe_names = [
+            name if name.lower().endswith(".exe") else f"{name}.exe" for name in binary_variants
+        ]
         candidates = [
-            release_dir / "win-unpacked" / "Hermes.exe",
-            release_dir / "win-ia32-unpacked" / "Hermes.exe",
-            release_dir / "win-arm64-unpacked" / "Hermes.exe",
+            release_dir / "win-unpacked" / exe_name
+            for exe_name in exe_names
+        ]
+        # expand for other Windows arch output directories
+        candidates += [
+            release_dir / "win-ia32-unpacked" / exe_name
+            for exe_name in exe_names
+        ]
+        candidates += [
+            release_dir / "win-arm64-unpacked" / exe_name
+            for exe_name in exe_names
         ]
     else:
         candidates = [
-            release_dir / "linux-unpacked" / "hermes",
-            release_dir / "linux-unpacked" / "Hermes",
-            release_dir / "linux-arm64-unpacked" / "hermes",
-            release_dir / "linux-arm64-unpacked" / "Hermes",
+            release_dir / "linux-unpacked" / base_name
+            for base_name in binary_variants
+        ]
+        # expand for arm64 Linux output directory
+        candidates += [
+            release_dir / "linux-arm64-unpacked" / base_name
+            for base_name in binary_variants
         ]
 
     existing = [p for p in candidates if p.exists()]
