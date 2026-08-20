@@ -14,7 +14,7 @@ description: "使用 Python 标准库进行被动域名侦察"
 
 | | |
 |---|---|
-| 来源 | 可选 — 通过 `hermes skills install official/research/domain-intel` 安装 |
+| 来源 | 可选 — 通过 `argus skills install official/research/domain-intel` 安装 |
 | 路径 | `optional-skills/research/domain-intel` |
 | 平台 | linux, macos, windows |
 

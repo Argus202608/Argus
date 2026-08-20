@@ -14,19 +14,19 @@ Generate flat, minimal light/dark-aware SVG diagrams as standalone HTML files, u
 
 | | |
 |---|---|
-| Source | Optional — install with `hermes skills install official/creative/concept-diagrams` |
+| Source | Optional — install with `argus skills install official/creative/concept-diagrams` |
 | Path | `optional-skills/creative/concept-diagrams` |
 | Version | `0.1.0` |
 | Author | v1k22 (original PR), ported into hermes-agent |
 | License | MIT |
 | Platforms | linux, macos, windows |
 | Tags | `diagrams`, `svg`, `visualization`, `education`, `physics`, `chemistry`, `engineering` |
-| Related skills | [`architecture-diagram`](/docs/user-guide/skills/bundled/creative/creative-architecture-diagram), [`excalidraw`](/docs/user-guide/skills/bundled/creative/creative-excalidraw), `generative-widgets` |
+| Related skills | [`architecture-diagram`](/user-guide/skills/bundled/creative/creative-architecture-diagram), [`excalidraw`](/user-guide/skills/bundled/creative/creative-excalidraw), `generative-widgets` |
 
 ## Reference: full SKILL.md
 
 :::info
-The following is the complete skill definition that Hermes loads when this skill is triggered. This is what the agent sees as instructions when the skill is active.
+The following is the complete skill definition that Argus loads when this skill is triggered. This is what the agent sees as instructions when the skill is active.
 :::
 
 # Concept Diagrams

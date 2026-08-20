@@ -21,12 +21,12 @@ Manage Apple Notes via memo CLI: create, search, edit.
 | License | MIT |
 | Platforms | macos |
 | Tags | `Notes`, `Apple`, `macOS`, `note-taking` |
-| Related skills | [`obsidian`](/docs/user-guide/skills/bundled/note-taking/note-taking-obsidian) |
+| Related skills | [`obsidian`](/user-guide/skills/bundled/note-taking/note-taking-obsidian) |
 
 ## Reference: full SKILL.md
 
 :::info
-The following is the complete skill definition that Hermes loads when this skill is triggered. This is what the agent sees as instructions when the skill is active.
+The following is the complete skill definition that Argus loads when this skill is triggered. This is what the agent sees as instructions when the skill is active.
 :::
 
 # Apple Notes

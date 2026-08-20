@@ -4,7 +4,7 @@
   "private": true,
   "version": "0.1.0",
   "description": "Native desktop shell for Argus.",
-  "author": "Nous Research",
+  "author": "MMArgus Team",
   "type": "module",
   "main": "electron/main.cjs",
   "engines": {
@@ -18,7 +18,7 @@
     "profile:main": "wait-on http://127.0.0.1:5174 && cross-env XCURSOR_SIZE=24 ARGUS_DESKTOP_DEV_SERVER=http://127.0.0.1:5174 electron --inspect=9229 .",
     "profile:main:cpu": "wait-on http://127.0.0.1:5174 && cross-env XCURSOR_SIZE=24 NODE_OPTIONS=--cpu-prof ARGUS_DESKTOP_DEV_SERVER=http://127.0.0.1:5174 electron .",
     "start": "npm run build && electron .",
-    "build": "node scripts/assert-root-install.cjs && node scripts/write-build-stamp.cjs && node scripts/stage-hermes-source.cjs && node scripts/stage-native-deps.cjs && tsc -b && vite build &&  node scripts/bundle-electron-main.mjs && npm run postbuild",
+    "build": "node scripts/assert-root-install.cjs && node scripts/write-build-stamp.cjs && node scripts/stage-argus-source.cjs && node scripts/stage-native-deps.cjs && tsc -b && vite build &&  node scripts/bundle-electron-main.mjs && npm run postbuild",
     "postbuild": "node scripts/assert-dist-built.cjs",
     "prebuilder": "node scripts/patch-electron-builder-mac-binary.cjs",
     "builder": "cross-env NODE_OPTIONS=--max-old-space-size=16384 node scripts/run-electron-builder.cjs",
@@ -59,7 +59,7 @@
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
-    "@hermes/shared": "file:../shared",
+    "@argus/shared": "file:../shared",
     "@icons-pack/react-simple-icons": "=13.11.1",
     "@lezer/highlight": "^1.2.3",
     "@nanostores/react": "^1.1.0",
@@ -151,6 +151,7 @@
       {
         "name": "Argus Protocol",
         "schemes": [
+          "argus",
           "hermes"
         ]
       }
@@ -176,8 +177,8 @@
         "to": "install-stamp.json"
       },
       {
-        "from": "build/hermes-src",
-        "to": "hermes-src"
+        "from": "build/argus-src",
+        "to": "argus-src"
       },
       {
         "from": "build/native-deps",
@@ -245,7 +246,7 @@
     },
     "linux": {
       "category": "Development",
-      "maintainer": "Nous Research <support@nousresearch.com>",
+      "maintainer": "MMArgus Team <MMArgus-Team@users.noreply.github.com>",
       "synopsis": "Native desktop shell for Argus.",
       "target": [
         "AppImage",

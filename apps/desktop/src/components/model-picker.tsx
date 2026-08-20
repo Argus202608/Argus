@@ -5,8 +5,8 @@ import { useI18n } from '@/i18n'
 import { currentPickerSelection } from '@/lib/model-status-label'
 import type { ModelOptionProvider, ModelOptionsResponse, ModelPricing } from '@/types/hermes'
 
-import type { HermesGateway } from '../hermes'
-import { getGlobalModelOptions } from '../hermes'
+import type { HermesGateway } from '../argus'
+import { getGlobalModelOptions } from '../argus'
 import { cn } from '../lib/utils'
 import { startManualOnboarding } from '../store/onboarding'
 

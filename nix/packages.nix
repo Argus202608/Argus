@@ -1,4 +1,4 @@
-# nix/packages.nix — Hermes Agent package built with uv2nix
+# nix/packages.nix — Argus package built with uv2nix
 { inputs, ... }:
 {
   perSystem =
@@ -55,9 +55,10 @@
           extraDependencyGroups = [ "messaging" ];
         };
 
-        tui = full.hermesTui;
-        web = full.hermesWeb;
-        desktop = full.hermesDesktop;
+        argus = full;
+        tui = full.argusTui;
+        web = full.argusWeb;
+        desktop = full.argusDesktop;
       };
     };
 }

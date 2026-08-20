@@ -139,7 +139,7 @@ export function fetchLinkTitle(url: string): Promise<string> {
     return pending
   }
 
-  const bridge = typeof window === 'undefined' ? undefined : window.hermesDesktop?.fetchLinkTitle
+  const bridge = typeof window === 'undefined' ? undefined : window.argusDesktop?.fetchLinkTitle
 
   if (!bridge) {
     titleCache.set(key, '')
@@ -196,7 +196,7 @@ export function useLinkTitle(url?: null | string): string {
 
 export function openExternalLink(href: string): void {
   if (href) {
-    void window.hermesDesktop?.openExternal?.(href)
+    void window.argusDesktop?.openExternal?.(href)
   }
 }
 

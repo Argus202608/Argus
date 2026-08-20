@@ -14,7 +14,7 @@ Axolotl：基于 YAML 的 LLM 微调（LoRA、DPO、GRPO）。
 
 | | |
 |---|---|
-| 来源 | 可选 — 通过 `hermes skills install official/mlops/axolotl` 安装 |
+| 来源 | 可选 — 通过 `argus skills install official/mlops/axolotl` 安装 |
 | 路径 | `optional-skills/mlops/training/axolotl` |
 | 版本 | `1.0.0` |
 | 作者 | Orchestra Research |

@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 def _print_aiohttp_missing() -> None:
     print(
         "argus proxy requires aiohttp. Install one of:\n"
-        "  pip install 'hermes-agent[messaging]'\n"
+        "  pip install 'mm-argus[messaging]'\n"
         "  pip install aiohttp",
         file=sys.stderr,
     )

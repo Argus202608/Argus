@@ -128,7 +128,7 @@ class TestCreatePairing:
         with patch(
             "hermes_cli.telegram_managed_bot.httpx.post", return_value=mock_resp
         ) as post:
-            pairing = create_pairing("https://api.example.com", bot_name="Hermes Agent")
+            pairing = create_pairing("https://api.example.com", bot_name="Argus")
 
         assert pairing == TelegramPairing(
             pairing_id="abcdefghijklmnop",
@@ -140,7 +140,7 @@ class TestCreatePairing:
         )
         post.assert_called_once_with(
             "https://api.example.com/v1/telegram/pairings",
-            json={"bot_name": "Hermes Agent"},
+            json={"bot_name": "Argus"},
             timeout=10.0,
         )
 

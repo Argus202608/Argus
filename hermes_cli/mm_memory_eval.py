@@ -48,7 +48,7 @@ def _safe_log_stem(raw: str, *, default: str = "eval") -> str:
 def _setup_eval_logging(video: str, log_dir: Optional[str]) -> str:
     """Install a per-mm-memory-eval log file and keep eval logs out of agent.log.
 
-    Long offline evals are often run concurrently. The normal Hermes root logger
+    Long offline evals are often run concurrently. The normal Argus root logger
     writes every process to ~/.argus/logs/agent.log, which makes recall/writer
     traces impossible to read. This command-scoped handler captures the relevant
     eval loggers in a unique run directory and stops them from propagating to the

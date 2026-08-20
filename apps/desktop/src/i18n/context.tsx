@@ -1,6 +1,6 @@
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 
-import { getHermesConfigRecord, type HermesConfigRecord, saveHermesConfig } from '@/hermes'
+import { getHermesConfigRecord, type HermesConfigRecord, saveHermesConfig } from '@/argus'
 
 import { TRANSLATIONS } from './catalog'
 import { DEFAULT_LOCALE, isSupportedLocaleValue, localeConfigValue, normalizeLocale, resolveSystemLocale } from './languages'
@@ -16,14 +16,14 @@ export interface I18nConfigClient {
 
 const defaultConfigClient: I18nConfigClient = {
   getConfig: () => {
-    if (typeof window === 'undefined' || !window.hermesDesktop?.api) {
+    if (typeof window === 'undefined' || !window.argusDesktop?.api) {
       return Promise.resolve({})
     }
 
     return getHermesConfigRecord()
   },
   saveConfig: config => {
-    if (typeof window === 'undefined' || !window.hermesDesktop?.api) {
+    if (typeof window === 'undefined' || !window.argusDesktop?.api) {
       return Promise.resolve({ ok: true })
     }
 

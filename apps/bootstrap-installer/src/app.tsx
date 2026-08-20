@@ -7,9 +7,9 @@ import Success from './routes/success'
 import Failure from './routes/failure'
 
 /*
- * App shell — Hermes Setup.
+ * App shell — Argus Setup.
  *
- * No header chrome (the OS title bar already says "Hermes Setup"; an
+ * No header chrome (the OS title bar already says "Argus Setup"; an
  * in-window repeat of the H mark + words was redundant slop).
  *
  * Route state lives in a single $route atom — 4 screens, no react-router.

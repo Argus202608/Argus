@@ -1,6 +1,6 @@
 # Photon iMessage platform plugin
 
-This plugin connects Hermes Agent to iMessage (and other Spectrum
+This plugin connects Argus to iMessage (and other Spectrum
 interfaces) through [Photon][photon] — a managed service that handles
 iMessage line allocation, delivery, and abuse-prevention so users don't
 have to run their own Mac relay.
@@ -53,7 +53,7 @@ hermes gateway start
 
 1. **Device login** (RFC 8628, `client_id=photon-cli`) — opens
    `https://app.photon.codes/` for approval and stores the bearer token.
-2. **Find or create** the `Hermes Agent` project on the Photon dashboard.
+2. **Find or create** the `Argus` project on the Photon dashboard.
 3. **Provision the project secret** — mint a fresh project secret (the
    dashboard reveals it only once) and persist it to `~/.hermes/.env` so the
    sidecar can authenticate `spectrum-ts`. Spectrum is always on, so there's no
@@ -94,7 +94,7 @@ Management metadata lives in `~/.hermes/auth.json` under `credential_pool`:
         "dashboard_project_id": "<project id>",
         "spectrum_project_id": "<project id>",
         "project_secret": "<projectSecret>",
-        "name": "Hermes Agent"
+        "name": "Argus"
       }
     ]
   }

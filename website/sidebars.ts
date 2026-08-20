@@ -19,7 +19,7 @@ const sidebars: SidebarsConfig = {
     },
     {
       type: 'category',
-      label: 'Using Hermes',
+      label: 'Using Argus',
       collapsed: true,
       items: [
         'user-guide/cli',
@@ -143,7 +143,6 @@ const sidebars: SidebarsConfig = {
                     'user-guide/skills/bundled/apple/apple-apple-reminders',
                     'user-guide/skills/bundled/apple/apple-findmy',
                     'user-guide/skills/bundled/apple/apple-imessage',
-                    'user-guide/skills/bundled/apple/apple-macos-computer-use',
                   ],
                 },
                 {
@@ -156,6 +155,15 @@ const sidebars: SidebarsConfig = {
                     'user-guide/skills/bundled/autonomous-ai-agents/autonomous-ai-agents-codex',
                     'user-guide/skills/bundled/autonomous-ai-agents/autonomous-ai-agents-hermes-agent',
                     'user-guide/skills/bundled/autonomous-ai-agents/autonomous-ai-agents-opencode',
+                  ],
+                },
+                {
+                  type: 'category',
+                  label: 'computer-use',
+                  key: 'skills-bundled-computer-use',
+                  collapsed: true,
+                  items: [
+                    'user-guide/skills/bundled/computer-use/computer-use-computer-use',
                   ],
                 },
                 {
@@ -248,6 +256,15 @@ const sidebars: SidebarsConfig = {
                     'user-guide/skills/bundled/mlops/mlops-models-segment-anything',
                     'user-guide/skills/bundled/mlops/mlops-inference-vllm',
                     'user-guide/skills/bundled/mlops/mlops-evaluation-weights-and-biases',
+                  ],
+                },
+                {
+                  type: 'category',
+                  label: 'multimodal',
+                  key: 'skills-bundled-multimodal',
+                  collapsed: true,
+                  items: [
+                    'user-guide/skills/bundled/multimodal/multimodal-mm_research_example',
                   ],
                 },
                 {
@@ -589,6 +606,7 @@ const sidebars: SidebarsConfig = {
                   key: 'skills-optional-web-development',
                   collapsed: true,
                   items: [
+                    'user-guide/skills/optional/web-development/web-development-cloudflare-temporary-deploy',
                     'user-guide/skills/optional/web-development/web-development-page-agent',
                   ],
                 },
@@ -680,16 +698,16 @@ const sidebars: SidebarsConfig = {
       collapsed: true,
       items: [
         'guides/run-nemotron-3-ultra-free',
-        'guides/run-hermes-with-nous-portal',
+        'guides/run-argus-with-nous-portal',
         'guides/tips',
         'guides/local-llm-on-mac',
         'guides/daily-briefing-bot',
         'guides/team-telegram-assistant',
         'guides/python-library',
-        'guides/use-mcp-with-hermes',
-        'guides/use-soul-with-hermes',
-        'guides/use-voice-mode-with-hermes',
-        'guides/build-a-hermes-plugin',
+        'guides/use-mcp-with-argus',
+        'guides/use-soul-with-argus',
+        'guides/use-voice-mode-with-argus',
+        'guides/build-an-argus-plugin',
         'guides/automate-with-cron',
         'guides/cron-script-only',
         'guides/automation-blueprints',

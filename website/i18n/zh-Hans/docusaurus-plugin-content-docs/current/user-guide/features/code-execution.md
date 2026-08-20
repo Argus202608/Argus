@@ -6,14 +6,14 @@ description: "通过 RPC 工具访问实现程序化 Python 执行——将多�
 
 # 代码执行（程序化工具调用）
 
-`execute_code` 工具允许 agent 编写调用 Hermes 工具的 Python 脚本，将多步骤工作流压缩至单次 LLM 对话轮次。脚本在 agent 宿主机的子进程中运行，通过 Unix 域套接字 RPC 与 Hermes 通信。
+`execute_code` 工具允许 agent 编写调用 Argus 工具的 Python 脚本，将多步骤工作流压缩至单次 LLM 对话轮次。脚本在 agent 宿主机的子进程中运行，通过 Unix 域套接字 RPC 与 Argus 通信。
 
 ## 工作原理
 
 1. Agent 编写使用 `from hermes_tools import ...` 的 Python 脚本
-2. Hermes 生成带有 RPC 函数的 `hermes_tools.py` 存根模块
-3. Hermes 打开 Unix 域套接字并启动 RPC 监听线程
-4. 脚本在子进程中运行——工具调用通过套接字传回 Hermes
+2. Argus 生成带有 RPC 函数的 `hermes_tools.py` 存根模块
+3. Argus 打开 Unix 域套接字并启动 RPC 监听线程
+4. 脚本在子进程中运行——工具调用通过套接字传回 Argus
 5. 只有脚本的 `print()` 输出会返回给 LLM；中间工具结果不会进入上下文窗口
 
 ```python
@@ -128,19 +128,19 @@ print(json.dumps(report, indent=2))
 
 ## 执行模式
 
-`execute_code` 有两种执行模式，通过 `~/.hermes/config.yaml` 中的 `code_execution.mode` 控制：
+`execute_code` 有两种执行模式，通过 `~/.argus/config.yaml` 中的 `code_execution.mode` 控制：
 
 | 模式 | 工作目录 | Python 解释器 |
 |------|----------|---------------|
-| **`project`**（默认） | 会话的工作目录（与 `terminal()` 相同） | 活跃的 `VIRTUAL_ENV` / `CONDA_PREFIX` python，回退至 Hermes 自身的 python |
-| `strict` | 与用户项目隔离的临时暂存目录 | `sys.executable`（Hermes 自身的 python） |
+| **`project`**（默认） | 会话的工作目录（与 `terminal()` 相同） | 活跃的 `VIRTUAL_ENV` / `CONDA_PREFIX` python，回退至 Argus 自身的 python |
+| `strict` | 与用户项目隔离的临时暂存目录 | `sys.executable`（Argus 自身的 python） |
 
 **何时保持 `project` 模式：** 当你希望 `import pandas`、`from my_project import foo` 或 `open(".env")` 等相对路径与 `terminal()` 中的行为一致时。这几乎是你始终想要的模式。
 
 **何时切换至 `strict` 模式：** 当你需要最大可复现性时——希望无论用户激活哪个 venv，每次会话都使用相同的解释器，并且希望脚本与项目目录隔离（避免通过相对路径意外读取项目文件）。
 
 ```yaml
-# ~/.hermes/config.yaml
+# ~/.argus/config.yaml
 code_execution:
   mode: project   # or "strict"
 ```
@@ -167,7 +167,7 @@ code_execution:
 所有限制均可通过 `config.yaml` 配置：
 
 ```yaml
-# In ~/.hermes/config.yaml
+# In ~/.argus/config.yaml
 code_execution:
   mode: project      # project (default) | strict
   timeout: 300       # Max seconds per script (default: 300)
@@ -219,7 +219,7 @@ terminal:
 
 详情参见[安全指南](/user-guide/security#environment-variable-passthrough)。
 
-Hermes 始终将脚本和自动生成的 `hermes_tools.py` RPC 存根写入临时暂存目录，执行完成后清理。在 `strict` 模式下，脚本也在该目录中*运行*；在 `project` 模式下，脚本在会话的工作目录中运行（暂存目录保留在 `PYTHONPATH` 中以确保导入正常解析）。子进程在独立的进程组中运行，以便在超时或中断时干净地终止。
+Argus 始终将脚本和自动生成的 `hermes_tools.py` RPC 存根写入临时暂存目录，执行完成后清理。在 `strict` 模式下，脚本也在该目录中*运行*；在 `project` 模式下，脚本在会话的工作目录中运行（暂存目录保留在 `PYTHONPATH` 中以确保导入正常解析）。子进程在独立的进程组中运行，以便在超时或中断时干净地终止。
 
 ## execute_code 与 terminal 对比
 
@@ -233,7 +233,7 @@ Hermes 始终将脚本和自动生成的 `hermes_tools.py` RPC 存根写入临�
 | 交互式/后台进程 | ❌ | ✅ |
 | 需要环境变量中的 API key | ⚠️ 仅通过[透传](/user-guide/security#environment-variable-passthrough) | ✅（大多数可透传） |
 
-**经验法则：** 需要在调用之间含逻辑地程序化调用 Hermes 工具时，使用 `execute_code`。运行 shell 命令、构建和进程时，使用 `terminal`。
+**经验法则：** 需要在调用之间含逻辑地程序化调用 Argus 工具时，使用 `execute_code`。运行 shell 命令、构建和进程时，使用 `terminal`。
 
 ## 平台支持
 

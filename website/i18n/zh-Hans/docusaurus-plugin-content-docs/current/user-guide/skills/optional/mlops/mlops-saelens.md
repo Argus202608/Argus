@@ -14,7 +14,7 @@ description: "提供使用 SAELens 训练和分析稀疏自编码器（SAE）的
 
 | | |
 |---|---|
-| 来源 | 可选 — 通过 `hermes skills install official/mlops/saelens` 安装 |
+| 来源 | 可选 — 通过 `argus skills install official/mlops/saelens` 安装 |
 | 路径 | `optional-skills/mlops/saelens` |
 | 版本 | `1.0.0` |
 | 作者 | Orchestra Research |
@@ -369,9 +369,9 @@ cfg = LanguageModelSAERunnerConfig(
 
 | 文件 | 内容 |
 |------|----------|
-| [references/README.md](https://github.com/NousResearch/hermes-agent/blob/main/optional-skills/mlops/saelens/references/README.md) | 概述与快速入门指南 |
-| [references/api.md](https://github.com/NousResearch/hermes-agent/blob/main/optional-skills/mlops/saelens/references/api.md) | SAE、TrainingSAE、配置的完整 API 参考 |
-| [references/tutorials.md](https://github.com/NousResearch/hermes-agent/blob/main/optional-skills/mlops/saelens/references/tutorials.md) | 训练、分析、引导的分步教程 |
+| [references/README.md](https://github.com/MMArgus-Team/Argus/blob/main/optional-skills/mlops/saelens/references/README.md) | 概述与快速入门指南 |
+| [references/api.md](https://github.com/MMArgus-Team/Argus/blob/main/optional-skills/mlops/saelens/references/api.md) | SAE、TrainingSAE、配置的完整 API 参考 |
+| [references/tutorials.md](https://github.com/MMArgus-Team/Argus/blob/main/optional-skills/mlops/saelens/references/tutorials.md) | 训练、分析、引导的分步教程 |
 
 ## 外部资源
 

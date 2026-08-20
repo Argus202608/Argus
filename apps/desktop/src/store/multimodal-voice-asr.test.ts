@@ -698,10 +698,10 @@ describe('multimodal voice ASR preview state', () => {
   })
 
   it('resumes a suspended AudioContext after the macOS permission bridge allows access', async () => {
-    const originalBridge = Object.getOwnPropertyDescriptor(window, 'hermesDesktop')
+    const originalBridge = Object.getOwnPropertyDescriptor(window, 'argusDesktop')
     const requestMicrophoneAccess = vi.fn(async () => true)
 
-    Object.defineProperty(window, 'hermesDesktop', {
+    Object.defineProperty(window, 'argusDesktop', {
       configurable: true,
       value: { requestMicrophoneAccess }
     })
@@ -715,9 +715,9 @@ describe('multimodal voice ASR preview state', () => {
       expect($mmMicState.get()).toBe('recording')
     } finally {
       if (originalBridge) {
-        Object.defineProperty(window, 'hermesDesktop', originalBridge)
+        Object.defineProperty(window, 'argusDesktop', originalBridge)
       } else {
-        Reflect.deleteProperty(window, 'hermesDesktop')
+        Reflect.deleteProperty(window, 'argusDesktop')
       }
     }
   })

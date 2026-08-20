@@ -7,7 +7,7 @@ something different on each:
   * macOS — explicit TCC grants (Accessibility + Screen Recording). cua-driver
     reports/requests them via ``permissions status`` / ``permissions grant``.
     The grants attach to cua-driver's OWN identity (``com.trycua.driver`` /
-    the installed ``CuaDriver.app``), NOT Hermes — so no Hermes entitlement is
+    the installed ``CuaDriver.app``), NOT Argus — so no Argus entitlement is
     involved, and ``grant`` launches CuaDriver via LaunchServices so the macOS
     dialog is attributed correctly.
   * Windows — no TCC toggles; the UIAccess worker (``cua-driver-uia.exe``) may
@@ -47,7 +47,7 @@ def _driver_cmd(override: Optional[str]) -> str:
 
 
 def _child_env() -> Dict[str, str]:
-    """cua-driver child env honoring the Hermes telemetry opt-in policy."""
+    """cua-driver child env honoring the Argus telemetry opt-in policy."""
     try:
         from tools.computer_use.cua_backend import cua_driver_child_env
 

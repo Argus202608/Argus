@@ -129,7 +129,7 @@ function nextMicTurnId(): string {
 }
 
 async function requestMicrophoneStream(): Promise<MediaStream> {
-  const requestAccess = window.hermesDesktop?.requestMicrophoneAccess
+  const requestAccess = window.argusDesktop?.requestMicrophoneAccess
 
   if (requestAccess) {
     const permitted = await requestAccess()

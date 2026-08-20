@@ -14,7 +14,7 @@ description: "使用 Pydantic 验证从 LLM 响应中提取结构化数据，自
 
 | | |
 |---|---|
-| 来源 | 可选 — 通过 `hermes skills install official/mlops/instructor` 安装 |
+| 来源 | 可选 — 通过 `argus skills install official/mlops/instructor` 安装 |
 | 路径 | `optional-skills/mlops/instructor` |
 | 版本 | `1.0.0` |
 | 作者 | Orchestra Research |

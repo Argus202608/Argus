@@ -54,7 +54,7 @@ class _Settings:
     atif_output_directory: str = ""
     atif_filename_template: str = "hermes-atif-{session_id}.json"
     atif_subagent_export_mode: str = "embedded"
-    atif_agent_name: str = "Hermes Agent"
+    atif_agent_name: str = "Argus"
     atif_agent_version: str = "unknown"
     atif_model_name: str = "unknown"
 
@@ -658,7 +658,7 @@ def _load_settings() -> _Settings:
         atif_output_directory=_env("ARGUS_NEMO_RELAY_ATIF_OUTPUT_DIRECTORY"),
         atif_filename_template=_env("ARGUS_NEMO_RELAY_ATIF_FILENAME_TEMPLATE") or "hermes-atif-{session_id}.json",
         atif_subagent_export_mode=_atif_subagent_export_mode(),
-        atif_agent_name=_env("ARGUS_NEMO_RELAY_ATIF_AGENT_NAME") or "Hermes Agent",
+        atif_agent_name=_env("ARGUS_NEMO_RELAY_ATIF_AGENT_NAME") or "Argus",
         atif_agent_version=_env("ARGUS_NEMO_RELAY_ATIF_AGENT_VERSION") or "unknown",
         atif_model_name=_env("ARGUS_NEMO_RELAY_ATIF_MODEL_NAME") or "unknown",
     )

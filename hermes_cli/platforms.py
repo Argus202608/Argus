@@ -1,5 +1,5 @@
 """
-Shared platform registry for Hermes Agent.
+Shared platform registry for Argus.
 
 Single source of truth for platform metadata consumed by both
 skills_config (label display) and tools_config (default toolset
@@ -19,28 +19,28 @@ class PlatformInfo(NamedTuple):
 
 # Ordered so that TUI menus are deterministic.
 PLATFORMS: OrderedDict[str, PlatformInfo] = OrderedDict([
-    ("cli",            PlatformInfo(label="🖥️  CLI",            default_toolset="hermes-cli")),
-    ("telegram",       PlatformInfo(label="📱 Telegram",        default_toolset="hermes-telegram")),
-    ("discord",        PlatformInfo(label="💬 Discord",         default_toolset="hermes-discord")),
-    ("slack",          PlatformInfo(label="💼 Slack",           default_toolset="hermes-slack")),
-    ("whatsapp",       PlatformInfo(label="📱 WhatsApp",        default_toolset="hermes-whatsapp")),
-    ("whatsapp_cloud", PlatformInfo(label="📱 WhatsApp Business (Cloud)", default_toolset="hermes-whatsapp")),
-    ("signal",         PlatformInfo(label="📡 Signal",          default_toolset="hermes-signal")),
-    ("bluebubbles",    PlatformInfo(label="💙 BlueBubbles",     default_toolset="hermes-bluebubbles")),
-    ("email",          PlatformInfo(label="📧 Email",           default_toolset="hermes-email")),
-    ("homeassistant",  PlatformInfo(label="🏠 Home Assistant",  default_toolset="hermes-homeassistant")),
-    ("mattermost",     PlatformInfo(label="💬 Mattermost",      default_toolset="hermes-mattermost")),
-    ("matrix",         PlatformInfo(label="💬 Matrix",          default_toolset="hermes-matrix")),
-    ("dingtalk",       PlatformInfo(label="💬 DingTalk",        default_toolset="hermes-dingtalk")),
-    ("feishu",         PlatformInfo(label="🪽 Feishu",          default_toolset="hermes-feishu")),
-    ("wecom",          PlatformInfo(label="💬 WeCom",           default_toolset="hermes-wecom")),
-    ("wecom_callback", PlatformInfo(label="💬 WeCom Callback",  default_toolset="hermes-wecom-callback")),
-    ("weixin",         PlatformInfo(label="💬 Weixin",          default_toolset="hermes-weixin")),
-    ("qqbot",          PlatformInfo(label="💬 QQBot",           default_toolset="hermes-qqbot")),
-    ("yuanbao",        PlatformInfo(label="🤖 Yuanbao",         default_toolset="hermes-yuanbao")),
-    ("webhook",        PlatformInfo(label="🔗 Webhook",         default_toolset="hermes-webhook")),
-    ("api_server",     PlatformInfo(label="🌐 API Server",      default_toolset="hermes-api-server")),
-    ("cron",           PlatformInfo(label="⏰ Cron",            default_toolset="hermes-cron")),
+    ("cli",            PlatformInfo(label="🖥️  CLI",            default_toolset="argus-cli")),
+    ("telegram",       PlatformInfo(label="📱 Telegram",        default_toolset="argus-telegram")),
+    ("discord",        PlatformInfo(label="💬 Discord",         default_toolset="argus-discord")),
+    ("slack",          PlatformInfo(label="💼 Slack",           default_toolset="argus-slack")),
+    ("whatsapp",       PlatformInfo(label="📱 WhatsApp",        default_toolset="argus-whatsapp")),
+    ("whatsapp_cloud", PlatformInfo(label="📱 WhatsApp Business (Cloud)", default_toolset="argus-whatsapp")),
+    ("signal",         PlatformInfo(label="📡 Signal",          default_toolset="argus-signal")),
+    ("bluebubbles",    PlatformInfo(label="💙 BlueBubbles",     default_toolset="argus-bluebubbles")),
+    ("email",          PlatformInfo(label="📧 Email",           default_toolset="argus-email")),
+    ("homeassistant",  PlatformInfo(label="🏠 Home Assistant",  default_toolset="argus-homeassistant")),
+    ("mattermost",     PlatformInfo(label="💬 Mattermost",      default_toolset="argus-mattermost")),
+    ("matrix",         PlatformInfo(label="💬 Matrix",          default_toolset="argus-matrix")),
+    ("dingtalk",       PlatformInfo(label="💬 DingTalk",        default_toolset="argus-dingtalk")),
+    ("feishu",         PlatformInfo(label="🪽 Feishu",          default_toolset="argus-feishu")),
+    ("wecom",          PlatformInfo(label="💬 WeCom",           default_toolset="argus-wecom")),
+    ("wecom_callback", PlatformInfo(label="💬 WeCom Callback",  default_toolset="argus-wecom-callback")),
+    ("weixin",         PlatformInfo(label="💬 Weixin",          default_toolset="argus-weixin")),
+    ("qqbot",          PlatformInfo(label="💬 QQBot",           default_toolset="argus-qqbot")),
+    ("yuanbao",        PlatformInfo(label="🤖 Yuanbao",         default_toolset="argus-yuanbao")),
+    ("webhook",        PlatformInfo(label="🔗 Webhook",         default_toolset="argus-webhook")),
+    ("api_server",     PlatformInfo(label="🌐 API Server",      default_toolset="argus-api-server")),
+    ("cron",           PlatformInfo(label="⏰ Cron",            default_toolset="argus-cron")),
 ])
 
 
@@ -77,7 +77,7 @@ def get_all_platforms() -> "OrderedDict[str, PlatformInfo]":
             if entry.name not in merged:
                 merged[entry.name] = PlatformInfo(
                     label=f"{entry.emoji}  {entry.label}" if entry.emoji else entry.label,
-                    default_toolset=f"hermes-{entry.name}",
+                    default_toolset=f"argus-{entry.name}",
                 )
     except Exception:
         pass

@@ -14,7 +14,7 @@ description: "无需修改核心工具即可赋予 Hermes 电话能力"
 
 | | |
 |---|---|
-| 来源 | 可选 — 使用 `hermes skills install official/productivity/telephony` 安装 |
+| 来源 | 可选 — 使用 `argus skills install official/productivity/telephony` 安装 |
 | 路径 | `optional-skills/productivity/telephony` |
 | 版本 | `1.0.0` |
 | 作者 | Nous Research |
@@ -157,8 +157,8 @@ SCRIPT="$(find ~/.hermes/skills -path '*/telephony/scripts/telephony.py' -print 
 这是一个官方可选 skill，从 Skills Hub 安装：
 
 ```bash
-hermes skills search telephony
-hermes skills install official/productivity/telephony
+argus skills search telephony
+argus skills install official/productivity/telephony
 ```
 
 ## 服务商配置

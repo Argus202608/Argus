@@ -48,7 +48,7 @@ def test_agent_json_matches_official_registry_required_fields():
     assert data["description"]
     assert data["repository"] == "https://github.com/MMArgus-Team/Argus"
     assert data["website"].startswith("https://github.com/MMArgus-Team/Argus/")
-    assert data["authors"] == ["Nous Research", "Argus Contributors"]
+    assert data["authors"] == ["MMArgus Team", "Argus Contributors"]
     assert data["license"] == "MIT"
     assert set(data["distribution"]) <= ALLOWED_DISTRIBUTIONS
 
@@ -62,7 +62,7 @@ def test_agent_json_uses_uvx_distribution_without_local_command_fields():
     assert set(uvx) <= {"package", "args", "env"}
     assert "package" in uvx
     assert uvx["package"] == f"{_pyproject_name()}[acp]=={data['version']}"
-    assert uvx["args"] == ["hermes-acp"]
+    assert uvx["args"] == ["argus-acp"]
     # Old command-shape fields must not leak back in.
     assert "type" not in data["distribution"]
     assert "command" not in data["distribution"]

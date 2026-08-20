@@ -14,7 +14,7 @@ Hyperliquid 市场数据、账户历史、交易复盘。
 
 | | |
 |---|---|
-| 来源 | 可选 — 通过 `hermes skills install official/blockchain/hyperliquid` 安装 |
+| 来源 | 可选 — 通过 `argus skills install official/blockchain/hyperliquid` 安装 |
 | 路径 | `optional-skills/blockchain/hyperliquid` |
 | 版本 | `0.1.0` |
 | 作者 | Hugo Sequier (Hugo-SEQUIER), Hermes Agent |

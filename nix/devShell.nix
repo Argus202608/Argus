@@ -32,10 +32,10 @@
           ]
           ++ self'.packages.default.passthru.devDeps;
         shellHook = ''
-          echo "Hermes Agent dev shell"
+          echo "Argus dev shell"
           ${combinedNonNpm}
           ${hermesNpmLib.mkNpmDevShellHook npmPackageJsonPaths}
-          echo "Ready. Run 'hermes' to start."
+          echo "Ready. Run 'argus' to start."
         '';
       };
     };

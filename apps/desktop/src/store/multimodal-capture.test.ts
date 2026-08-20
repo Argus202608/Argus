@@ -99,7 +99,7 @@ describe('fresh-draft multimodal capture binding', () => {
       name: 'Display 1',
       shareAudio: false
     })
-    Object.defineProperty(window, 'hermesDesktop', {
+    Object.defineProperty(window, 'argusDesktop', {
       configurable: true,
       value: { screenShareSystemAudio: false },
       writable: true
@@ -634,7 +634,7 @@ describe('fresh-draft multimodal capture binding', () => {
       const { stream } = fakeStream({ audio: expectedAudio })
       const getDisplayMedia = vi.fn(async () => stream)
 
-      Object.assign(window.hermesDesktop, { screenShareSystemAudio: supported })
+      Object.assign(window.argusDesktop, { screenShareSystemAudio: supported })
       openSourcePicker.mockResolvedValueOnce({
         id: 'screen:1',
         name: 'Display 1',
@@ -657,7 +657,7 @@ describe('fresh-draft multimodal capture binding', () => {
     const { stream } = fakeStream()
     const getDisplayMedia = vi.fn(async () => stream)
 
-    Object.assign(window.hermesDesktop, { screenShareSystemAudio: true })
+    Object.assign(window.argusDesktop, { screenShareSystemAudio: true })
     openSourcePicker.mockResolvedValueOnce({
       id: 'screen:1',
       name: 'Display 1',
@@ -683,7 +683,7 @@ describe('fresh-draft multimodal capture binding', () => {
   it('does not report a false error when the requested system-audio track exists', async () => {
     const { stream } = fakeStream({ audio: true })
 
-    Object.assign(window.hermesDesktop, { screenShareSystemAudio: true })
+    Object.assign(window.argusDesktop, { screenShareSystemAudio: true })
     openSourcePicker.mockResolvedValueOnce({
       id: 'screen:1',
       name: 'Display 1',

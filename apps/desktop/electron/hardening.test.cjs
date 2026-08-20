@@ -15,6 +15,14 @@ const {
   sensitiveFileBlockReason
 } = require('./hardening.cjs')
 
+test('desktop registers canonical Argus deep links and the Hermes compatibility alias', () => {
+  const mainSource = fs.readFileSync(path.join(__dirname, 'main.cjs'), 'utf8')
+
+  assert.match(mainSource, /ARGUS_PROTOCOL = ["']argus["']/)
+  assert.match(mainSource, /LEGACY_HERMES_PROTOCOL = ["']hermes["']/)
+  assert.match(mainSource, /for \(const scheme of ARGUS_PROTOCOLS\)/)
+})
+
 async function rejectsWithCode(promise, code) {
   await assert.rejects(promise, error => {
     assert.equal(error?.code, code)

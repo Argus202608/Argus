@@ -1,12 +1,12 @@
 ---
 sidebar_position: 13
 title: "Webhooks"
-description: "接收来自 GitHub、GitLab 等服务的事件以触发 Hermes agent 运行"
+description: "接收来自 GitHub、GitLab 等服务的事件以触发 Argus agent 运行"
 ---
 
 # Webhooks
 
-接收来自外部服务（GitHub、GitLab、JIRA、Stripe 等）的事件，并自动触发 Hermes agent 运行。Webhook 适配器运行一个 HTTP 服务器，接受 POST 请求、验证 HMAC 签名、将 payload（载荷）转换为 agent prompt（提示词），并将响应路由回来源或其他已配置的平台。
+接收来自外部服务（GitHub、GitLab、JIRA、Stripe 等）的事件，并自动触发 Argus agent 运行。Webhook 适配器运行一个 HTTP 服务器，接受 POST 请求、验证 HMAC 签名、将 payload（载荷）转换为 agent prompt（提示词），并将响应路由回来源或其他已配置的平台。
 
 agent 处理事件后，可通过在 PR 上发布评论、向 Telegram/Discord 发送消息或记录结果来响应。
 
@@ -15,7 +15,7 @@ agent 处理事件后，可通过在 PR 上发布评论、向 Telegram/Discord �
 <div style={{position: 'relative', width: '100%', aspectRatio: '16 / 9', marginBottom: '1.5rem'}}>
   <iframe
     src="https://www.youtube.com/embed/WNYe5mD4fY8"
-    title="Hermes Agent — Webhooks Tutorial"
+    title="Argus Agent — Webhooks Tutorial"
     style={{position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', border: 0}}
     allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
     allowFullScreen
@@ -26,8 +26,8 @@ agent 处理事件后，可通过在 PR 上发布评论、向 Telegram/Discord �
 
 ## 快速开始
 
-1. 通过 `hermes gateway setup` 或环境变量启用
-2. 在 `config.yaml` 中定义路由，**或**使用 `hermes webhook subscribe` 动态创建
+1. 通过 `argus gateway setup` 或环境变量启用
+2. 在 `config.yaml` 中定义路由，**或**使用 `argus webhook subscribe` 动态创建
 3. 将你的服务指向 `http://your-server:8644/webhooks/<route-name>`
 
 ---
@@ -39,14 +39,14 @@ agent 处理事件后，可通过在 PR 上发布评论、向 Telegram/Discord �
 ### 通过设置向导
 
 ```bash
-hermes gateway setup
+argus gateway setup
 ```
 
 按照提示启用 webhooks、设置端口和全局 HMAC secret。
 
 ### 通过环境变量
 
-添加到 `~/.hermes/.env`：
+添加到 `~/.argus/.env`：
 
 ```bash
 WEBHOOK_ENABLED=true
@@ -174,7 +174,7 @@ webhooks:
 
 ### 2. 添加路由配置
 
-按照上方示例，将 `github-pr` 路由添加到 `~/.hermes/config.yaml`。
+按照上方示例，将 `github-pr` 路由添加到 `~/.argus/config.yaml`。
 
 ### 3. 确保 `gh` CLI 已认证
 
@@ -186,7 +186,7 @@ gh auth login
 
 ### 4. 测试
 
-在仓库中打开一个 pull request。webhook 触发后，Hermes 处理事件并在 PR 上发布审查评论。
+在仓库中打开一个 pull request。webhook 触发后，Argus 处理事件并在 PR 上发布审查评论。
 
 ---
 
@@ -297,7 +297,7 @@ platforms:
 ### 示例：通过 CLI 动态订阅
 
 ```bash
-hermes webhook subscribe antenna-matches \
+argus webhook subscribe antenna-matches \
   --deliver telegram \
   --deliver-chat-id "123456789" \
   --deliver-only \
@@ -329,12 +329,12 @@ hermes webhook subscribe antenna-matches \
 
 ## 动态订阅（CLI） {#dynamic-subscriptions}
 
-除了 `config.yaml` 中的静态路由，还可以使用 `hermes webhook` CLI 命令动态创建 webhook 订阅。当 agent 本身需要设置事件驱动触发器时，这尤为有用。
+除了 `config.yaml` 中的静态路由，还可以使用 `argus webhook` CLI 命令动态创建 webhook 订阅。当 agent 本身需要设置事件驱动触发器时，这尤为有用。
 
 ### 创建订阅
 
 ```bash
-hermes webhook subscribe github-issues \
+argus webhook subscribe github-issues \
   --events "issues" \
   --prompt "New issue #{issue.number}: {issue.title}\nBy: {issue.user.login}\n\n{issue.body}" \
   --deliver telegram \
@@ -347,25 +347,25 @@ hermes webhook subscribe github-issues \
 ### 列出订阅
 
 ```bash
-hermes webhook list
+argus webhook list
 ```
 
 ### 删除订阅
 
 ```bash
-hermes webhook remove github-issues
+argus webhook remove github-issues
 ```
 
 ### 测试订阅
 
 ```bash
-hermes webhook test github-issues
-hermes webhook test github-issues --payload '{"issue": {"number": 42, "title": "Test"}}'
+argus webhook test github-issues
+argus webhook test github-issues --payload '{"issue": {"number": 42, "title": "Test"}}'
 ```
 
 ### 动态订阅的工作原理
 
-- 订阅存储在 `~/.hermes/webhook_subscriptions.json`
+- 订阅存储在 `~/.argus/webhook_subscriptions.json`
 - webhook 适配器在每次收到请求时热重载该文件（基于 mtime 检测，开销可忽略不计）
 - `config.yaml` 中的静态路由始终优先于同名的动态订阅
 - 动态订阅与静态路由使用相同的格式和功能（events、prompt 模板、skills、delivery）
@@ -373,7 +373,7 @@ hermes webhook test github-issues --payload '{"issue": {"number": 42, "title": "
 
 ### agent 驱动的订阅
 
-agent 可通过 terminal 工具在 `webhook-subscriptions` skill 的引导下创建订阅。向 agent 请求"为 GitHub issues 设置 webhook"，它将运行相应的 `hermes webhook subscribe` 命令。
+agent 可通过 terminal 工具在 `webhook-subscriptions` skill 的引导下创建订阅。向 agent 请求"为 GitHub issues 设置 webhook"，它将运行相应的 `argus webhook subscribe` 命令。
 
 ---
 
@@ -458,7 +458,7 @@ Webhook payload 包含攻击者可控的数据——PR 标题、commit 消息、
 
 ### Agent 未响应
 
-- 在前台运行 gateway 以查看日志：`hermes gateway run`
+- 在前台运行 gateway 以查看日志：`argus gateway run`
 - 检查 prompt 模板是否正确渲染
 - 验证投递目标已配置并连接
 

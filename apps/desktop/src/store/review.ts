@@ -17,7 +17,7 @@ import { $workspaceChangeTick } from './workspace-events'
 // session's cwd is the repo; the pane reads git as the source of truth, the
 // same bounded "re-probe on structural edges" model as the coding rail.
 //
-// Scope is always "uncommitted" — Hermes' flow is agent edits you review BEFORE
+// Scope is always "uncommitted" — Argus' flow is agent edits you review BEFORE
 // committing, so branch/last-turn scopes are almost always empty here (unlike
 // Codex, which commits per turn). We show the one view that's always populated.
 
@@ -84,7 +84,7 @@ export const $reviewCommitMsgBusy = atom(false)
 
 const repoCwd = (): null | string => $currentCwd.get()?.trim() || null
 
-type ReviewBridge = NonNullable<NonNullable<NonNullable<Window['hermesDesktop']>['git']>['review']>
+type ReviewBridge = NonNullable<NonNullable<NonNullable<Window['argusDesktop']>['git']>['review']>
 let reviewRefreshSeq = 0
 let reviewRefreshTimer: ReturnType<typeof setTimeout> | null = null
 let shipInfoSeq = 0
@@ -94,7 +94,7 @@ let shipInfoLastCheckedAt = 0
 // either is missing (no session, remote backend), so callers bail in one line.
 function reviewCtx(): { cwd: string; review: ReviewBridge } | null {
   const cwd = repoCwd()
-  const review = window.hermesDesktop?.git?.review
+  const review = window.argusDesktop?.git?.review
 
   return cwd && review ? { cwd, review } : null
 }
@@ -294,17 +294,17 @@ async function afterMutation(): Promise<void> {
 }
 
 export async function stageReviewFile(path: null | string): Promise<void> {
-  await window.hermesDesktop?.git?.review?.stage(repoCwd() ?? '', path)
+  await window.argusDesktop?.git?.review?.stage(repoCwd() ?? '', path)
   await afterMutation()
 }
 
 export async function unstageReviewFile(path: null | string): Promise<void> {
-  await window.hermesDesktop?.git?.review?.unstage(repoCwd() ?? '', path)
+  await window.argusDesktop?.git?.review?.unstage(repoCwd() ?? '', path)
   await afterMutation()
 }
 
 export async function revertReviewFile(path: null | string): Promise<void> {
-  await window.hermesDesktop?.git?.review?.revert(repoCwd() ?? '', path)
+  await window.argusDesktop?.git?.review?.revert(repoCwd() ?? '', path)
   await afterMutation()
 }
 
@@ -435,7 +435,7 @@ export async function createOrOpenPr(): Promise<void> {
   const existing = $reviewShipInfo.get().pr
 
   if (existing?.url) {
-    void window.hermesDesktop?.openExternal?.(existing.url)
+    void window.argusDesktop?.openExternal?.(existing.url)
 
     return
   }
@@ -444,7 +444,7 @@ export async function createOrOpenPr(): Promise<void> {
     const { url } = await ctx.review.createPr(ctx.cwd)
 
     if (url) {
-      void window.hermesDesktop?.openExternal?.(url)
+      void window.argusDesktop?.openExternal?.(url)
     }
 
     void refreshShipInfo()

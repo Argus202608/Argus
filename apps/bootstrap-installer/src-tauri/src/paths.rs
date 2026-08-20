@@ -21,11 +21,17 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use tracing_appender::non_blocking::WorkerGuard;
 
-/// Returns the canonical Argus home directory, respecting $ARGUS_HOME if set.
+/// Returns the canonical Argus home directory. ``ARGUS_HOME`` wins; the old
+/// ``HERMES_HOME`` variable remains a fallback for pre-rename installations.
 pub fn hermes_home() -> PathBuf {
     if let Ok(override_path) = std::env::var("ARGUS_HOME") {
         if !override_path.trim().is_empty() {
             return PathBuf::from(override_path);
+        }
+    }
+    if let Ok(legacy_override) = std::env::var("HERMES_HOME") {
+        if !legacy_override.trim().is_empty() {
+            return PathBuf::from(legacy_override);
         }
     }
 
@@ -46,6 +52,20 @@ pub fn hermes_home() -> PathBuf {
     // Last resort — current dir, almost certainly wrong but at least
     // doesn't panic.
     PathBuf::from(".argus")
+}
+
+/// Resolve the managed source checkout. New installs use ``<home>/argus``;
+/// an existing ``<home>/hermes-agent`` checkout is still accepted in place so
+/// an update never strands users on the old layout.
+pub fn install_root() -> PathBuf {
+    let home = hermes_home();
+    let canonical = home.join("argus");
+    let legacy = home.join("hermes-agent");
+    if !canonical.exists() && legacy.exists() {
+        legacy
+    } else {
+        canonical
+    }
 }
 
 pub fn log_dir() -> PathBuf {
@@ -87,7 +107,7 @@ pub fn installer_dest() -> PathBuf {
 /// Electron desktop — which resolves HERMES_HOME identically and pins it into
 /// the updater's env — agrees on the exact path.
 pub fn update_in_progress_marker() -> PathBuf {
-    hermes_home().join(".hermes-update-in-progress")
+    hermes_home().join(".argus-update-in-progress")
 }
 
 /// Copy the currently-running installer binary to `installer_dest()` so it's
@@ -151,11 +171,11 @@ fn repair_macos_installer_helper(_path: &Path) {}
 
 /// Where install.ps1 writes the bootstrap-complete marker (existence-only file
 /// the Electron app also checks). Per main.cjs:
-///   const BOOTSTRAP_COMPLETE_MARKER = path.join(ACTIVE_HERMES_ROOT, '.hermes-bootstrap-complete')
+///   const BOOTSTRAP_COMPLETE_MARKER = path.join(ACTIVE_HERMES_ROOT, '.argus-bootstrap-complete')
 /// We don't always know ACTIVE_HERMES_ROOT until install.ps1 reports it, so
 /// this is a probe helper, not a definitive path.
 pub fn likely_bootstrap_marker(install_root: &Path) -> PathBuf {
-    install_root.join(".hermes-bootstrap-complete")
+    install_root.join(".argus-bootstrap-complete")
 }
 
 /// Initializes tracing to bootstrap-installer.log under HERMES_HOME/logs/.

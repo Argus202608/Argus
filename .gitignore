@@ -141,6 +141,7 @@ docs/superpowers/*
 # bootstrap installer. It is Hermes-managed runtime state, never a code change —
 # ignore it so `hermes update`'s `git stash push --include-untracked` does not
 # treat it as a local edit and autostash it on every run (#38529).
+.argus-bootstrap-complete
 .hermes-bootstrap-complete
 
 # Interrupted-update breadcrumb + recovery lock written next to the shared venv
@@ -215,7 +216,7 @@ config.yaml
 # writes its live state here. These are 59 MB in aggregate and MUST stay
 # ignored: `argus update` runs `git stash push --include-untracked`, so any
 # untracked payload gets swept into a stash together with real uncommitted
-# work (see the .hermes-bootstrap-complete note above for the same hazard).
+# work (see the bootstrap-complete marker note above for the same hazard).
 #
 # state.db also carries conversation content and sessions/ holds raw request
 # dumps — both are private data that must never reach the remote.

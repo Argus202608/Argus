@@ -14,19 +14,19 @@ Jailbreak LLMs: Parseltongue, GODMODE, ULTRAPLINIAN.
 
 | | |
 |---|---|
-| Source | Optional — install with `hermes skills install official/security/godmode` |
+| Source | Optional — install with `argus skills install official/security/godmode` |
 | Path | `optional-skills/security/godmode` |
 | Version | `1.0.0` |
 | Author | Hermes Agent + Teknium |
 | License | MIT |
 | Platforms | linux, macos, windows |
 | Tags | `jailbreak`, `red-teaming`, `G0DM0D3`, `Parseltongue`, `GODMODE`, `uncensoring`, `safety-bypass`, `prompt-engineering`, `L1B3RT4S` |
-| Related skills | [`obliteratus`](/docs/user-guide/skills/optional/mlops/mlops-obliteratus) |
+| Related skills | [`obliteratus`](/user-guide/skills/optional/mlops/mlops-obliteratus) |
 
 ## Reference: full SKILL.md
 
 :::info
-The following is the complete skill definition that Hermes loads when this skill is triggered. This is what the agent sees as instructions when the skill is active.
+The following is the complete skill definition that Argus loads when this skill is triggered. This is what the agent sees as instructions when the skill is active.
 :::
 
 # G0DM0D3 Jailbreaking Skill

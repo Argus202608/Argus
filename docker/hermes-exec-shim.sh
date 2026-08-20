@@ -36,7 +36,7 @@
 # Opt-out: set ARGUS_DOCKER_EXEC_AS_ROOT=1 (1/true/yes, case-insensitive)
 # to keep running as root. Reserved for diagnostic sessions where the
 # operator deliberately wants root semantics — e.g. inspecting root-only
-# state via the hermes CLI. Default is to drop.
+# state via the Argus CLI. Default is to drop.
 
 set -e
 

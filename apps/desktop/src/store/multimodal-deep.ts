@@ -2,7 +2,7 @@ import {
   normalizeMonitorEvidence,
   type MonitorEvidence,
   type MonitorEvidenceFrame
-} from '@hermes/shared'
+} from '@argus/shared'
 import { atom } from 'nanostores'
 
 import { translateNow } from '@/i18n'
@@ -109,7 +109,7 @@ export interface MonitorAlert {
   evidence?: MonitorEvidence
 }
 
-// ★ 2026-08-19: 实现搬到 @hermes/shared/monitor-evidence, web 侧那份逐字副本
+// ★ 2026-08-19: 实现搬到 @argus/shared/monitor-evidence, web 侧那份逐字副本
 // 一并指向同一处 (两个 cap 之前是两边各写一遍的字面量)。这里保留 re-export,
 // 所以 `from './multimodal-deep'` 的既有 import 面不变。
 export { normalizeMonitorEvidence, type MonitorEvidence, type MonitorEvidenceFrame }

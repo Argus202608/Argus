@@ -14,7 +14,7 @@ description: "使用正则表达式和语法控制 LLM 输出，保证生成有�
 
 | | |
 |---|---|
-| 来源 | 可选 — 通过 `hermes skills install official/mlops/guidance` 安装 |
+| 来源 | 可选 — 通过 `argus skills install official/mlops/guidance` 安装 |
 | 路径 | `optional-skills/mlops/guidance` |
 | 版本 | `1.0.0` |
 | 作者 | Orchestra Research |

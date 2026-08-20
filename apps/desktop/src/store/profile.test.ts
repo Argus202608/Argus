@@ -19,7 +19,7 @@ vi.mock('@/store/multimodal-voice', () => ({
   hasMicCaptureIntent: () => micLifecycle.intent,
   stopMic: micLifecycle.stop
 }))
-vi.mock('@/hermes', () => ({
+vi.mock('@/argus', () => ({
   getProfiles: vi.fn(async () => ({ profiles: [] })),
   setApiRequestProfile: vi.fn()
 }))
@@ -51,7 +51,7 @@ beforeEach(() => {
   $gateway.set({ id: 'live-socket' })
   $activeGatewayProfile.set('default')
   $connection.set(localConn())
-  vi.stubGlobal('window', { hermesDesktop: { getConnection } })
+  vi.stubGlobal('window', { argusDesktop: { getConnection } })
 })
 
 afterEach(() => {

@@ -79,12 +79,12 @@ json.dump(sorted(leaf_paths(DEFAULT_CONFIG)), sys.stdout, indent=2)
         package-contents = pkgs.runCommand "hermes-package-contents" { } ''
           set -e
           echo "=== Checking binaries ==="
-          test -x ${hermes-agent}/bin/hermes || (echo "FAIL: hermes binary missing"; exit 1)
-          test -x ${hermes-agent}/bin/hermes-agent || (echo "FAIL: hermes-agent binary missing"; exit 1)
+          test -x ${hermes-agent}/bin/argus || (echo "FAIL: argus binary missing"; exit 1)
+          test -x ${hermes-agent}/bin/argus-agent || (echo "FAIL: argus-agent binary missing"; exit 1)
           echo "PASS: All binaries present"
 
           echo "=== Checking version ==="
-          ${hermes-agent}/bin/hermes version 2>&1 | grep -qi "hermes" || (echo "FAIL: version check"; exit 1)
+          ${hermes-agent}/bin/argus version 2>&1 | grep -qi "argus" || (echo "FAIL: version check"; exit 1)
           echo "PASS: Version check"
 
           echo "=== All checks passed ==="
@@ -96,7 +96,7 @@ json.dump(sorted(leaf_paths(DEFAULT_CONFIG)), sys.stdout, indent=2)
         entry-points-sync = pkgs.runCommand "hermes-entry-points-sync" { } ''
           set -e
           echo "=== Checking entry points match pyproject.toml [project.scripts] ==="
-          for bin in hermes hermes-agent hermes-acp; do
+          for bin in argus argus-agent argus-acp mm-argus hermes hermes-agent hermes-acp; do
             test -x ${hermes-agent}/bin/$bin || (echo "FAIL: $bin binary missing from Nix package"; exit 1)
             echo "PASS: $bin present"
           done
@@ -110,9 +110,9 @@ json.dump(sorted(leaf_paths(DEFAULT_CONFIG)), sys.stdout, indent=2)
           set -e
           export HOME=$(mktemp -d)
 
-          echo "=== Checking hermes --help ==="
-          ${hermes-agent}/bin/hermes --help 2>&1 | grep -q "gateway" || (echo "FAIL: gateway subcommand missing"; exit 1)
-          ${hermes-agent}/bin/hermes --help 2>&1 | grep -q "config" || (echo "FAIL: config subcommand missing"; exit 1)
+          echo "=== Checking argus --help ==="
+          ${hermes-agent}/bin/argus --help 2>&1 | grep -q "gateway" || (echo "FAIL: gateway subcommand missing"; exit 1)
+          ${hermes-agent}/bin/argus --help 2>&1 | grep -q "config" || (echo "FAIL: config subcommand missing"; exit 1)
           echo "PASS: All subcommands accessible"
 
           echo "=== All CLI checks passed ==="
@@ -124,14 +124,14 @@ json.dump(sorted(leaf_paths(DEFAULT_CONFIG)), sys.stdout, indent=2)
         bundled-skills = pkgs.runCommand "hermes-bundled-skills" { } ''
           set -e
           echo "=== Checking bundled skills ==="
-          test -d ${hermes-agent}/share/hermes-agent/skills || (echo "FAIL: skills directory missing"; exit 1)
+          test -d ${hermes-agent}/share/argus/skills || (echo "FAIL: skills directory missing"; exit 1)
           echo "PASS: skills directory exists"
 
-          SKILL_COUNT=$(find ${hermes-agent}/share/hermes-agent/skills -name "SKILL.md" | wc -l)
+          SKILL_COUNT=$(find ${hermes-agent}/share/argus/skills -name "SKILL.md" | wc -l)
           test "$SKILL_COUNT" -gt 0 || (echo "FAIL: no SKILL.md files found in skills directory"; exit 1)
           echo "PASS: $SKILL_COUNT bundled skills found"
 
-          grep -q "ARGUS_BUNDLED_SKILLS" ${hermes-agent}/bin/hermes || \
+          grep -q "ARGUS_BUNDLED_SKILLS" ${hermes-agent}/bin/argus || \
             (echo "FAIL: ARGUS_BUNDLED_SKILLS not in wrapper"; exit 1)
           echo "PASS: ARGUS_BUNDLED_SKILLS set in wrapper"
 
@@ -144,14 +144,14 @@ json.dump(sorted(leaf_paths(DEFAULT_CONFIG)), sys.stdout, indent=2)
         bundled-plugins = pkgs.runCommand "hermes-bundled-plugins" { } ''
           set -e
           echo "=== Checking bundled plugins ==="
-          test -d ${hermes-agent}/share/hermes-agent/plugins || (echo "FAIL: plugins directory missing"; exit 1)
+          test -d ${hermes-agent}/share/argus/plugins || (echo "FAIL: plugins directory missing"; exit 1)
           echo "PASS: plugins directory exists"
 
-          test -f ${hermes-agent}/share/hermes-agent/plugins/platforms/irc/plugin.yaml || \
+          test -f ${hermes-agent}/share/argus/plugins/platforms/irc/plugin.yaml || \
             (echo "FAIL: irc plugin manifest missing"; exit 1)
           echo "PASS: irc plugin manifest present"
 
-          grep -q "ARGUS_BUNDLED_PLUGINS" ${hermes-agent}/bin/hermes || \
+          grep -q "ARGUS_BUNDLED_PLUGINS" ${hermes-agent}/bin/argus || \
             (echo "FAIL: ARGUS_BUNDLED_PLUGINS not in wrapper"; exit 1)
           echo "PASS: ARGUS_BUNDLED_PLUGINS set in wrapper"
 
@@ -166,23 +166,23 @@ json.dump(sorted(leaf_paths(DEFAULT_CONFIG)), sys.stdout, indent=2)
         bundled-locales = pkgs.runCommand "hermes-bundled-locales" { } ''
           set -e
           echo "=== Checking bundled locales ==="
-          test -d ${hermes-agent}/share/hermes-agent/locales || (echo "FAIL: locales directory missing"; exit 1)
+          test -d ${hermes-agent}/share/argus/locales || (echo "FAIL: locales directory missing"; exit 1)
           echo "PASS: locales directory exists"
 
-          LOC_COUNT=$(find ${hermes-agent}/share/hermes-agent/locales -name "*.yaml" | wc -l)
+          LOC_COUNT=$(find ${hermes-agent}/share/argus/locales -name "*.yaml" | wc -l)
           test "$LOC_COUNT" -ge 16 || (echo "FAIL: expected >=16 catalogs, found $LOC_COUNT"; exit 1)
           echo "PASS: $LOC_COUNT locale catalogs found"
 
-          test -f ${hermes-agent}/share/hermes-agent/locales/en.yaml || (echo "FAIL: en.yaml missing"; exit 1)
+          test -f ${hermes-agent}/share/argus/locales/en.yaml || (echo "FAIL: en.yaml missing"; exit 1)
           echo "PASS: en.yaml present"
 
-          grep -q "ARGUS_BUNDLED_LOCALES" ${hermes-agent}/bin/hermes || \
+          grep -q "ARGUS_BUNDLED_LOCALES" ${hermes-agent}/bin/argus || \
             (echo "FAIL: ARGUS_BUNDLED_LOCALES not in wrapper"; exit 1)
           echo "PASS: ARGUS_BUNDLED_LOCALES set in wrapper"
 
           echo "=== Rendering via the wrapper override (ARGUS_BUNDLED_LOCALES) ==="
           export HOME=$(mktemp -d)
-          RENDERED=$(cd "$HOME" && ARGUS_BUNDLED_LOCALES=${hermes-agent}/share/hermes-agent/locales \
+          RENDERED=$(cd "$HOME" && ARGUS_BUNDLED_LOCALES=${hermes-agent}/share/argus/locales \
             ${hermesVenv}/bin/python3 -c "from agent import i18n; print(i18n.t('gateway.reset.header_default', lang='en'))")
           echo "rendered: $RENDERED"
           test "$RENDERED" != "gateway.reset.header_default" || (echo "FAIL: i18n returned the raw key with ARGUS_BUNDLED_LOCALES set"; exit 1)
@@ -219,7 +219,7 @@ json.dump(sorted(leaf_paths(DEFAULT_CONFIG)), sys.stdout, indent=2)
 
           # self-contained bundle; no runtime node_modules expected
 
-          grep -q "ARGUS_TUI_DIR" ${hermes-agent}/bin/hermes || \
+          grep -q "ARGUS_TUI_DIR" ${hermes-agent}/bin/argus || \
             (echo "FAIL: ARGUS_TUI_DIR not in wrapper"; exit 1)
           echo "PASS: ARGUS_TUI_DIR set in wrapper"
 
@@ -233,11 +233,11 @@ json.dump(sorted(leaf_paths(DEFAULT_CONFIG)), sys.stdout, indent=2)
         hermes-node = pkgs.runCommand "hermes-node-version" { } ''
           set -e
           echo "=== Checking ARGUS_NODE in wrapper ==="
-          grep -q "ARGUS_NODE" ${hermes-agent}/bin/hermes || \
+          grep -q "ARGUS_NODE" ${hermes-agent}/bin/argus || \
             (echo "FAIL: ARGUS_NODE not set in wrapper"; exit 1)
           echo "PASS: ARGUS_NODE present in wrapper"
 
-          ARGUS_NODE=$(sed -n "s/^export ARGUS_NODE='\(.*\)'/\1/p" ${hermes-agent}/bin/hermes)
+          ARGUS_NODE=$(sed -n "s/^export ARGUS_NODE='\(.*\)'/\1/p" ${hermes-agent}/bin/argus)
           test -x "$ARGUS_NODE" || (echo "FAIL: ARGUS_NODE=$ARGUS_NODE not executable"; exit 1)
           echo "PASS: ARGUS_NODE executable at $ARGUS_NODE"
 
@@ -265,8 +265,8 @@ json.dump(sorted(leaf_paths(DEFAULT_CONFIG)), sys.stdout, indent=2)
           }
 
           echo "=== Checking ARGUS_MANAGED guards ==="
-          check_blocked "config set" ${hermes-agent}/bin/hermes config set model foo
-          check_blocked "config edit" ${hermes-agent}/bin/hermes config edit
+          check_blocked "config set" ${hermes-agent}/bin/argus config set model foo
+          check_blocked "config edit" ${hermes-agent}/bin/argus config edit
 
           echo "=== All guard checks passed ==="
           mkdir -p $out
@@ -283,16 +283,16 @@ json.dump(sorted(leaf_paths(DEFAULT_CONFIG)), sys.stdout, indent=2)
           set -e
           echo "=== Checking extraPythonPackages PYTHONPATH injection ==="
 
-          grep -q "PYTHONPATH" ${hermesWithExtra}/bin/hermes || \
+          grep -q "PYTHONPATH" ${hermesWithExtra}/bin/argus || \
             (echo "FAIL: PYTHONPATH not in wrapper"; exit 1)
           echo "PASS: PYTHONPATH present in wrapper"
 
-          grep -q "${testPkg}" ${hermesWithExtra}/bin/hermes || \
+          grep -q "${testPkg}" ${hermesWithExtra}/bin/argus || \
             (echo "FAIL: test package path not in PYTHONPATH"; exit 1)
           echo "PASS: test package path found in wrapper"
 
           echo "=== Checking base package has no PYTHONPATH ==="
-          if grep -q "PYTHONPATH" ${hermes-agent}/bin/hermes; then
+          if grep -q "PYTHONPATH" ${hermes-agent}/bin/argus; then
             echo "FAIL: base package should not have PYTHONPATH"; exit 1
           fi
           echo "PASS: base package clean"

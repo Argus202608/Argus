@@ -14,7 +14,7 @@ description: "使用 Scrapling 进行网页抓取——HTTP 获取、隐身浏�
 
 | | |
 |---|---|
-| 来源 | 可选——使用 `hermes skills install official/research/scrapling` 安装 |
+| 来源 | 可选——使用 `argus skills install official/research/scrapling` 安装 |
 | 路径 | `optional-skills/research/scrapling` |
 | 版本 | `1.0.0` |
 | 作者 | FEUAZUR |

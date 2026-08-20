@@ -40,7 +40,7 @@ description: "通过 curl 调用 Airtable REST API"
    - `data.records:write` — 创建 / 更新 / 删除行
    - `schema.bases:read` — 列出 bases 和 tables
 3. **重要：** 在同一令牌 UI 中，将你需要访问的每个 base 添加到令牌的 **Access** 列表中。PAT 是按 base 划定范围的——有效令牌若未授权对应 base 会返回 `403`。
-4. 将令牌存储在 `~/.hermes/.env` 中（或通过 `hermes setup` 配置）：
+4. 将令牌存储在 `~/.hermes/.env` 中（或通过 `argus setup` 配置）：
    ```
    AIRTABLE_API_KEY=pat_your_token_here
    ```

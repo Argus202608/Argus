@@ -7,11 +7,11 @@ const config: Config = {
   tagline: 'The self-improving AI agent',
   favicon: 'img/favicon.ico',
 
-  url: 'https://hermes-agent.nousresearch.com',
-  baseUrl: '/docs/',
+  url: 'https://mmargus-team.github.io',
+  baseUrl: '/Argus/docs/',
 
-  organizationName: 'NousResearch',
-  projectName: 'hermes-agent',
+  organizationName: 'MMArgus-Team',
+  projectName: 'Argus',
 
   onBrokenLinks: 'warn',
 
@@ -56,7 +56,7 @@ const config: Config = {
         // reference/optional-skills-catalog) remain indexed.
         //
         // Note: ignoreFiles matches `route` (baseUrl stripped, no leading
-        // slash). With baseUrl '/docs/', `/docs/user-guide/skills/bundled/x`
+        // slash). With baseUrl '/Argus/docs/', `/Argus/docs/user-guide/skills/bundled/x`
         // becomes 'user-guide/skills/bundled/x'.
         ignoreFiles: [
           /^user-guide\/skills\/bundled\//,
@@ -71,12 +71,32 @@ const config: Config = {
       '@docusaurus/plugin-client-redirects',
       {
         // Static-host redirects for renamed doc pages (GitHub Pages can't
-        // do server-side redirects). Paths are relative to baseUrl (/docs/).
+        // do server-side redirects). Paths are relative to baseUrl (/Argus/docs/).
         redirects: [
           {
             // Renamed in #44470 (Automation Blueprints terminology rebrand)
             from: '/guides/automation-templates',
             to: '/guides/automation-blueprints',
+          },
+          {
+            from: '/guides/run-hermes-with-nous-portal',
+            to: '/guides/run-argus-with-nous-portal',
+          },
+          {
+            from: '/guides/use-mcp-with-hermes',
+            to: '/guides/use-mcp-with-argus',
+          },
+          {
+            from: '/guides/use-soul-with-hermes',
+            to: '/guides/use-soul-with-argus',
+          },
+          {
+            from: '/guides/use-voice-mode-with-hermes',
+            to: '/guides/use-voice-mode-with-argus',
+          },
+          {
+            from: '/guides/build-a-hermes-plugin',
+            to: '/guides/build-an-argus-plugin',
           },
         ],
       },
@@ -88,9 +108,9 @@ const config: Config = {
       'classic',
       {
         docs: {
-          routeBasePath: '/',  // Docs at the root of /docs/
+          routeBasePath: '/',  // Docs at the root of /Argus/docs/
           sidebarPath: './sidebars.ts',
-          editUrl: 'https://github.com/MMArgus-Team/Argus/edit/master/website/',
+          editUrl: 'https://github.com/MMArgus-Team/Argus/edit/main/website/',
         },
         blog: false,
         theme: {
@@ -131,7 +151,7 @@ const config: Config = {
           position: 'left',
         },
         {
-          href: 'https://hermes-agent.nousresearch.com/',
+          href: 'https://github.com/MMArgus-Team/Argus/releases',
           label: 'Download',
           position: 'left',
         },
@@ -140,7 +160,7 @@ const config: Config = {
           position: 'right',
         },
         {
-          href: 'https://hermes-agent.nousresearch.com',
+          href: 'https://github.com/MMArgus-Team/Argus',
           label: 'Home',
           position: 'right',
         },
@@ -150,8 +170,8 @@ const config: Config = {
           position: 'right',
         },
         {
-          href: 'https://discord.gg/NousResearch',
-          label: 'Discord',
+          href: 'https://github.com/MMArgus-Team/Argus/discussions',
+          label: 'Discussions',
           position: 'right',
         },
       ],
@@ -171,7 +191,7 @@ const config: Config = {
         {
           title: 'Community',
           items: [
-            { label: 'Discord', href: 'https://discord.gg/NousResearch' },
+            { label: 'Discussions', href: 'https://github.com/MMArgus-Team/Argus/discussions' },
             { label: 'GitHub Issues', href: 'https://github.com/MMArgus-Team/Argus/issues' },
             { label: 'Skills Hub', href: 'https://agentskills.io' },
           ],
@@ -179,13 +199,13 @@ const config: Config = {
         {
           title: 'More',
           items: [
-            { label: 'Desktop Download', href: 'https://hermes-agent.nousresearch.com/' },
+            { label: 'Desktop Download', href: 'https://github.com/MMArgus-Team/Argus/releases' },
             { label: 'GitHub', href: 'https://github.com/MMArgus-Team/Argus' },
-            { label: 'Nous Research', href: 'https://nousresearch.com' },
+            { label: 'PyPI', href: 'https://pypi.org/project/mm-argus/' },
           ],
         },
       ],
-      copyright: `Built by <a href="https://nousresearch.com">Nous Research</a> · MIT License · ${new Date().getFullYear()}`,
+      copyright: `Built by <a href="https://github.com/MMArgus-Team">MMArgus Team</a> · MIT License · ${new Date().getFullYear()}`,
     },
     prism: {
       theme: prismThemes.github,

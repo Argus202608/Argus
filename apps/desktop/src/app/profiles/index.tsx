@@ -23,7 +23,7 @@ import {
   type ProfileInfo,
   renameProfile,
   updateProfileSoul
-} from '@/hermes'
+} from '@/argus'
 import { useI18n } from '@/i18n'
 import { AlertTriangle, Pencil, Save, Terminal, Trash2, Users } from '@/lib/icons'
 import { slug } from '@/lib/sanitize'

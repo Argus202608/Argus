@@ -3,7 +3,7 @@ import type { MutableRefObject } from 'react'
 import { useEffect } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { getSessionMessages } from '@/hermes'
+import { getSessionMessages } from '@/argus'
 import { $activeGatewayProfile, $newChatProfile } from '@/store/profile'
 import {
   $currentCwd,
@@ -49,7 +49,7 @@ vi.mock('@/store/multimodal-voice', () => ({
   stopMic: micLifecycle.stop
 }))
 
-vi.mock('@/hermes', async importOriginal => ({
+vi.mock('@/argus', async importOriginal => ({
   ...(await importOriginal<Record<string, unknown>>()),
   deleteSession: vi.fn(),
   getSessionMessages: vi.fn(),

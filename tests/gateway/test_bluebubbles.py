@@ -142,7 +142,7 @@ class TestBlueBubblesHelpers:
 
         assert adapter.require_mention is True
         assert adapter._message_matches_mention_patterns("Hermes, summarize this")
-        assert adapter._message_matches_mention_patterns("@Hermes agent help")
+        assert adapter._message_matches_mention_patterns("@Argus help")
         assert not adapter._message_matches_mention_patterns("casual family chatter")
         assert not adapter._message_matches_mention_patterns("antihermes should not match")
 
@@ -160,7 +160,7 @@ class TestBlueBubblesHelpers:
         adapter = _make_adapter(monkeypatch, require_mention=True)
 
         assert adapter._clean_mention_text("Hermes, summarize this") == "summarize this"
-        assert adapter._clean_mention_text("Hermes agent: summarize this") == "summarize this"
+        assert adapter._clean_mention_text("Argus: summarize this") == "summarize this"
         assert adapter._clean_mention_text("please ask Hermes about this") == "please ask Hermes about this"
 
 

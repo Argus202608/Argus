@@ -9,7 +9,7 @@ export {}
 
 declare global {
   interface Window {
-    hermesDesktop: {
+    argusDesktop: {
       /** Electron display-media system audio is available on Windows and macOS 13+. */
       screenShareSystemAudio: boolean
       // Resolve a backend connection. Omit `profile` (or pass the primary) for
@@ -216,6 +216,8 @@ declare global {
         searchMarketplace: (query: string) => Promise<DesktopMarketplaceSearchItem[]>
       }
     }
+    /** @deprecated Use argusDesktop. Retained for older preload consumers. */
+    hermesDesktop: Window['argusDesktop']
   }
 }
 

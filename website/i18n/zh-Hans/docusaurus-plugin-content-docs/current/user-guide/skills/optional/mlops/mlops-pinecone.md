@@ -14,7 +14,7 @@ description: "面向生产级 AI 应用的托管向量数据库"
 
 | | |
 |---|---|
-| 来源 | 可选 — 通过 `hermes skills install official/mlops/pinecone` 安装 |
+| 来源 | 可选 — 通过 `argus skills install official/mlops/pinecone` 安装 |
 | 路径 | `optional-skills/mlops/pinecone` |
 | 版本 | `1.0.0` |
 | 作者 | Orchestra Research |

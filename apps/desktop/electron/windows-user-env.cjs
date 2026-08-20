@@ -5,9 +5,9 @@
 //
 // A GUI app launched from Explorer inherits the environment block captured at
 // login, so a variable set via `setx` AFTER login is invisible in process.env
-// even though a fresh shell — and the Hermes CLI — sees it immediately. The
+// even though a fresh shell — and the Argus CLI — sees it immediately. The
 // desktop's ARGUS_HOME resolution relies on process.env, so that stale-snapshot
-// gap silently sends the backend to the default %LOCALAPPDATA%\hermes. Reading
+// gap silently sends the backend to the default %LOCALAPPDATA%\argus. Reading
 // the live registry value closes the gap. See #45471.
 
 const { execFileSync } = require('node:child_process')
@@ -15,7 +15,7 @@ const { execFileSync } = require('node:child_process')
 // Parse the output of `reg query HKCU\Environment /v <name>`, which looks like:
 //
 //   HKEY_CURRENT_USER\Environment
-//       ARGUS_HOME    REG_SZ    F:\Hermes\data
+//       ARGUS_HOME    REG_SZ    F:\Argus\data
 //
 // Returns the raw value string (spaces inside the value preserved), or null when
 // the requested value line isn't present.

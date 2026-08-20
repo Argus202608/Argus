@@ -17,7 +17,7 @@
     "jsx": "react-jsx",
     "paths": {
       "@/*": ["./src/*"],
-      "@hermes/shared": ["../shared/src/index.ts"]
+      "@argus/shared": ["../shared/src/index.ts"]
     }
   },
   "include": ["src", "../shared/src"],

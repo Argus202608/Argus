@@ -71,7 +71,7 @@ test('sandboxed preload does not require a local capability helper', () => {
   // Sandboxed preload scripts can require Electron and a small built-in module
   // subset, but Electron explicitly disallows splitting them into local CJS
   // modules. Requiring display-media-streams.cjs here would break the complete
-  // hermesDesktop bridge, not just the audio capability.
+  // argusDesktop bridge, not just the audio capability.
   assert.doesNotMatch(preloadSource, /require\(['"]\.\/display-media-streams\.cjs['"]\)/)
   assert.match(preloadSource, /process\.getSystemVersion/)
 })
@@ -91,7 +91,7 @@ test('sandboxed preload exposes the same Windows/macOS/Linux boundary', () => {
     const electron = {
       contextBridge: {
         exposeInMainWorld(name, value) {
-          if (name === 'hermesDesktop') exposedApi = value
+          if (name === 'argusDesktop') exposedApi = value
         }
       },
       ipcRenderer: {},

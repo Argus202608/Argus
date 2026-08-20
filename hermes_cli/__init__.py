@@ -1,14 +1,14 @@
 """
-Hermes CLI - Unified command-line interface for Hermes Agent.
+Argus CLI - Unified command-line interface for Argus.
 
 Provides subcommands for:
-- hermes chat          - Interactive chat (same as ./hermes)
+- argus chat          - Interactive chat (same as ./argus)
 - argus gateway       - Run gateway in foreground
 - argus gateway start - Start gateway service
 - argus gateway stop  - Stop gateway service
 - argus setup         - Interactive setup wizard
 - argus status        - Show status of all components
-- hermes cron          - Manage cron jobs
+- argus cron          - Manage cron jobs
 """
 
 import os

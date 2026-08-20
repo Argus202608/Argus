@@ -1,16 +1,16 @@
 ---
 sidebar_position: 5
 title: "添加 Provider"
-description: "如何向 Hermes Agent 添加新的推理 provider——认证、运行时解析、CLI 流程、适配器、测试与文档"
+description: "如何向 Argus Agent 添加新的推理 provider——认证、运行时解析、CLI 流程、适配器、测试与文档"
 ---
 
 # 添加 Provider
 
-Hermes 已经可以通过自定义 provider 路径与任何 OpenAI 兼容的端点通信。除非你需要为某个服务提供一流的用户体验，否则不要添加内置 provider：
+Argus 已经可以通过自定义 provider 路径与任何 OpenAI 兼容的端点通信。除非你需要为某个服务提供一流的用户体验，否则不要添加内置 provider：
 
 - provider 专属的认证或 token 刷新
 - 精选的模型目录
-- setup / `hermes model` 菜单条目
+- setup / `argus model` 菜单条目
 - 用于 `provider:model` 语法的 provider 别名
 - 需要适配器的非 OpenAI API 格式
 
@@ -84,7 +84,7 @@ Hermes 已经可以通过自定义 provider 路径与任何 OpenAI 兼容的端�
 8. `website/docs/` 下的用户文档
 
 :::tip
-`hermes_cli/setup.py` **无需**修改。setup 向导将 provider/model 选择委托给 `main.py` 中的 `select_provider_and_model()`——在那里添加的任何 provider 都会自动出现在 `hermes setup` 中。
+`hermes_cli/setup.py` **无需**修改。setup 向导将 provider/model 选择委托给 `main.py` 中的 `select_provider_and_model()`——在那里添加的任何 provider 都会自动出现在 `argus setup` 中。
 :::
 
 ### 原生 / 非 OpenAI provider 额外需要
@@ -102,7 +102,7 @@ Hermes 已经可以通过自定义 provider 路径与任何 OpenAI 兼容的端�
 1. 在 `plugins/model-providers/<your-provider>/` 下创建一个插件目录，包含：
    - `__init__.py`——在模块级别调用 `register_provider(profile)`
    - `plugin.yaml`——清单文件（name、kind: model-provider、version、description）
-2. 就这些。Provider 插件在任何代码首次调用 `get_provider_profile()` 或 `list_providers()` 时自动加载——捆绑插件（本仓库）和位于 `$HERMES_HOME/plugins/model-providers/` 的用户插件都会被加载。
+2. 就这些。Provider 插件在任何代码首次调用 `get_provider_profile()` 或 `list_providers()` 时自动加载——捆绑插件（本仓库）和位于 `$ARGUS_HOME/plugins/model-providers/` 的用户插件都会被加载。
 
 当你添加一个插件并调用 `register_provider()` 时，以下内容会自动接线：
 
@@ -112,14 +112,14 @@ Hermes 已经可以通过自定义 provider 路径与任何 OpenAI 兼容的端�
 4. 按优先级顺序检查 `env_vars` 以获取 API key
 5. 为该 provider 注册 `fallback_models` 列表
 6. `--provider` CLI 标志接受该 provider id
-7. `hermes model` 菜单包含该 provider
-8. `hermes setup` 向导自动委托给 `main.py`
+7. `argus model` 菜单包含该 provider
+8. `argus setup` 向导自动委托给 `main.py`
 9. `provider:model` 别名语法正常工作
 10. 运行时解析器返回正确的 `base_url` 和 `api_key`
 11. `--provider <name>` CLI 标志接受该 provider id
 12. 回退模型激活可以干净地切换到该 provider
 
-位于 `$HERMES_HOME/plugins/model-providers/<name>/` 的用户插件会覆盖同名的捆绑插件（`register_provider()` 中后写者获胜）——因此第三方可以在不编辑本仓库的情况下对任何内置 profile 进行 monkey-patch 或替换。
+位于 `$ARGUS_HOME/plugins/model-providers/<name>/` 的用户插件会覆盖同名的捆绑插件（`register_provider()` 中后写者获胜）——因此第三方可以在不编辑本仓库的情况下对任何内置 profile 进行 monkey-patch 或替换。
 
 参见 `plugins/model-providers/nvidia/` 或 `plugins/model-providers/gmi/` 作为模板，以及完整的 [Model Provider Plugin 指南](/developer-guide/model-provider-plugin)，了解字段参考、hook 用法和端到端示例。
 
@@ -131,7 +131,7 @@ Hermes 已经可以通过自定义 provider 路径与任何 OpenAI 兼容的端�
 - 需要新适配器的非 OpenAI API 格式（Anthropic Messages、Codex Responses）
 - 自定义端点检测或多区域探测（z.ai、Kimi）
 - 精选的静态模型目录或实时 `/models` 获取
-- 带有特定认证流程的 provider 专属 `hermes model` 菜单条目
+- 带有特定认证流程的 provider 专属 `argus model` 菜单条目
 
 ## 第 1 步：选择一个规范的 provider id
 
@@ -177,7 +177,7 @@ Hermes 已经可以通过自定义 provider 路径与任何 OpenAI 兼容的端�
 
 需要在此回答的问题：
 
-- Hermes 应该检查哪些环境变量，按什么优先级顺序？
+- Argus 应该检查哪些环境变量，按什么优先级顺序？
 - provider 是否需要 base URL 覆盖？
 - 是否需要端点探测或 token 刷新？
 - 当凭据缺失时，认证错误应该显示什么？
@@ -226,11 +226,11 @@ kimi:model-name
 
 如果 provider 与 OpenAI 兼容，`api_mode` 通常应保持为 `chat_completions`。
 
-注意 API key 优先级。Hermes 已经包含避免将 OpenRouter key 泄露给无关端点的逻辑。新 provider 应同样明确地指定哪个 key 对应哪个 base URL。
+注意 API key 优先级。Argus 已经包含避免将 OpenRouter key 泄露给无关端点的逻辑。新 provider 应同样明确地指定哪个 key 对应哪个 base URL。
 
 ## 第 5 步：在 `hermes_cli/main.py` 中接线 CLI
 
-在交互式 `hermes model` 流程中出现之前，provider 是不可发现的。
+在交互式 `argus model` 流程中出现之前，provider 是不可发现的。
 
 在 `hermes_cli/main.py` 中更新以下内容：
 
@@ -242,7 +242,7 @@ kimi:model-name
 - 一个 `_model_flow_<provider>()` 函数，或者如果适用则复用 `_model_flow_api_key_provider()`
 
 :::tip
-`hermes_cli/setup.py` 无需修改——它调用 `main.py` 中的 `select_provider_and_model()`，因此你的新 provider 会自动出现在 `hermes model` 和 `hermes setup` 中。
+`hermes_cli/setup.py` 无需修改——它调用 `main.py` 中的 `select_provider_and_model()`，因此你的新 provider 会自动出现在 `argus model` 和 `argus setup` 中。
 :::
 
 ## 第 6 步：保持辅助调用正常工作
@@ -313,7 +313,7 @@ Prompt（提示词）缓存和 provider 专属的调节项很容易出现回归�
 - OpenRouter 获得 provider 路由字段
 - 并非每个 provider 都应该接收每个请求端选项
 
-添加原生 provider 时，仔细检查 Hermes 只向该 provider 发送它实际理解的字段。
+添加原生 provider 时，仔细检查 Argus 只向该 provider 发送它实际理解的字段。
 
 ## 第 8 步：测试
 
@@ -434,7 +434,7 @@ python -m hermes_cli.main setup
 
 provider 路由等字段只属于支持它们的 provider。
 
-### 7. 更新了 `hermes model` 但未更新 `hermes setup`
+### 7. 更新了 `argus model` 但未更新 `argus setup`
 
 两个流程都需要了解该 provider。
 

@@ -14,7 +14,7 @@ description: "规划、搭建并监控由 Hermes Kanban 支撑的多智能体视
 
 | | |
 |---|---|
-| 来源 | 可选 — 通过 `hermes skills install official/creative/kanban-video-orchestrator` 安装 |
+| 来源 | 可选 — 通过 `argus skills install official/creative/kanban-video-orchestrator` 安装 |
 | 路径 | `optional-skills/creative/kanban-video-orchestrator` |
 | 版本 | `1.0.0` |
 | 作者 | ['SHL0MS', 'alt-glitch'] |
@@ -67,7 +67,7 @@ DISCOVER  →  BRIEF  →  TEAM DESIGN  →  SETUP  →  EXECUTE  →  MONITOR
 根据回答，对风格类别进行分类。风格决定后续需要提问的问题。**不要一次性问所有问题。** 每次问 2-4 个，倾听回答，然后继续。当用户的回答隐含某个答案时，做出合理假设。
 
 完整的收集模式和各风格问题库，参见
-**[references/intake.md](https://github.com/NousResearch/hermes-agent/blob/main/optional-skills/creative/kanban-video-orchestrator/references/intake.md)**。
+**[references/intake.md](https://github.com/MMArgus-Team/Argus/blob/main/optional-skills/creative/kanban-video-orchestrator/references/intake.md)**。
 
 ### 第二步 — 简报
 
@@ -87,10 +87,10 @@ DISCOVER  →  BRIEF  →  TEAM DESIGN  →  SETUP  →  EXECUTE  →  MONITOR
 从角色库中挑选适合本视频的角色原型。**组合，而非复制。** 大多数视频需要 4-7 个 profiles。director 始终存在；其余角色根据简报的实际需求选取。
 
 角色库和各风格团队组合，参见
-**[references/role-archetypes.md](https://github.com/NousResearch/hermes-agent/blob/main/optional-skills/creative/kanban-video-orchestrator/references/role-archetypes.md)**。
+**[references/role-archetypes.md](https://github.com/MMArgus-Team/Argus/blob/main/optional-skills/creative/kanban-video-orchestrator/references/role-archetypes.md)**。
 
 角色与 Hermes 技能及工具集的映射关系，参见
-**[references/tool-matrix.md](https://github.com/NousResearch/hermes-agent/blob/main/optional-skills/creative/kanban-video-orchestrator/references/tool-matrix.md)**。
+**[references/tool-matrix.md](https://github.com/MMArgus-Team/Argus/blob/main/optional-skills/creative/kanban-video-orchestrator/references/tool-matrix.md)**。
 
 ### 第四步 — 安装
 
@@ -98,22 +98,22 @@ DISCOVER  →  BRIEF  →  TEAM DESIGN  →  SETUP  →  EXECUTE  →  MONITOR
 
 1. 创建项目工作区（`~/projects/video-pipeline/<slug>/`）
 2. 将提供的资产复制到 `taste/`、`audio/`、`assets/`
-3. 通过 `hermes profile create --clone` 创建每个 Hermes profile
+3. 通过 `argus profile create --clone` 创建每个 Hermes profile
 4. 编写各 profile 的 `SOUL.md`（个性 + 角色定义）
 5. 配置 profile YAML（工具集、always_load 技能、cwd）
 6. 编写 `brief.md`、`TEAM.md` 和 `taste/` 内容
-7. 触发分配给 director 的初始 `hermes kanban create` 任务
+7. 触发分配给 director 的初始 `argus kanban create` 任务
 
-使用 `scripts/bootstrap_pipeline.py` 从简报 + 团队设计 JSON 生成 setup.sh。安装脚本结构、profile 配置模式和关键的"共享工作区"规则，参见 **[references/kanban-setup.md](https://github.com/NousResearch/hermes-agent/blob/main/optional-skills/creative/kanban-video-orchestrator/references/kanban-setup.md)**。
+使用 `scripts/bootstrap_pipeline.py` 从简报 + 团队设计 JSON 生成 setup.sh。安装脚本结构、profile 配置模式和关键的"共享工作区"规则，参见 **[references/kanban-setup.md](https://github.com/MMArgus-Team/Argus/blob/main/optional-skills/creative/kanban-video-orchestrator/references/kanban-setup.md)**。
 
 ### 第五步 — 执行
 
 运行 `setup.sh`。然后向用户提供监控命令：
 
 ```bash
-hermes kanban watch --tenant <project-tenant>     # 实时事件
-hermes kanban list  --tenant <project-tenant>     # 看板快照
-hermes dashboard                                   # 可视化看板 UI
+argus kanban watch --tenant <project-tenant>     # 实时事件
+argus kanban list  --tenant <project-tenant>     # 看板快照
+argus dashboard                                   # 可视化看板 UI
 ```
 
 director profile 从此接管，通过 kanban 工具集将工作分解并路由给专业 profiles。
@@ -128,11 +128,11 @@ director profile 从此接管，通过 kanban 工具集将工作分解并路由�
 2. 以原任务为父任务创建重新运行任务
 3. 调整简报范围，让 director 重新分解
 
-诊断模式、介入方案和"任务卡住"处理手册，参见 **[references/monitoring.md](https://github.com/NousResearch/hermes-agent/blob/main/optional-skills/creative/kanban-video-orchestrator/references/monitoring.md)**。
+诊断模式、介入方案和"任务卡住"处理手册，参见 **[references/monitoring.md](https://github.com/MMArgus-Team/Argus/blob/main/optional-skills/creative/kanban-video-orchestrator/references/monitoring.md)**。
 
 ## 参考：实际案例
 
-六个涵盖截然不同视频风格的具体流水线——叙事短片、产品/营销视频、MV、数学/算法解说、ASCII 视频、实时装置——展示相同工作流程如何产生截然不同的团队和任务图。参见 **[references/examples.md](https://github.com/NousResearch/hermes-agent/blob/main/optional-skills/creative/kanban-video-orchestrator/references/examples.md)**。
+六个涵盖截然不同视频风格的具体流水线——叙事短片、产品/营销视频、MV、数学/算法解说、ASCII 视频、实时装置——展示相同工作流程如何产生截然不同的团队和任务图。参见 **[references/examples.md](https://github.com/MMArgus-Team/Argus/blob/main/optional-skills/creative/kanban-video-orchestrator/references/examples.md)**。
 
 ## 关键规则
 
@@ -146,7 +146,7 @@ director profile 从此接管，通过 kanban 工具集将工作分解并路由�
 
 5. **尊重现有技能。** 当某个场景适合现有技能时，相关渲染器应通过任务上的 `--skill <name>` 或 profile 中的 `always_load` 加载该技能。不要重新推导技能已提供的内容。
 
-6. **director 绝不执行。** 即使拥有完整的 `kanban + terminal + file` 工具集，director 的 `SOUL.md` 规则也禁止其自行执行工作。它只负责分解和路由——每个具体任务都变成对专业 profile 的 `hermes kanban create` 调用。自动注入的 kanban 编排指引对此有进一步说明。
+6. **director 绝不执行。** 即使拥有完整的 `kanban + terminal + file` 工具集，director 的 `SOUL.md` 规则也禁止其自行执行工作。它只负责分解和路由——每个具体任务都变成对专业 profile 的 `argus kanban create` 调用。自动注入的 kanban 编排指引对此有进一步说明。
 
 7. **不要过度分解。** 一个 30 秒的产品视频**不需要** 20 个任务。目标是最小任务图，同时仍能良好并行化并暴露正确的人工审核节点。
 

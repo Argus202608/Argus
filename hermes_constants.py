@@ -1,4 +1,4 @@
-"""Shared constants for Hermes Agent.
+"""Shared constants for Argus.
 
 Import-safe module with no dependencies — can be imported from anywhere
 without risk of circular imports.
@@ -44,7 +44,7 @@ def get_hermes_home_override() -> str | None:
 
 
 def _get_platform_default_hermes_home() -> Path:
-    """Return the platform-native default Hermes home path."""
+    """Return the platform-native default Argus home path."""
     if sys.platform == "win32":
         local_appdata = os.environ.get("LOCALAPPDATA", "").strip()
         base = Path(local_appdata) if local_appdata else Path.home() / "AppData" / "Local"
@@ -52,10 +52,21 @@ def _get_platform_default_hermes_home() -> Path:
     return Path.home() / ".argus"
 
 
-def get_hermes_home() -> Path:
-    """Return the Hermes home directory (default: platform-native path).
+def _configured_argus_home(env: dict[str, str] | None = None) -> str:
+    """Return the configured Argus home, honoring the legacy env alias.
 
-    Reads ARGUS_HOME env var, falls back to the platform-native default.
+    ``ARGUS_HOME`` is canonical. ``HERMES_HOME`` remains a read-only fallback
+    so existing profiles and launch scripts continue to work during migration.
+    """
+    source = os.environ if env is None else env
+    return source.get("ARGUS_HOME", "").strip() or source.get("HERMES_HOME", "").strip()
+
+
+def get_hermes_home() -> Path:
+    """Return the Argus home directory (default: platform-native path).
+
+    Reads ``ARGUS_HOME`` first, then the deprecated ``HERMES_HOME`` alias,
+    and finally falls back to the platform-native default.
     This is the single source of truth — all other copies should import this.
 
     When ``ARGUS_HOME`` is unset but an ``active_profile`` file indicates
@@ -72,7 +83,7 @@ def get_hermes_home() -> Path:
     if override:
         return Path(override)
 
-    val = os.environ.get("ARGUS_HOME", "").strip()
+    val = _configured_argus_home()
     if val:
         return Path(val)
 
@@ -98,7 +109,7 @@ def get_hermes_home() -> Path:
                 f"profile is {active!r}. Falling back to {fallback_home}, which "
                 f"is the DEFAULT profile — not {active!r}. Any data this "
                 f"process writes will land in the wrong profile. The "
-                f"subprocess spawner should pass HERMES_HOME explicitly "
+                f"subprocess spawner should pass ARGUS_HOME explicitly "
                 f"(see issue #18594)."
             )
             try:
@@ -111,10 +122,10 @@ def get_hermes_home() -> Path:
 
 
 def get_default_hermes_root() -> Path:
-    """Return the root Hermes directory for profile-level operations.
+    """Return the root Argus directory for profile-level operations.
 
     In standard deployments this is the platform-native Hermes home
-    (``~/.argus`` on POSIX, ``%LOCALAPPDATA%\\hermes`` on native Windows).
+    (``~/.argus`` on POSIX, ``%LOCALAPPDATA%\\argus`` on native Windows).
 
     In Docker or custom deployments where ``ARGUS_HOME`` points outside
     ``~/.argus`` (e.g. ``/opt/data``), returns ``ARGUS_HOME`` directly
@@ -128,7 +139,7 @@ def get_default_hermes_root() -> Path:
     Import-safe — no dependencies beyond stdlib.
     """
     native_home = _get_platform_default_hermes_home()
-    env_home = os.environ.get("ARGUS_HOME", "")
+    env_home = _configured_argus_home()
     if not env_home:
         return native_home
     env_path = Path(env_home)
@@ -254,10 +265,10 @@ def get_hermes_dir(new_subpath: str, old_name: str) -> Path:
 
 
 def iter_hermes_node_dirs(home: Path | None = None) -> list[Path]:
-    """Return Hermes-managed Node.js directories in preferred lookup order.
+    """Return Argus-managed Node.js directories in preferred lookup order.
 
     Windows installs from ``scripts/install.ps1`` unpack portable Node directly
-    into ``%LOCALAPPDATA%\\hermes\\node``. POSIX installs use
+    into ``%LOCALAPPDATA%\\argus\\node``. POSIX installs use
     ``$ARGUS_HOME/node/bin``. Include both shapes on every platform so mixed
     or migrated installs still work.
     """
@@ -674,8 +685,8 @@ def _norm_home_path(path: str | None) -> str:
 
 
 def _profile_home_path(env: dict[str, str] | None = None) -> str | None:
-    """Return ``{HERMES_HOME}/home`` when the profile-home directory exists."""
-    hermes_home = get_hermes_home_override() or (env or {}).get("ARGUS_HOME") or os.getenv("ARGUS_HOME")
+    """Return ``{ARGUS_HOME}/home`` when the profile-home directory exists."""
+    hermes_home = get_hermes_home_override() or _configured_argus_home(env) or _configured_argus_home()
     if not hermes_home:
         return None
     profile_home = os.path.join(hermes_home, "home")

@@ -15,7 +15,7 @@ This guide walks through:
 4. Admin-consenting those permissions
 5. (Optional) Scoping the app to specific users with an Application Access Policy
 
-You need **tenant admin rights** (or an admin to grant consent on your behalf) to finish this. Bookmark the values you collect — they go into `~/.hermes/.env` at the end.
+You need **tenant admin rights** (or an admin to grant consent on your behalf) to finish this. Bookmark the values you collect — they go into `~/.argus/.env` at the end.
 
 ## Prerequisites
 
@@ -29,7 +29,7 @@ You need **tenant admin rights** (or an admin to grant consent on your behalf) t
 2. Navigate to **Identity → Applications → App registrations**.
 3. Click **New registration**.
 4. Fill in:
-   - **Name:** `Hermes Teams Meeting Pipeline` (or any name you'll recognize).
+   - **Name:** `Argus Teams Meeting Pipeline` (or any name you'll recognize).
    - **Supported account types:** *Accounts in this organizational directory only (Single tenant)*.
    - **Redirect URI:** leave blank — app-only auth does not need one.
 5. Click **Register**.
@@ -95,19 +95,19 @@ Microsoft provides **Application Access Policies** for Teams exactly for this. T
 From an admin PowerShell with the MicrosoftTeams module installed and connected (`Connect-MicrosoftTeams`):
 
 ```powershell
-# Create a policy scoped to the Hermes app
+# Create a policy scoped to the Argus app
 New-CsApplicationAccessPolicy `
-  -Identity "Hermes-Meeting-Pipeline-Policy" `
+  -Identity "Argus-Meeting-Pipeline-Policy" `
   -AppIds "<MSGRAPH_CLIENT_ID>" `
-  -Description "Restrict Hermes meeting pipeline to allow-listed users"
+  -Description "Restrict Argus meeting pipeline to allow-listed users"
 
 # Grant the policy to specific users whose meetings the pipeline may read
 Grant-CsApplicationAccessPolicy `
-  -PolicyName "Hermes-Meeting-Pipeline-Policy" `
+  -PolicyName "Argus-Meeting-Pipeline-Policy" `
   -Identity "alice@example.com"
 
 Grant-CsApplicationAccessPolicy `
-  -PolicyName "Hermes-Meeting-Pipeline-Policy" `
+  -PolicyName "Argus-Meeting-Pipeline-Policy" `
   -Identity "bob@example.com"
 ```
 
@@ -121,7 +121,7 @@ Without the policy, **any** user's meetings are readable — that's what the per
 
 ## Step 5: Write the Credentials to Your Env File
 
-Put the three values you collected into `~/.hermes/.env`:
+Put the three values you collected into `~/.argus/.env`:
 
 ```bash
 MSGRAPH_TENANT_ID=<directory-tenant-id>
@@ -132,12 +132,12 @@ MSGRAPH_CLIENT_SECRET=<client-secret-value>
 Set file permissions so only you can read the secret:
 
 ```bash
-chmod 600 ~/.hermes/.env
+chmod 600 ~/.argus/.env
 ```
 
 ## Step 6: Verify the Token Flow
 
-Hermes ships a Graph auth smoke-test. From your Hermes install:
+Argus ships a Graph auth smoke-test. From your Argus install:
 
 ```python
 python -c "
@@ -164,8 +164,8 @@ A successful run prints a long token string and a health dict showing `cached: T
 Azure client secrets have a hard expiry. Before yours expires:
 
 1. Create a second client secret in step 2 without deleting the first one.
-2. Update `MSGRAPH_CLIENT_SECRET` in `~/.hermes/.env` with the new value.
-3. Restart the gateway so the new secret is picked up: `hermes gateway restart`.
+2. Update `MSGRAPH_CLIENT_SECRET` in `~/.argus/.env` with the new value.
+3. Restart the gateway so the new secret is picked up: `argus gateway restart`.
 4. Verify with the smoke test above.
 5. Delete the old secret from the Azure portal.
 

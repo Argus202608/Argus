@@ -19,7 +19,7 @@ description: "Microsoft Teams 会议流水线的运行手册、上线检查清�
 ### 验证配置快照
 
 ```bash
-hermes teams-pipeline validate
+argus teams-pipeline validate
 ```
 
 每次配置变更后首先执行此命令。
@@ -27,8 +27,8 @@ hermes teams-pipeline validate
 ### 检查 token 健康状态
 
 ```bash
-hermes teams-pipeline token-health
-hermes teams-pipeline token-health --force-refresh
+argus teams-pipeline token-health
+argus teams-pipeline token-health --force-refresh
 ```
 
 当怀疑 auth（认证）状态过期时，使用 `--force-refresh`。
@@ -36,14 +36,14 @@ hermes teams-pipeline token-health --force-refresh
 ### 检查订阅
 
 ```bash
-hermes teams-pipeline subscriptions
+argus teams-pipeline subscriptions
 ```
 
 ### 续期即将到期的订阅
 
 ```bash
-hermes teams-pipeline maintain-subscriptions
-hermes teams-pipeline maintain-subscriptions --dry-run
+argus teams-pipeline maintain-subscriptions
+argus teams-pipeline maintain-subscriptions --dry-run
 ```
 
 ### 自动化订阅续期（生产环境必须配置）
@@ -52,23 +52,23 @@ hermes teams-pipeline maintain-subscriptions --dry-run
 
 你**必须**按计划运行 `maintain-subscriptions`。从以下三种方式中选择一种：
 
-#### 方式一：Hermes cron（若已运行 Hermes gateway，推荐此方式）
+#### 方式一：Argus cron（若已运行 Argus gateway，推荐此方式）
 
-Hermes 内置 cron 调度器。`--no-agent` 模式以脚本作为任务执行（而非使用 LLM），`--script` 必须指向 `~/.hermes/scripts/` 下的文件。首先创建脚本：
+Argus 内置 cron 调度器。`--no-agent` 模式以脚本作为任务执行（而非使用 LLM），`--script` 必须指向 `~/.argus/scripts/` 下的文件。首先创建脚本：
 
 ```bash
-mkdir -p ~/.hermes/scripts
-cat > ~/.hermes/scripts/maintain-teams-subscriptions.sh <<'EOF'
+mkdir -p ~/.argus/scripts
+cat > ~/.argus/scripts/maintain-teams-subscriptions.sh <<'EOF'
 #!/usr/bin/env bash
-exec hermes teams-pipeline maintain-subscriptions
+exec argus teams-pipeline maintain-subscriptions
 EOF
-chmod +x ~/.hermes/scripts/maintain-teams-subscriptions.sh
+chmod +x ~/.argus/scripts/maintain-teams-subscriptions.sh
 ```
 
 然后注册一个每 12 小时运行一次的纯脚本 cron 任务（相对于 72 小时过期窗口有 6 倍余量）：
 
 ```bash
-hermes cron create "0 */12 * * *" \
+argus cron create "0 */12 * * *" \
   --name "teams-pipeline-maintain-subscriptions" \
   --no-agent \
   --script maintain-teams-subscriptions.sh \
@@ -78,8 +78,8 @@ hermes cron create "0 */12 * * *" \
 验证注册情况并查看下次运行时间：
 
 ```bash
-hermes cron list
-hermes cron status        # 调度器状态
+argus cron list
+argus cron status        # 调度器状态
 ```
 
 #### 方式二：systemd timer（推荐用于 Linux 生产部署）
@@ -88,21 +88,21 @@ hermes cron status        # 调度器状态
 
 ```ini
 [Unit]
-Description=Hermes Teams pipeline subscription maintenance
+Description=Argus Teams pipeline subscription maintenance
 After=network-online.target
 
 [Service]
 Type=oneshot
 User=hermes
 EnvironmentFile=/etc/hermes/env
-ExecStart=/usr/local/bin/hermes teams-pipeline maintain-subscriptions
+ExecStart=/usr/local/bin/argus teams-pipeline maintain-subscriptions
 ```
 
 以及 `/etc/systemd/system/hermes-teams-pipeline-maintain.timer`：
 
 ```ini
 [Unit]
-Description=Run Hermes Teams pipeline subscription maintenance every 12 hours
+Description=Run Argus Teams pipeline subscription maintenance every 12 hours
 
 [Timer]
 OnBootSec=5min
@@ -124,18 +124,18 @@ systemctl list-timers hermes-teams-pipeline-maintain.timer
 #### 方式三：普通 crontab
 
 ```cron
-0 */12 * * * /usr/local/bin/hermes teams-pipeline maintain-subscriptions >> /var/log/hermes/teams-pipeline-maintain.log 2>&1
+0 */12 * * * /usr/local/bin/argus teams-pipeline maintain-subscriptions >> /var/log/hermes/teams-pipeline-maintain.log 2>&1
 ```
 
-确保 cron 环境中包含 `MSGRAPH_*` 凭据。最简单的方法：在 crontab 调用的包装脚本顶部 source `~/.hermes/.env`。
+确保 cron 环境中包含 `MSGRAPH_*` 凭据。最简单的方法：在 crontab 调用的包装脚本顶部 source `~/.argus/.env`。
 
 #### 验证续期是否正常工作
 
 设置好计划任务后，在首次计划运行后检查续期活动：
 
 ```bash
-hermes teams-pipeline subscriptions   # 应显示 expirationDateTime 已推进
-hermes teams-pipeline maintain-subscriptions --dry-run   # 大多数时候应显示"0 expiring soon"
+argus teams-pipeline subscriptions   # 应显示 expirationDateTime 已推进
+argus teams-pipeline maintain-subscriptions --dry-run   # 大多数时候应显示"0 expiring soon"
 ```
 
 如果你发现 Graph webhook 在恰好约 72 小时后神秘地"停止工作"，这是首先要检查的地方：续期任务是否实际运行了？
@@ -143,22 +143,22 @@ hermes teams-pipeline maintain-subscriptions --dry-run   # 大多数时候应显
 ### 查看最近的任务
 
 ```bash
-hermes teams-pipeline list
-hermes teams-pipeline list --status failed
-hermes teams-pipeline show <job-id>
+argus teams-pipeline list
+argus teams-pipeline list --status failed
+argus teams-pipeline show <job-id>
 ```
 
 ### 重放已存储的任务
 
 ```bash
-hermes teams-pipeline run <job-id>
+argus teams-pipeline run <job-id>
 ```
 
 ### 干运行会议产物拉取
 
 ```bash
-hermes teams-pipeline fetch --meeting-id <meeting-id>
-hermes teams-pipeline fetch --join-web-url "<join-url>"
+argus teams-pipeline fetch --meeting-id <meeting-id>
+argus teams-pipeline fetch --join-web-url "<join-url>"
 ```
 
 ## 日常运行手册
@@ -168,28 +168,28 @@ hermes teams-pipeline fetch --join-web-url "<join-url>"
 按顺序执行：
 
 ```bash
-hermes teams-pipeline validate
-hermes teams-pipeline token-health --force-refresh
-hermes teams-pipeline subscriptions
+argus teams-pipeline validate
+argus teams-pipeline token-health --force-refresh
+argus teams-pipeline subscriptions
 ```
 
 然后触发或等待一个真实的会议事件，并确认：
 
 ```bash
-hermes teams-pipeline list
-hermes teams-pipeline show <job-id>
+argus teams-pipeline list
+argus teams-pipeline show <job-id>
 ```
 
 ### 每日或定期检查
 
-- 运行 `hermes teams-pipeline maintain-subscriptions --dry-run`
-- 检查 `hermes teams-pipeline list --status failed`
+- 运行 `argus teams-pipeline maintain-subscriptions --dry-run`
+- 检查 `argus teams-pipeline list --status failed`
 - 确认 Teams 投递目标仍为正确的聊天或频道
 
 ### 变更 webhook URL 或投递目标前
 
 - 更新公共通知 URL 或 Teams 目标配置
-- 运行 `hermes teams-pipeline validate`
+- 运行 `argus teams-pipeline validate`
 - 续期或重新创建受影响的订阅
 - 确认新事件落入预期的接收端
 
@@ -223,7 +223,7 @@ hermes teams-pipeline show <job-id>
 ### 重复或意外的重放
 
 检查：
-- 是否手动通过 `hermes teams-pipeline run` 重放了任务
+- 是否手动通过 `argus teams-pipeline run` 重放了任务
 - 该会议的 sink 记录是否已存在
 - 是否在本地配置中有意启用了重发路径
 
@@ -237,9 +237,9 @@ hermes teams-pipeline show <job-id>
 - [ ] 若启用录制回退，`ffmpeg` 已安装
 - [ ] Teams 出站投递目标已配置并验证
 - [ ] Notion 和 Linear 接收端仅在实际需要时配置
-- [ ] `hermes teams-pipeline validate` 返回 OK 快照
-- [ ] `hermes teams-pipeline token-health --force-refresh` 执行成功
-- [ ] **`maintain-subscriptions` 已配置计划任务**（Hermes cron、systemd timer 或 crontab——参见[自动化订阅续期](#automating-subscription-renewal-required-for-production)）。若未配置，Graph 订阅将在 72 小时内静默过期。
+- [ ] `argus teams-pipeline validate` 返回 OK 快照
+- [ ] `argus teams-pipeline token-health --force-refresh` 执行成功
+- [ ] **`maintain-subscriptions` 已配置计划任务**（Argus cron、systemd timer 或 crontab——参见[自动化订阅续期](#automating-subscription-renewal-required-for-production)）。若未配置，Graph 订阅将在 72 小时内静默过期。
 - [ ] 一个真实的端到端会议事件已生成存储任务
 - [ ] 至少一条摘要已到达预期的投递接收端
 

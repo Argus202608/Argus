@@ -1,11 +1,11 @@
 /*
- * Hermes Setup — defer entirely to the desktop's styles.css.
+ * Argus Setup — defer entirely to the desktop's styles.css.
  *
- * Rather than re-implement the Hermes design system (and inevitably drift
+ * Rather than re-implement the Argus design system (and inevitably drift
  * from it), we import apps/desktop/src/styles.css wholesale. The desktop
  * is the canonical source of truth for fonts, color tokens, button chrome,
  * scrollbars, layout utilities, and animations. Any change to the
- * Hermes look propagates here automatically with no copy-paste maintenance.
+ * Argus look propagates here automatically with no copy-paste maintenance.
  *
  * Path resolution caveats:
  *   - Tailwind v4's `@import` resolves relative to this file. The desktop's

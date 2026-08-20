@@ -14,7 +14,7 @@ description: "通过 DuckDuckGo 免费搜索网络 — 文本、新闻、图片�
 
 | | |
 |---|---|
-| 来源 | 可选 — 使用 `hermes skills install official/research/duckduckgo-search` 安装 |
+| 来源 | 可选 — 使用 `argus skills install official/research/duckduckgo-search` 安装 |
 | 路径 | `optional-skills/research/duckduckgo-search` |
 | 版本 | `1.3.0` |
 | 作者 | gamedevCloudy |

@@ -22,18 +22,18 @@ const sampleStatus: HermesRepoStatus = {
 }
 
 function stubProbe(impl: (cwd: string) => Promise<HermesRepoStatus | null>) {
-  ;(window as unknown as { hermesDesktop?: unknown }).hermesDesktop = { git: { repoStatus: impl } }
+  ;(window as unknown as { argusDesktop?: unknown }).argusDesktop = { git: { repoStatus: impl } }
 }
 
 describe('refreshRepoStatus', () => {
   beforeEach(() => {
     $repoStatus.set(null)
     $currentCwd.set('')
-    delete (window as unknown as { hermesDesktop?: unknown }).hermesDesktop
+    delete (window as unknown as { argusDesktop?: unknown }).argusDesktop
   })
 
   afterEach(() => {
-    delete (window as unknown as { hermesDesktop?: unknown }).hermesDesktop
+    delete (window as unknown as { argusDesktop?: unknown }).argusDesktop
   })
 
   it('populates $repoStatus from the probe for an explicit cwd', async () => {

@@ -14,7 +14,7 @@ description: "健身房训练计划与营养追踪"
 
 | | |
 |---|---|
-| 来源 | 可选 — 通过 `hermes skills install official/health/fitness-nutrition` 安装 |
+| 来源 | 可选 — 通过 `argus skills install official/health/fitness-nutrition` 安装 |
 | 路径 | `optional-skills/health/fitness-nutrition` |
 | 版本 | `1.0.0` |
 | 许可证 | MIT |

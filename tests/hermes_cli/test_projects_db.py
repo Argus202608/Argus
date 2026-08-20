@@ -46,28 +46,28 @@ def test_record_discovered_repos_replace_drops_stale_rows(conn):
 
 
 def test_create_get_list(conn):
-    pid = pdb.create_project(conn, name="Hermes Agent", folders=["/tmp/hermes"])
+    pid = pdb.create_project(conn, name="Argus", folders=["/tmp/hermes"])
     proj = pdb.get_project(conn, pid)
 
     assert proj is not None
-    assert proj.slug == "hermes-agent"
-    assert proj.name == "Hermes Agent"
+    assert proj.slug == "argus"
+    assert proj.name == "Argus"
     # First folder becomes primary.
     assert proj.primary_path == "/tmp/hermes"
     assert [f.path for f in proj.folders] == ["/tmp/hermes"]
     assert proj.folders[0].is_primary is True
 
     # Lookup by slug too.
-    assert pdb.get_project(conn, "hermes-agent").id == pid
+    assert pdb.get_project(conn, "argus").id == pid
     assert len(pdb.list_projects(conn)) == 1
 
 
 def test_slug_collision_disambiguates(conn):
-    pdb.create_project(conn, name="Hermes Agent")
-    pdb.create_project(conn, name="Hermes Agent")
+    pdb.create_project(conn, name="Argus")
+    pdb.create_project(conn, name="Argus")
     slugs = sorted(p.slug for p in pdb.list_projects(conn))
 
-    assert slugs == ["hermes-agent", "hermes-agent-2"]
+    assert slugs == ["argus", "argus-2"]
 
 
 def test_empty_name_rejected(conn):

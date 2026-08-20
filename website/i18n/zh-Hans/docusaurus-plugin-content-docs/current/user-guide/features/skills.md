@@ -8,9 +8,9 @@ description: "按需加载的知识文档——渐进式披露、agent 管理的
 
 Skills 是 agent 在需要时可以加载的按需知识文档。它们遵循**渐进式披露**（progressive disclosure）模式以最小化 token 用量，并兼容 [agentskills.io](https://agentskills.io/specification) 开放标准。
 
-所有 skills 存放在 **`~/.hermes/skills/`** 中——这是主目录和唯一可信来源。全新安装时，捆绑的 skills 会从仓库复制过来。通过 Hub 安装和 agent 创建的 skills 也存放在此处。agent 可以修改或删除任何 skill。
+所有 skills 存放在 **`~/.argus/skills/`** 中——这是主目录和唯一可信来源。全新安装时，捆绑的 skills 会从仓库复制过来。通过 Hub 安装和 agent 创建的 skills 也存放在此处。agent 可以修改或删除任何 skill。
 
-你也可以让 Hermes 指向**外部 skill 目录**——与本地目录一起扫描的额外文件夹。参见下方的[外部 Skill 目录](#external-skill-directories)。
+你也可以让 Argus 指向**外部 skill 目录**——与本地目录一起扫描的额外文件夹。参见下方的[外部 Skill 目录](#external-skill-directories)。
 
 另请参阅：
 
@@ -32,13 +32,13 @@ Skills 是 agent 在需要时可以加载的按需知识文档。它们遵循**�
 /excalidraw
 ```
 
-捆绑的 `plan` skill 是一个很好的示例。运行 `/plan [request]` 会加载该 skill 的指令，告知 Hermes 在需要时检查上下文、编写 markdown 实现计划而非直接执行任务，并将结果保存在相对于当前工作区/后端工作目录的 `.hermes/plans/` 下。
+捆绑的 `plan` skill 是一个很好的示例。运行 `/plan [request]` 会加载该 skill 的指令，告知 Argus 在需要时检查上下文、编写 markdown 实现计划而非直接执行任务，并将结果保存在相对于当前工作区/后端工作目录的 `.argus/plans/` 下。
 
 你也可以通过自然对话与 skills 交互：
 
 ```bash
-hermes chat --toolsets skills -q "What skills do you have?"
-hermes chat --toolsets skills -q "Show me the axolotl skill"
+argus chat --toolsets skills -q "What skills do you have?"
+argus chat --toolsets skills -q "Show me the axolotl skill"
 ```
 
 ## 渐进式披露
@@ -122,7 +122,7 @@ platforms: [macos, linux]     # macOS and Linux
 ```
 Here is your rendered chart:
 
-/home/user/.hermes/cache/chart-q4-2025.png
+/home/user/.argus/cache/chart-q4-2025.png
 
 [[as_document]]
 ```
@@ -172,7 +172,7 @@ required_environment_variables:
     required_for: full functionality
 ```
 
-当遇到缺失的值时，Hermes 仅在本地 CLI 中实际加载 skill 时才会安全地请求输入。你可以跳过设置并继续使用该 skill。消息平台不会在聊天中请求密钥——它们会告诉你改用本地的 `hermes setup` 或 `~/.hermes/.env`。
+当遇到缺失的值时，Argus 仅在本地 CLI 中实际加载 skill 时才会安全地请求输入。你可以跳过设置并继续使用该 skill。消息平台不会在聊天中请求密钥——它们会告诉你改用本地的 `argus setup` 或 `~/.argus/.env`。
 
 一旦设置，声明的环境变量会**自动传递**到 `execute_code` 和 `terminal` 沙箱——skill 的脚本可以直接使用 `$TENOR_API_KEY`。对于非 skill 的环境变量，使用 `terminal.env_passthrough` 配置选项。详情参见[环境变量传递](/user-guide/security#environment-variable-passthrough)。
 
@@ -190,14 +190,14 @@ metadata:
         prompt: Plugin data directory path
 ```
 
-设置存储在 config.yaml 的 `skills.config` 下。`hermes config migrate` 会提示配置未设置的项，`hermes config show` 会显示它们。当 skill 加载时，其解析后的配置值会注入到上下文中，agent 会自动知晓已配置的值。
+设置存储在 config.yaml 的 `skills.config` 下。`argus config migrate` 会提示配置未设置的项，`argus config show` 会显示它们。当 skill 加载时，其解析后的配置值会注入到上下文中，agent 会自动知晓已配置的值。
 
 详情参见 [Skill 设置](/user-guide/configuration#skill-settings) 和[创建 Skills——配置设置](/developer-guide/creating-skills#config-settings-configyaml)。
 
 ## Skill 目录结构
 
 ```text
-~/.hermes/skills/                  # Single source of truth
+~/.argus/skills/                  # Single source of truth
 ├── mlops/                         # Category directory
 │   ├── axolotl/
 │   │   ├── SKILL.md               # Main instructions (required)
@@ -220,9 +220,9 @@ metadata:
 
 ## 外部 Skill 目录
 
-如果你在 Hermes 之外维护 skills——例如，供多个 AI 工具使用的共享 `~/.agents/skills/` 目录——你可以告诉 Hermes 也扫描这些目录。
+如果你在 Argus 之外维护 skills——例如，供多个 AI 工具使用的共享 `~/.agents/skills/` 目录——你可以告诉 Argus 也扫描这些目录。
 
-在 `~/.hermes/config.yaml` 的 `skills` 部分下添加 `external_dirs`：
+在 `~/.argus/config.yaml` 的 `skills` 部分下添加 `external_dirs`：
 
 ```yaml
 skills:
@@ -236,16 +236,16 @@ skills:
 
 ### 工作原理
 
-- **本地创建，就地更新**：新的 agent 创建的 skills 写入 `~/.hermes/skills/`。现有 skills 在找到的位置被修改，包括 `external_dirs` 下的 skills，当 agent 使用 `skill_manage` 操作（如 `patch`、`edit`、`write_file`、`remove_file` 或 `delete`）时。
-- **外部目录不是写保护边界**：如果外部 skill 目录对 Hermes 进程可写，agent 管理的 skill 更新可以修改该目录中的文件。如果共享的外部 skills 必须保持只读，请使用文件系统权限或单独的 profile/toolset 设置。
+- **本地创建，就地更新**：新的 agent 创建的 skills 写入 `~/.argus/skills/`。现有 skills 在找到的位置被修改，包括 `external_dirs` 下的 skills，当 agent 使用 `skill_manage` 操作（如 `patch`、`edit`、`write_file`、`remove_file` 或 `delete`）时。
+- **外部目录不是写保护边界**：如果外部 skill 目录对 Argus 进程可写，agent 管理的 skill 更新可以修改该目录中的文件。如果共享的外部 skills 必须保持只读，请使用文件系统权限或单独的 profile/toolset 设置。
 - **本地优先**：如果同一 skill 名称同时存在于本地目录和外部目录中，本地版本优先。
 - **完整集成**：外部 skills 出现在系统提示词索引、`skills_list`、`skill_view` 以及 `/skill-name` 斜杠命令中——与本地 skills 无异。
-- **不存在的路径会被静默跳过**：如果配置的目录不存在，Hermes 会忽略它而不报错。适用于可能不在每台机器上都存在的可选共享目录。
+- **不存在的路径会被静默跳过**：如果配置的目录不存在，Argus 会忽略它而不报错。适用于可能不在每台机器上都存在的可选共享目录。
 
 ### 示例
 
 ```text
-~/.hermes/skills/               # Local (primary, read-write)
+~/.argus/skills/               # Local (primary, read-write)
 ├── devops/deploy-k8s/
 │   └── SKILL.md
 └── mlops/axolotl/
@@ -268,7 +268,7 @@ Skill 捆绑包是将多个 skills 归组在单个斜杠命令下的小型 YAML 
 
 ```bash
 # 为后端功能开发创建一个捆绑包
-hermes bundles create backend-dev \
+argus bundles create backend-dev \
   --skill github-code-review \
   --skill test-driven-development \
   --skill github-pr-workflow \
@@ -285,7 +285,7 @@ agent 接收到所有三个 skills 加载到一条用户消息中，斜杠命令
 
 ### YAML 模式
 
-捆绑包存放在 **`~/.hermes/skill-bundles/<slug>.yaml`** 中，格式如下：
+捆绑包存放在 **`~/.argus/skill-bundles/<slug>.yaml`** 中，格式如下：
 
 ```yaml
 name: backend-dev
@@ -301,7 +301,7 @@ instruction: |
 
 字段说明：
 - `name`（可选——默认为文件名主干）——捆绑包的显示名称。规范化为连字符 slug 用于斜杠命令（`Backend Dev` → `/backend-dev`）。
-- `description`（可选）——在 `/bundles` 和 `hermes bundles list` 中显示的简短文本。
+- `description`（可选）——在 `/bundles` 和 `argus bundles list` 中显示的简短文本。
 - `skills`（必填，非空列表）——skill 名称或相对于你的 skills 目录的路径。使用与 `/<skill-name>` 相同的标识符。
 - `instruction`（可选）——附加在加载的 skill 内容前的额外指导。适用于固化"我们总是这样一起使用这些 skills"的方式。
 
@@ -309,22 +309,22 @@ instruction: |
 
 ```bash
 # 列出所有已安装的捆绑包
-hermes bundles list
+argus bundles list
 
 # 查看某个捆绑包
-hermes bundles show backend-dev
+argus bundles show backend-dev
 
 # 交互式创建捆绑包（省略 --skill 标志以逐行输入）
-hermes bundles create research
+argus bundles create research
 
 # 覆盖现有捆绑包
-hermes bundles create backend-dev --skill ... --force
+argus bundles create backend-dev --skill ... --force
 
 # 删除捆绑包
-hermes bundles delete backend-dev
+argus bundles delete backend-dev
 
-# 重新扫描 ~/.hermes/skill-bundles/ 并报告变更
-hermes bundles reload
+# 重新扫描 ~/.argus/skill-bundles/ 并报告变更
+argus bundles reload
 ```
 
 在聊天会话中，`/bundles` 会列出每个已安装的捆绑包及其 skills。
@@ -341,9 +341,9 @@ hermes bundles reload
 在以下情况下使用捆绑包：
 - 你总是为某个重复任务配对相同的 skills（`/backend-dev`、`/release-prep`、`/incident-response`）。
 - 你想要比依次输入多个 `/skill` 调用更简洁的心智模型。
-- 你想通过将捆绑包 YAML 提交到共享 dotfiles 仓库并符号链接到 `~/.hermes/skill-bundles/` 来发布团队范围的"任务配置文件"。
+- 你想通过将捆绑包 YAML 提交到共享 dotfiles 仓库并符号链接到 `~/.argus/skill-bundles/` 来发布团队范围的"任务配置文件"。
 
-捆绑包只是一个 YAML 别名——它不会为你安装 skills。Skills 本身必须已经存在（在 `~/.hermes/skills/` 或外部 skill 目录中）。否则捆绑包调用只会跳过缺失的 skills。
+捆绑包只是一个 YAML 别名——它不会为你安装 skills。Skills 本身必须已经存在（在 `~/.argus/skills/` 或外部 skill 目录中）。否则捆绑包调用只会跳过缺失的 skills。
 
 ## Agent 管理的 Skills（skill_manage 工具）
 
@@ -378,36 +378,36 @@ agent 可以通过 `skill_manage` 工具创建、更新和删除自己的 skills
 ### 常用命令
 
 ```bash
-hermes skills browse                              # Browse all hub skills (official first)
-hermes skills browse --source official            # Browse only official optional skills
-hermes skills search kubernetes                   # Search all sources
-hermes skills search react --source skills-sh     # Search the skills.sh directory
-hermes skills search https://mintlify.com/docs --source well-known
-hermes skills inspect openai/skills/k8s           # Preview before installing
-hermes skills install openai/skills/k8s           # Install with security scan
-hermes skills install official/security/1password
-hermes skills install skills-sh/vercel-labs/json-render/json-render-react --force
-hermes skills install well-known:https://mintlify.com/docs/.well-known/skills/mintlify
-hermes skills install https://sharethis.chat/SKILL.md              # Direct URL (single-file SKILL.md)
-hermes skills install https://example.com/SKILL.md --name my-skill # Override name when frontmatter has none
-hermes skills list --source hub                   # List hub-installed skills
-hermes skills check                               # Check installed hub skills for upstream updates
-hermes skills update                              # Reinstall hub skills with upstream changes when needed
-hermes skills audit                               # Re-scan all hub skills for security
-hermes skills uninstall k8s                       # Remove a hub skill
-hermes skills reset google-workspace              # Un-stick a bundled skill from "user-modified" (see below)
-hermes skills reset google-workspace --restore    # Also restore the bundled version, deleting your local edits
-hermes skills publish skills/my-skill --to github --repo owner/repo
-hermes skills snapshot export setup.json          # Export skill config
-hermes skills tap add myorg/skills-repo           # Add a custom GitHub source
+argus skills browse                              # Browse all hub skills (official first)
+argus skills browse --source official            # Browse only official optional skills
+argus skills search kubernetes                   # Search all sources
+argus skills search react --source skills-sh     # Search the skills.sh directory
+argus skills search https://mintlify.com/docs --source well-known
+argus skills inspect openai/skills/k8s           # Preview before installing
+argus skills install openai/skills/k8s           # Install with security scan
+argus skills install official/security/1password
+argus skills install skills-sh/vercel-labs/json-render/json-render-react --force
+argus skills install well-known:https://mintlify.com/docs/.well-known/skills/mintlify
+argus skills install https://sharethis.chat/SKILL.md              # Direct URL (single-file SKILL.md)
+argus skills install https://example.com/SKILL.md --name my-skill # Override name when frontmatter has none
+argus skills list --source hub                   # List hub-installed skills
+argus skills check                               # Check installed hub skills for upstream updates
+argus skills update                              # Reinstall hub skills with upstream changes when needed
+argus skills audit                               # Re-scan all hub skills for security
+argus skills uninstall k8s                       # Remove a hub skill
+argus skills reset google-workspace              # Un-stick a bundled skill from "user-modified" (see below)
+argus skills reset google-workspace --restore    # Also restore the bundled version, deleting your local edits
+argus skills publish skills/my-skill --to github --repo owner/repo
+argus skills snapshot export setup.json          # Export skill config
+argus skills tap add myorg/skills-repo           # Add a custom GitHub source
 ```
 
 ### 支持的 hub 来源
 
 | 来源 | 示例 | 说明 |
 |--------|---------|-------|
-| `official` | `official/security/1password` | Hermes 随附的可选 skills。 |
-| `skills-sh` | `skills-sh/vercel-labs/agent-skills/vercel-react-best-practices` | 可通过 `hermes skills search <query> --source skills-sh` 搜索。当 skills.sh slug 与仓库文件夹不同时，Hermes 会解析别名式 skills。 |
+| `official` | `official/security/1password` | Argus 随附的可选 skills。 |
+| `skills-sh` | `skills-sh/vercel-labs/agent-skills/vercel-react-best-practices` | 可通过 `argus skills search <query> --source skills-sh` 搜索。当 skills.sh slug 与仓库文件夹不同时，Argus 会解析别名式 skills。 |
 | `well-known` | `well-known:https://mintlify.com/docs/.well-known/skills/mintlify` | 直接从网站的 `/.well-known/skills/index.json` 提供的 skills。使用站点或文档 URL 搜索。 |
 | `url` | `https://sharethis.chat/SKILL.md` | 指向单文件 `SKILL.md` 的直接 HTTP(S) URL。名称解析顺序：frontmatter → URL slug → 交互式提示 → `--name` 标志。 |
 | `github` | `openai/skills/k8s` | 直接从 GitHub 仓库/路径安装以及基于 GitHub 的自定义 tap。 |
@@ -415,24 +415,24 @@ hermes skills tap add myorg/skills-repo           # Add a custom GitHub source
 
 ### 集成的 hub 和注册表
 
-Hermes 目前与以下 skills 生态系统和发现来源集成：
+Argus 目前与以下 skills 生态系统和发现来源集成：
 
 #### 1. 官方可选 skills（`official`）
 
-这些 skills 在 Hermes 仓库中维护，以内置信任级别安装。
+这些 skills 在 Argus 仓库中维护，以内置信任级别安装。
 
 - 目录：[官方可选 Skills 目录](../../reference/optional-skills-catalog)
 - 仓库中的来源：`optional-skills/`
 - 示例：
 
 ```bash
-hermes skills browse --source official
-hermes skills install official/security/1password
+argus skills browse --source official
+argus skills install official/security/1password
 ```
 
 #### 2. skills.sh（`skills-sh`）
 
-这是 Vercel 的公共 skills 目录。Hermes 可以直接搜索它、查看 skill 详情页、解析别名式 slug，并从底层源仓库安装。
+这是 Vercel 的公共 skills 目录。Argus 可以直接搜索它、查看 skill 详情页、解析别名式 slug，并从底层源仓库安装。
 
 - 目录：[skills.sh](https://skills.sh/)
 - CLI/工具仓库：[vercel-labs/skills](https://github.com/vercel-labs/skills)
@@ -440,9 +440,9 @@ hermes skills install official/security/1password
 - 示例：
 
 ```bash
-hermes skills search react --source skills-sh
-hermes skills inspect skills-sh/vercel-labs/json-render/json-render-react
-hermes skills install skills-sh/vercel-labs/json-render/json-render-react --force
+argus skills search react --source skills-sh
+argus skills inspect skills-sh/vercel-labs/json-render/json-render-react
+argus skills install skills-sh/vercel-labs/json-render/json-render-react --force
 ```
 
 #### 3. Well-known skill 端点（`well-known`）
@@ -454,14 +454,14 @@ hermes skills install skills-sh/vercel-labs/json-render/json-render-react --forc
 - 示例：
 
 ```bash
-hermes skills search https://mintlify.com/docs --source well-known
-hermes skills inspect well-known:https://mintlify.com/docs/.well-known/skills/mintlify
-hermes skills install well-known:https://mintlify.com/docs/.well-known/skills/mintlify
+argus skills search https://mintlify.com/docs --source well-known
+argus skills inspect well-known:https://mintlify.com/docs/.well-known/skills/mintlify
+argus skills install well-known:https://mintlify.com/docs/.well-known/skills/mintlify
 ```
 
 #### 4. 直接 GitHub skills（`github`）
 
-Hermes 可以直接从 GitHub 仓库和基于 GitHub 的 tap 安装。当你已知仓库/路径或想添加自己的自定义源仓库时非常有用。
+Argus 可以直接从 GitHub 仓库和基于 GitHub 的 tap 安装。当你已知仓库/路径或想添加自己的自定义源仓库时非常有用。
 
 默认 tap（无需任何设置即可浏览）：
 - [openai/skills](https://github.com/openai/skills)
@@ -474,8 +474,8 @@ Hermes 可以直接从 GitHub 仓库和基于 GitHub 的 tap 安装。当你已�
 - 示例：
 
 ```bash
-hermes skills install openai/skills/k8s
-hermes skills tap add myorg/skills-repo
+argus skills install openai/skills/k8s
+argus skills tap add myorg/skills-repo
 ```
 
 #### 5. ClawHub（`clawhub`）
@@ -483,55 +483,55 @@ hermes skills tap add myorg/skills-repo
 作为社区来源集成的第三方 skills 市场。
 
 - 站点：[clawhub.ai](https://clawhub.ai/)
-- Hermes 来源 id：`clawhub`
+- Argus 来源 id：`clawhub`
 
 #### 6. Claude 市场式仓库（`claude-marketplace`）
 
-Hermes 支持发布 Claude 兼容插件/市场清单的市场仓库。
+Argus 支持发布 Claude 兼容插件/市场清单的市场仓库。
 
 已知集成来源包括：
 - [anthropics/skills](https://github.com/anthropics/skills)
 - [aiskillstore/marketplace](https://github.com/aiskillstore/marketplace)
 
-Hermes 来源 id：`claude-marketplace`
+Argus 来源 id：`claude-marketplace`
 
 #### 7. LobeHub（`lobehub`）
 
-Hermes 可以从 LobeHub 的公共目录中搜索并将 agent 条目转换为可安装的 Hermes skills。
+Argus 可以从 LobeHub 的公共目录中搜索并将 agent 条目转换为可安装的 Argus skills。
 
 - 站点：[LobeHub](https://lobehub.com/)
 - 公共 agents 索引：[chat-agents.lobehub.com](https://chat-agents.lobehub.com/)
 - 后端仓库：[lobehub/lobe-chat-agents](https://github.com/lobehub/lobe-chat-agents)
-- Hermes 来源 id：`lobehub`
+- Argus 来源 id：`lobehub`
 
 #### 8. browse.sh（`browse-sh`）
 
-Hermes 与 [browse.sh](https://browse.sh) 集成，这是 Browserbase 的目录，包含 200+ 个针对特定站点的浏览器自动化 SKILL.md 文件（Airbnb、Amazon、arXiv、12306.cn、Etsy、Xero 等）。每个 skill 描述如何端到端驱动一个网站，适合与 Hermes 的浏览器工具以及你已安装的任何浏览器自动化 skills 配合使用。
+Argus 与 [browse.sh](https://browse.sh) 集成，这是 Browserbase 的目录，包含 200+ 个针对特定站点的浏览器自动化 SKILL.md 文件（Airbnb、Amazon、arXiv、12306.cn、Etsy、Xero 等）。每个 skill 描述如何端到端驱动一个网站，适合与 Argus 的浏览器工具以及你已安装的任何浏览器自动化 skills 配合使用。
 
 - 站点：[browse.sh](https://browse.sh/)
 - 目录 API：`https://browse.sh/api/skills`
-- Hermes 来源 id：`browse-sh`
+- Argus 来源 id：`browse-sh`
 - 信任级别：`community`
 
 ```bash
-hermes skills search airbnb --source browse-sh
-hermes skills inspect browse-sh/airbnb.com/search-listings-ddgioa
-hermes skills install browse-sh/airbnb.com/search-listings-ddgioa
+argus skills search airbnb --source browse-sh
+argus skills inspect browse-sh/airbnb.com/search-listings-ddgioa
+argus skills install browse-sh/airbnb.com/search-listings-ddgioa
 ```
 
 标识符使用 `browse-sh/<hostname>/<task-id>` 的形式，与 browse.sh 目录公开的 slug 匹配。内容通过每个 skill 的详情端点（`/api/skills/<slug>` → `skillMdUrl`）解析，而不是通过目录的 GitHub `sourceUrl`。
 
 #### 9. 直接 URL（`url`）
 
-直接从任何 HTTP(S) URL 安装单文件 `SKILL.md`——当作者在自己的站点上托管 skill 时非常有用（无 hub 列表，无需输入 GitHub 路径）。Hermes 获取 URL，解析 YAML frontmatter，进行安全扫描并安装。
+直接从任何 HTTP(S) URL 安装单文件 `SKILL.md`——当作者在自己的站点上托管 skill 时非常有用（无 hub 列表，无需输入 GitHub 路径）。Argus 获取 URL，解析 YAML frontmatter，进行安全扫描并安装。
 
-- Hermes 来源 id：`url`
+- Argus 来源 id：`url`
 - 标识符：URL 本身（无需前缀）
 - 范围：**仅限单文件 `SKILL.md`**。包含 `references/` 或 `scripts/` 的多文件 skills 需要清单，应通过上述其他来源之一发布。
 
 ```bash
-hermes skills install https://sharethis.chat/SKILL.md
-hermes skills install https://example.com/my-skill/SKILL.md --category productivity
+argus skills install https://sharethis.chat/SKILL.md
+argus skills install https://example.com/my-skill/SKILL.md --category productivity
 ```
 
 名称解析顺序：
@@ -542,19 +542,19 @@ hermes skills install https://example.com/my-skill/SKILL.md --category productiv
 
 ```bash
 # Frontmatter 没有名称且 URL slug 无意义——手动提供：
-hermes skills install https://example.com/SKILL.md --name sharethis-chat
+argus skills install https://example.com/SKILL.md --name sharethis-chat
 
 # 或在聊天会话中：
 /skills install https://example.com/SKILL.md --name sharethis-chat
 ```
 
-信任级别始终为 `community`——与所有其他来源一样运行相同的安全扫描。URL 作为安装标识符存储，因此当你想刷新时，`hermes skills update` 会自动从同一 URL 重新获取。
+信任级别始终为 `community`——与所有其他来源一样运行相同的安全扫描。URL 作为安装标识符存储，因此当你想刷新时，`argus skills update` 会自动从同一 URL 重新获取。
 
 ### 安全扫描与 `--force`
 
 所有通过 hub 安装的 skills 都经过**安全扫描器**检查，检测数据泄露、prompt 注入、破坏性命令、供应链信号及其他威胁。
 
-`hermes skills inspect ...` 现在还会在可用时显示上游元数据：
+`argus skills inspect ...` 现在还会在可用时显示上游元数据：
 - 仓库 URL
 - skills.sh 详情页 URL
 - 安装命令
@@ -565,7 +565,7 @@ hermes skills install https://example.com/SKILL.md --name sharethis-chat
 当你已审查第三方 skill 并希望覆盖非危险性策略阻止时，使用 `--force`：
 
 ```bash
-hermes skills install skills-sh/anthropics/skills/pdf --force
+argus skills install skills-sh/anthropics/skills/pdf --force
 ```
 
 重要行为：
@@ -577,7 +577,7 @@ hermes skills install skills-sh/anthropics/skills/pdf --force
 
 | 级别 | 来源 | 策略 |
 |-------|--------|--------|
-| `builtin` | 随 Hermes 附带 | 始终受信任 |
+| `builtin` | 随 Argus 附带 | 始终受信任 |
 | `official` | 仓库中的 `optional-skills/` | 内置信任，无第三方警告 |
 | `trusted` | 受信任的注册表/仓库，如 `openai/skills`、`anthropics/skills`、`huggingface/skills`、`NVIDIA/skills` | 比社区来源更宽松的策略 |
 | `community` | 其他所有来源（`skills.sh`、well-known 端点、自定义 GitHub 仓库、大多数市场） | 非危险性发现可用 `--force` 覆盖；`dangerous` 结论保持阻止 |
@@ -587,9 +587,9 @@ hermes skills install skills-sh/anthropics/skills/pdf --force
 hub 现在跟踪足够的来源信息以重新检查已安装 skills 的上游副本：
 
 ```bash
-hermes skills check          # Report which installed hub skills changed upstream
-hermes skills update         # Reinstall only the skills with updates available
-hermes skills update react   # Update one specific installed hub skill
+argus skills check          # Report which installed hub skills changed upstream
+argus skills update         # Reinstall only the skills with updates available
+argus skills update react   # Update one specific installed hub skill
 ```
 
 这使用存储的来源标识符加上当前上游捆绑包内容哈希来检测漂移。
@@ -600,7 +600,7 @@ Skills hub 操作使用 GitHub API，未认证用户的速率限制为每小时 
 
 ### 发布自定义 skill tap
 
-如果你想分享一组精选的 skills——为你的团队、组织或公开分享——你可以将它们发布为 **tap**：其他 Hermes 用户通过 `hermes skills tap add <owner/repo>` 添加的 GitHub 仓库。无需服务器，无需注册表注册，无需发布流水线。只需一个包含 `SKILL.md` 文件的目录。
+如果你想分享一组精选的 skills——为你的团队、组织或公开分享——你可以将它们发布为 **tap**：其他 Argus 用户通过 `argus skills tap add <owner/repo>` 添加的 GitHub 仓库。无需服务器，无需注册表注册，无需发布流水线。只需一个包含 `SKILL.md` 文件的目录。
 
 #### 仓库布局
 
@@ -628,7 +628,7 @@ owner/repo
 - `references/`、`templates/`、`scripts/`、`assets/` 等子目录在安装时与 `SKILL.md` 一起下载。
 - 目录名以 `.` 或 `_` 开头的 skills 会被忽略。
 
-Hermes 通过列出 tap 路径的每个子目录并探测每个目录中的 `SKILL.md` 来发现 skills。
+Argus 通过列出 tap 路径的每个子目录并探测每个目录中的 `SKILL.md` 来发现 skills。
 
 #### 最小 tap 示例
 
@@ -657,17 +657,17 @@ metadata:
 Step 1: ...
 ```
 
-将其推送到 GitHub 后，任何 Hermes 用户都可以订阅并安装：
+将其推送到 GitHub 后，任何 Argus 用户都可以订阅并安装：
 
 ```bash
-hermes skills tap add my-org/hermes-skills
-hermes skills search deploy
-hermes skills install my-org/hermes-skills/deploy-runbook
+argus skills tap add my-org/hermes-skills
+argus skills search deploy
+argus skills install my-org/hermes-skills/deploy-runbook
 ```
 
 #### 非默认路径
 
-如果你的 skills 不在 `skills/` 下（当你向现有项目添加 `skills/` 子树时很常见），请编辑 `~/.hermes/.hub/taps.json` 中的 tap 条目：
+如果你的 skills 不在 `skills/` 下（当你向现有项目添加 `skills/` 子树时很常见），请编辑 `~/.argus/.hub/taps.json` 中的 tap 条目：
 
 ```json
 {
@@ -677,28 +677,28 @@ hermes skills install my-org/hermes-skills/deploy-runbook
 }
 ```
 
-`hermes skills tap add` CLI 默认将新 tap 的 `path` 设为 `"skills/"`；如果需要不同路径，请直接编辑该文件。`hermes skills tap list` 显示每个 tap 的有效路径。
+`argus skills tap add` CLI 默认将新 tap 的 `path` 设为 `"skills/"`；如果需要不同路径，请直接编辑该文件。`argus skills tap list` 显示每个 tap 的有效路径。
 
 #### 直接安装单个 skills（无需添加 tap）
 
 用户也可以从任何公开 GitHub 仓库安装单个 skill，而无需将整个仓库添加为 tap：
 
 ```bash
-hermes skills install owner/repo/skills/my-workflow
+argus skills install owner/repo/skills/my-workflow
 ```
 
 当你想分享一个 skill 而不要求用户订阅你的整个注册表时非常有用。
 
 #### tap 的信任级别
 
-新 tap 默认分配 `community` 信任级别。从中安装的 skills 经过标准安全扫描，首次安装时显示第三方警告面板。如果你的组织或广泛受信任的来源应获得更高信任，请将其仓库添加到 `tools/skills_hub.py` 中的 `TRUSTED_REPOS`（需要 Hermes 核心 PR）。
+新 tap 默认分配 `community` 信任级别。从中安装的 skills 经过标准安全扫描，首次安装时显示第三方警告面板。如果你的组织或广泛受信任的来源应获得更高信任，请将其仓库添加到 `tools/skills_hub.py` 中的 `TRUSTED_REPOS`（需要 Argus 核心 PR）。
 
 #### Tap 管理
 
 ```bash
-hermes skills tap list                                # show all configured taps
-hermes skills tap add myorg/skills-repo               # add (default path: skills/)
-hermes skills tap remove myorg/skills-repo            # remove
+argus skills tap list                                # show all configured taps
+argus skills tap add myorg/skills-repo               # add (default path: skills/)
+argus skills tap remove myorg/skills-repo            # remove
 ```
 
 在运行中的会话内：
@@ -709,32 +709,32 @@ hermes skills tap remove myorg/skills-repo            # remove
 /skills tap remove myorg/skills-repo
 ```
 
-Tap 存储在 `~/.hermes/.hub/taps.json` 中（按需创建）。
+Tap 存储在 `~/.argus/.hub/taps.json` 中（按需创建）。
 
-## 捆绑 skill 更新（`hermes skills reset`）
+## 捆绑 skill 更新（`argus skills reset`）
 
-Hermes 在仓库的 `skills/` 中附带一组捆绑 skills。在安装时以及每次 `hermes update` 时，同步过程会将这些 skills 复制到 `~/.hermes/skills/` 中，并在 `~/.hermes/skills/.bundled_manifest` 记录一个清单，将每个 skill 名称映射到同步时的内容哈希（**origin hash**）。
+Argus 在仓库的 `skills/` 中附带一组捆绑 skills。在安装时以及每次 `argus update` 时，同步过程会将这些 skills 复制到 `~/.argus/skills/` 中，并在 `~/.argus/skills/.bundled_manifest` 记录一个清单，将每个 skill 名称映射到同步时的内容哈希（**origin hash**）。
 
-每次同步时，Hermes 重新计算本地副本的哈希并与 origin hash 比较：
+每次同步时，Argus 重新计算本地副本的哈希并与 origin hash 比较：
 
 - **未更改** → 可以安全拉取上游变更，复制新的捆绑版本，记录新的 origin hash。
 - **已更改** → 视为**用户修改**并永久跳过，因此你的编辑不会被覆盖。
 
-这种保护机制很好，但有一个棘手的边缘情况。如果你编辑了一个捆绑 skill，后来想通过从 `~/.hermes/hermes-agent/skills/` 复制粘贴来放弃更改并回到捆绑版本，清单仍然保存着上次成功同步时的*旧* origin hash。你新复制粘贴的内容（当前捆绑哈希）与那个过时的 origin hash 不匹配，因此同步继续将其标记为用户修改。
+这种保护机制很好，但有一个棘手的边缘情况。如果你编辑了一个捆绑 skill，后来想通过从 `~/.argus/argus/skills/` 复制粘贴来放弃更改并回到捆绑版本，清单仍然保存着上次成功同步时的*旧* origin hash。你新复制粘贴的内容（当前捆绑哈希）与那个过时的 origin hash 不匹配，因此同步继续将其标记为用户修改。
 
-`hermes skills reset` 是解决此问题的方法：
+`argus skills reset` 是解决此问题的方法：
 
 ```bash
 # 安全：清除此 skill 的清单条目。你当前的副本被保留，
 # 但下次同步会重新以其为基准，使未来的更新正常工作。
-hermes skills reset google-workspace
+argus skills reset google-workspace
 
 # 完全恢复：同时删除你的本地副本并重新复制当前捆绑版本。
 # 当你想要恢复原始上游 skill 时使用此选项。
-hermes skills reset google-workspace --restore
+argus skills reset google-workspace --restore
 
 # 非交互式（例如在脚本或 TUI 模式中）——跳过 --restore 确认。
-hermes skills reset google-workspace --restore --yes
+argus skills reset google-workspace --restore --yes
 ```
 
 同样的命令也可以作为斜杠命令在聊天中使用：
@@ -745,7 +745,7 @@ hermes skills reset google-workspace --restore --yes
 ```
 
 :::note Profiles
-每个 profile 在其自己的 `HERMES_HOME` 下有自己的 `.bundled_manifest`，因此 `hermes -p coder skills reset <name>` 只影响该 profile。
+每个 profile 在其自己的 `ARGUS_HOME` 下有自己的 `.bundled_manifest`，因此 `argus -p coder skills reset <name>` 只影响该 profile。
 :::
 
 ### 斜杠命令（在聊天中）

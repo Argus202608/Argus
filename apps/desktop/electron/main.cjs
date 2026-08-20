@@ -626,7 +626,7 @@ var require_bootstrap_runner = __commonJS2({
       return args;
     }
     function buildPosixPinArgs({ installStamp, activeRoot, hermesHome, bundledSource }) {
-      const args = ["--dir", activeRoot, "--hermes-home", hermesHome];
+      const args = ["--dir", activeRoot, "--argus-home", hermesHome];
       if (bundledSource) {
         args.push("--local-source", bundledSource);
         return args;
@@ -2096,7 +2096,7 @@ var require_update_marker = __commonJS2({
     var path2 = require("path");
     var UPDATE_MARKER_MAX_AGE_MS = 20 * 60 * 1e3;
     function markerPath(hermesHome) {
-      return path2.join(hermesHome, ".hermes-update-in-progress");
+      return path2.join(hermesHome, ".argus-update-in-progress");
     }
     function isPidAlive(pid, kill = process.kill.bind(process)) {
       if (!Number.isInteger(pid) || pid <= 0) return false;
@@ -2491,7 +2491,7 @@ var require_git_worktree_ops = __commonJS2({
         return addExistingBranchWorktree(gitBin, root, opts.existingBranch);
       }
       const slug = slugify(opts.name || `work-${Date.now().toString(36)}`);
-      const branch = sanitizeBranch(opts.branch) || `hermes/${slug}`;
+      const branch = sanitizeBranch(opts.branch) || `argus/${slug}`;
       const dir = uniqueDir(path2.join(root, ".worktrees", slug));
       const args = ["worktree", "add", "-b", branch, dir];
       if (opts.base) {
@@ -9135,7 +9135,7 @@ var require_desktop_uninstall = __commonJS2({
       }
       if (platform === "win32") {
         const dir2 = p.dirname(exe);
-        if (/[\\/]Hermes$/i.test(dir2) || /[\\/]hermes-desktop$/i.test(dir2)) return dir2;
+        if (/[\\/]Argus$/i.test(dir2) || /[\\/]hermes-desktop$/i.test(dir2)) return dir2;
         return null;
       }
       if (env2.APPIMAGE) return env2.APPIMAGE;
@@ -9667,7 +9667,7 @@ if (IS_MAC && !IS_PACKAGED) {
 var APP_ROOT = app.getAppPath();
 var BUNDLED_SOURCE_ROOT = IS_PACKAGED && process.resourcesPath ? (() => {
   try {
-    const p = path.join(process.resourcesPath, "hermes-src");
+    const p = path.join(process.resourcesPath, "argus-src");
     return fs.existsSync(path.join(p, "scripts")) ? p : null;
   } catch {
     return null;
@@ -9684,14 +9684,14 @@ if (REMOTE_DISPLAY_REASON) {
   app.disableHardwareAcceleration();
   app.commandLine.appendSwitch("disable-gpu-compositing");
   console.log(
-    `[hermes] remote display detected (${REMOTE_DISPLAY_REASON}); disabling GPU hardware acceleration to prevent flicker`
+    `[argus] remote display detected (${REMOTE_DISPLAY_REASON}); disabling GPU hardware acceleration to prevent flicker`
   );
 }
 if (IS_WSL && !REMOTE_DISPLAY_REASON && fs.existsSync("/dev/dxg")) {
   app.commandLine.appendSwitch("ignore-gpu-blocklist");
   app.commandLine.appendSwitch("enable-gpu-rasterization");
   app.commandLine.appendSwitch("enable-zero-copy");
-  console.log("[hermes] WSL GPU passthrough (/dev/dxg) detected; enabling GPU acceleration");
+  console.log("[argus] WSL GPU passthrough (/dev/dxg) detected; enabling GPU acceleration");
 }
 ipcMain.handle("hermes:get-remote-display-reason", () => REMOTE_DISPLAY_REASON);
 app.commandLine.appendSwitch("disable-renderer-backgrounding");
@@ -9711,7 +9711,7 @@ function loadInstallStamp() {
       if (parsed && typeof parsed === "object" && typeof parsed.commit === "string" && parsed.commit.length >= 7) {
         if (parsed.schemaVersion !== INSTALL_STAMP_SCHEMA_VERSION) {
           console.warn(
-            `[hermes] install-stamp.json schemaVersion ${parsed.schemaVersion} != expected ${INSTALL_STAMP_SCHEMA_VERSION}; ignoring`
+            `[argus] install-stamp.json schemaVersion ${parsed.schemaVersion} != expected ${INSTALL_STAMP_SCHEMA_VERSION}; ignoring`
           );
           continue;
         }
@@ -9733,11 +9733,11 @@ function loadInstallStamp() {
 var INSTALL_STAMP = loadInstallStamp();
 if (INSTALL_STAMP) {
   console.log(
-    `[hermes] install stamp: ${INSTALL_STAMP.commit.slice(0, 12)}${INSTALL_STAMP.branch ? ` (${INSTALL_STAMP.branch})` : ""}${INSTALL_STAMP.dirty ? " [DIRTY]" : ""} from ${INSTALL_STAMP.source || "unknown"}`
+    `[argus] install stamp: ${INSTALL_STAMP.commit.slice(0, 12)}${INSTALL_STAMP.branch ? ` (${INSTALL_STAMP.branch})` : ""}${INSTALL_STAMP.dirty ? " [DIRTY]" : ""} from ${INSTALL_STAMP.source || "unknown"}`
   );
 } else if (IS_PACKAGED) {
   console.error(
-    "[hermes] WARNING: no install-stamp.json found in packaged build. First-launch bootstrap will not have a pinned ref to install."
+    "[argus] WARNING: no install-stamp.json found in packaged build. First-launch bootstrap will not have a pinned ref to install."
   );
 }
 function resolveHermesHome() {
@@ -9767,7 +9767,8 @@ function pathWithHermesManagedNode(...entries) {
 }
 var ACTIVE_HERMES_ROOT = path.join(HERMES_HOME, "argus");
 var VENV_ROOT = path.join(ACTIVE_HERMES_ROOT, "venv");
-var BOOTSTRAP_COMPLETE_MARKER = path.join(ACTIVE_HERMES_ROOT, ".hermes-bootstrap-complete");
+var BOOTSTRAP_COMPLETE_MARKER = path.join(ACTIVE_HERMES_ROOT, ".argus-bootstrap-complete");
+var LEGACY_HERMES_BOOTSTRAP_COMPLETE_MARKER = path.join(ACTIVE_HERMES_ROOT, ".hermes-bootstrap-complete");
 var BOOTSTRAP_MARKER_SCHEMA_VERSION = 1;
 var DESKTOP_CONNECTION_CONFIG_PATH = path.join(app.getPath("userData"), "connection.json");
 var DESKTOP_UPDATE_CONFIG_PATH = path.join(app.getPath("userData"), "updates.json");
@@ -10144,7 +10145,7 @@ function scheduleDesktopLogFlush() {
 function rememberLog(chunk) {
   const text = String(chunk || "").trim();
   if (!text) return;
-  const lines = text.split(/\r?\n/).map((line) => `[hermes] ${line}`);
+  const lines = text.split(/\r?\n/).map((line) => `[argus] ${line}`);
   hermesLog.push(...lines);
   if (hermesLog.length > 300) {
     hermesLog.splice(0, hermesLog.length - 300);
@@ -10441,7 +10442,7 @@ function unwrapWindowsVenvHermesCommand(command, dashboardArgs) {
   if (!fileExists(python)) return null;
   const root = path.dirname(venvRoot);
   return {
-    label: `existing Hermes no-console Python at ${python}`,
+    label: `existing Argus no-console Python at ${python}`,
     command: python,
     args: ["-m", "hermes_cli.main", ...dashboardArgs],
     bootstrap: false,
@@ -10915,7 +10916,7 @@ function repairMacUpdaterHelper(updater) {
   }
 }
 function venvHermesShimPath(updateRoot) {
-  return IS_WINDOWS ? path.join(updateRoot, "venv", "Scripts", "hermes.exe") : path.join(updateRoot, "venv", "bin", "hermes");
+  return IS_WINDOWS ? path.join(updateRoot, "venv", "Scripts", "argus.exe") : path.join(updateRoot, "venv", "bin", "argus");
 }
 function isShimLocked(shimPath) {
   if (!IS_WINDOWS) return false;
@@ -10984,13 +10985,13 @@ async function applyUpdates(opts = {}) {
     }
     if (!updater) {
       const updateRoot2 = resolveUpdateRoot();
-      let command = "hermes update";
+      let command = "argus update";
       try {
         const head = await runGit(["rev-parse", "--abbrev-ref", "HEAD"], { cwd: updateRoot2 });
         const current = (head.stdout || "").trim();
         if (head.code === 0 && current && current !== "HEAD") {
           const branch2 = await resolveHealedBranch(updateRoot2, current);
-          if (branch2 !== "main") command = `hermes update --branch ${branch2}`;
+          if (branch2 !== "main") command = `argus update --branch ${branch2}`;
         }
       } catch {
       }
@@ -11043,7 +11044,7 @@ async function handOffWindowsBootstrapRecovery(reason) {
   const { branch: configuredBranch } = readDesktopUpdateConfig();
   const branch = directoryExists(path.join(updateRoot, ".git")) ? await resolveHealedBranch(updateRoot, configuredBranch || DEFAULT_UPDATE_BRANCH) : configuredBranch || DEFAULT_UPDATE_BRANCH;
   const venvBin = path.join(updateRoot, "venv", IS_WINDOWS ? "Scripts" : "bin");
-  const venvHermes = path.join(venvBin, IS_WINDOWS ? "hermes.exe" : "hermes");
+  const venvHermes = path.join(venvBin, IS_WINDOWS ? "argus.exe" : "argus");
   const updaterArgs = fileExists(venvHermes) ? ["--update", "--branch", branch] : ["--repair", "--branch", branch];
   await releaseBackendLockForUpdate(updateRoot);
   const child = spawn(updater, updaterArgs, {
@@ -11067,9 +11068,11 @@ async function handOffWindowsBootstrapRecovery(reason) {
   return true;
 }
 function resolveHermesCliBinary(updateRoot) {
-  const venvHermes = path.join(updateRoot, "venv", "bin", "hermes");
-  if (fileExists(venvHermes)) return venvHermes;
-  return findOnPath("hermes") || null;
+  const venvArgus = path.join(updateRoot, "venv", "bin", "argus");
+  if (fileExists(venvArgus)) return venvArgus;
+  const legacyHermes = path.join(updateRoot, "venv", "bin", "hermes");
+  if (fileExists(legacyHermes)) return legacyHermes;
+  return findOnPath("argus") || findOnPath("hermes") || null;
 }
 function runStreamedUpdate(command, args, { cwd, env: env2, stage } = {}) {
   return new Promise((resolve) => {
@@ -11113,8 +11116,8 @@ async function applyUpdatesPosixInApp() {
   const updateRoot = resolveUpdateRoot();
   const hermes = resolveHermesCliBinary(updateRoot);
   if (!hermes) {
-    emitUpdateProgress({ stage: "manual", message: "hermes update", percent: null });
-    return { ok: true, manual: true, command: "hermes update", hermesRoot: updateRoot };
+    emitUpdateProgress({ stage: "manual", message: "argus update", percent: null });
+    return { ok: true, manual: true, command: "argus update", hermesRoot: updateRoot };
   }
   const env2 = {
     ARGUS_HOME: HERMES_HOME,
@@ -11148,8 +11151,8 @@ async function applyUpdatesPosixInApp() {
     stage: "update"
   });
   if (updated.code !== 0) {
-    emitUpdateProgress({ stage: "error", message: "hermes update failed.", error: updated.error || "update-failed" });
-    return { ok: false, error: "hermes update failed" };
+    emitUpdateProgress({ stage: "error", message: "argus update failed.", error: updated.error || "update-failed" });
+    return { ok: false, error: "argus update failed" };
   }
   emitUpdateProgress({ stage: "rebuild", message: "Rebuilding the desktop app\u2026", percent: 60 });
   const rebuilt = await runRebuildWithRetry((attempt) => {
@@ -11257,11 +11260,11 @@ for _ in $(seq 1 240); do
   sleep 0.5
 done
 if [ "$SRC" != "$DST" ]; then
-  if /usr/bin/ditto "$SRC" "$DST.hermes-update-new"; then
-    rm -rf "$DST.hermes-update-old" 2>/dev/null || true
-    mv "$DST" "$DST.hermes-update-old" 2>/dev/null || rm -rf "$DST"
-    mv "$DST.hermes-update-new" "$DST"
-    rm -rf "$DST.hermes-update-old" 2>/dev/null || true
+  if /usr/bin/ditto "$SRC" "$DST.argus-update-new"; then
+    rm -rf "$DST.argus-update-old" 2>/dev/null || true
+    mv "$DST" "$DST.argus-update-old" 2>/dev/null || rm -rf "$DST"
+    mv "$DST.argus-update-new" "$DST"
+    rm -rf "$DST.argus-update-old" 2>/dev/null || true
   fi
 fi
 /usr/bin/xattr -dr com.apple.quarantine "$DST" 2>/dev/null || true
@@ -11293,7 +11296,7 @@ function readJson(filePath) {
   }
 }
 function readBootstrapMarker() {
-  return readJson(BOOTSTRAP_COMPLETE_MARKER);
+  return readJson(BOOTSTRAP_COMPLETE_MARKER) || readJson(LEGACY_HERMES_BOOTSTRAP_COMPLETE_MARKER);
 }
 function isBootstrapComplete() {
   const marker = readBootstrapMarker();
@@ -11332,7 +11335,7 @@ function resolveRendererIndex() {
   const found = candidates.find(fileExists);
   if (found) return found;
   rememberLog(
-    `[renderer] index.html not found \u2014 the desktop app was packaged without a renderer bundle. Tried: ${candidates.join(", ")}. Rebuild with: hermes desktop --force-build`
+    `[renderer] index.html not found \u2014 the desktop app was packaged without a renderer bundle. Tried: ${candidates.join(", ")}. Rebuild with: argus desktop --force-build`
   );
   return candidates[0];
 }
@@ -11433,7 +11436,7 @@ function createActiveBackend(dashboardArgs) {
   const command = fileExists(venvPython) ? getNoConsoleVenvPython(VENV_ROOT) : toNoConsolePython(findSystemPython());
   return applyWindowsNoConsoleSpawnHints({
     kind: "python",
-    label: `Hermes at ${ACTIVE_HERMES_ROOT}`,
+    label: `Argus at ${ACTIVE_HERMES_ROOT}`,
     command,
     args: ["-m", "hermes_cli.main", ...dashboardArgs],
     env: buildDesktopBackendEnv({
@@ -11447,13 +11450,14 @@ function createActiveBackend(dashboardArgs) {
   });
 }
 function resolveHermesBackend(dashboardArgs) {
-  const overrideRoot = process.env.ARGUS_DESKTOP_HERMES_ROOT && path.resolve(process.env.ARGUS_DESKTOP_HERMES_ROOT);
+  const configuredRoot = process.env.ARGUS_DESKTOP_ARGUS_ROOT || process.env.ARGUS_DESKTOP_HERMES_ROOT;
+  const overrideRoot = configuredRoot && path.resolve(configuredRoot);
   if (overrideRoot && isHermesSourceRoot(overrideRoot)) {
-    const backend = createPythonBackend(overrideRoot, `Hermes source at ${overrideRoot}`, dashboardArgs);
+    const backend = createPythonBackend(overrideRoot, `Argus source at ${overrideRoot}`, dashboardArgs);
     if (backend) return backend;
   }
   if (!IS_PACKAGED && isHermesSourceRoot(SOURCE_REPO_ROOT)) {
-    const backend = createPythonBackend(SOURCE_REPO_ROOT, `Hermes source at ${SOURCE_REPO_ROOT}`, dashboardArgs);
+    const backend = createPythonBackend(SOURCE_REPO_ROOT, `Argus source at ${SOURCE_REPO_ROOT}`, dashboardArgs);
     if (backend) return backend;
   }
   if (isBootstrapComplete()) {
@@ -11461,7 +11465,7 @@ function resolveHermesBackend(dashboardArgs) {
   }
   if (process.env.ARGUS_DESKTOP_IGNORE_EXISTING !== "1") {
     let hermesCommand = null;
-    const hermesOverride = process.env.ARGUS_DESKTOP_HERMES;
+    const hermesOverride = process.env.ARGUS_DESKTOP_ARGUS || process.env.ARGUS_DESKTOP_HERMES;
     if (hermesOverride) {
       const resolvedOverride = findOnPath(hermesOverride);
       if (resolvedOverride) {
@@ -11469,14 +11473,14 @@ function resolveHermesBackend(dashboardArgs) {
       } else if (!isWindowsBinaryPathInWsl(hermesOverride, { isWsl: IS_WSL })) {
         hermesCommand = hermesOverride;
       } else {
-        rememberLog(`Ignoring Windows Hermes override under WSL: ${hermesOverride}`);
+        rememberLog(`Ignoring Windows Argus override under WSL: ${hermesOverride}`);
       }
     } else {
-      hermesCommand = findOnPath("hermes");
+      hermesCommand = findOnPath("argus") || findOnPath("hermes");
     }
     if (hermesCommand) {
       if (looksLikeDesktopAppBinary(hermesCommand)) {
-        rememberLog(`Ignoring desktop app executable on PATH while resolving Hermes CLI: ${hermesCommand}`);
+        rememberLog(`Ignoring desktop app executable on PATH while resolving Argus CLI: ${hermesCommand}`);
         hermesCommand = null;
       }
     }
@@ -11488,7 +11492,7 @@ function resolveHermesBackend(dashboardArgs) {
       const shellForProbe = isCommandScript(hermesCommand);
       if (verifyHermesCli(hermesCommand, { shell: shellForProbe })) {
         return unwrapWindowsVenvHermesCommand(hermesCommand, dashboardArgs) || {
-          label: `existing Hermes CLI at ${hermesCommand}`,
+          label: `existing Argus CLI at ${hermesCommand}`,
           command: hermesCommand,
           args: dashboardArgs,
           bootstrap: false,
@@ -11498,7 +11502,7 @@ function resolveHermesBackend(dashboardArgs) {
         };
       }
       rememberLog(
-        `Ignoring existing Hermes CLI at ${hermesCommand}: --version probe failed; falling through to bootstrap.`
+        `Ignoring existing Argus CLI at ${hermesCommand}: --version probe failed; falling through to bootstrap.`
       );
     }
   }
@@ -11562,7 +11566,7 @@ async function ensureRuntime(backend) {
       installStamp: backend.installStamp,
       activeRoot: backend.activeRoot,
       sourceRepoRoot: SOURCE_REPO_ROOT,
-      // Self-contained packaged app: agent source bundled at resources/hermes-src.
+      // Self-contained packaged app: agent source bundled at resources/argus-src.
       // When present, bootstrap installs from it (no GitHub fetch/clone) — fixes
       // the 404 on a locally-built app whose commit was never pushed.
       bundledSourceRoot: BUNDLED_SOURCE_ROOT,
@@ -11591,7 +11595,7 @@ async function ensureRuntime(backend) {
     }
     if (!bootstrapResult.ok) {
       const bootstrapError = new Error(
-        `Hermes bootstrap failed${bootstrapResult.failedStage ? ` at stage '${bootstrapResult.failedStage}'` : ""}: ${bootstrapResult.error || "unknown error"}. Check ${path.join(HERMES_HOME, "logs", "desktop.log")} for the full transcript.`
+        `Argus bootstrap failed${bootstrapResult.failedStage ? ` at stage '${bootstrapResult.failedStage}'` : ""}: ${bootstrapResult.error || "unknown error"}. Check ${path.join(HERMES_HOME, "logs", "desktop.log")} for the full transcript.`
       );
       bootstrapError.isBootstrapFailure = true;
       bootstrapError.failedStage = bootstrapResult.failedStage || null;
@@ -11603,7 +11607,7 @@ async function ensureRuntime(backend) {
   }
   if (!isHermesSourceRoot(ACTIVE_HERMES_ROOT)) {
     throw new Error(
-      `Hermes install at ${ACTIVE_HERMES_ROOT} is missing or incomplete. Reinstall via the desktop installer or scripts/install.ps1.`
+      `Argus install at ${ACTIVE_HERMES_ROOT} is missing or incomplete. Reinstall via the desktop installer or scripts/install.ps1.`
     );
   }
   if (IS_WINDOWS && !findGitBash()) {
@@ -11614,11 +11618,11 @@ async function ensureRuntime(backend) {
   const venvPython = getVenvPython(VENV_ROOT);
   if (!fileExists(venvPython)) {
     throw new Error(
-      `Hermes venv missing at ${VENV_ROOT}. Re-run the desktop installer or \`scripts/install.ps1\` to rebuild it.`
+      `Argus venv missing at ${VENV_ROOT}. Re-run the desktop installer or \`scripts/install.ps1\` to rebuild it.`
     );
   }
   backend.command = getNoConsoleVenvPython(VENV_ROOT);
-  backend.label = `Hermes at ${ACTIVE_HERMES_ROOT} (venv: ${VENV_ROOT})`;
+  backend.label = `Argus at ${ACTIVE_HERMES_ROOT} (venv: ${VENV_ROOT})`;
   updateBootProgress({
     phase: "runtime.ready",
     message: "Argus runtime is ready",
@@ -11661,7 +11665,7 @@ function fetchJson(url, token, options = {}) {
         method,
         headers: {
           "Content-Type": "application/json",
-          "X-Hermes-Session-Token": token,
+          "X-Argus-Session-Token": token,
           ...body ? { "Content-Length": String(body.length) } : {}
         }
       },
@@ -13784,7 +13788,7 @@ function spawnPetOverlayWindow(bounds) {
     // taskbar/alt-tab entry. On macOS, cmd-tab is app-level and this can make
     // the whole app look like it vanished when the only newly-created visible
     // window is a frameless overlay. Use NSPanel + Mission Control hiding below
-    // instead, leaving the main Hermes app as the Dock/cmd-tab anchor.
+    // instead, leaving the main Argus app as the Dock/cmd-tab anchor.
     skipTaskbar: !IS_MAC,
     hasShadow: false,
     alwaysOnTop: true,
@@ -13794,7 +13798,7 @@ function spawnPetOverlayWindow(bounds) {
     hiddenInMissionControl: IS_MAC,
     // Non-activating: the overlay must never become the app's key/main window,
     // or it (a frameless, taskbar-skipping panel) becomes the app's switcher
-    // anchor and the Hermes icon drops out of cmd/alt-tab — especially when the
+    // anchor and the Argus icon drops out of cmd/alt-tab — especially when the
     // main window is minimized. We flip this on only while the composer needs
     // the keyboard (see hermes:pet-overlay:set-focusable).
     focusable: false,
@@ -14110,8 +14114,10 @@ ipcMain.handle("hermes:bootstrap:reset", async () => {
 ipcMain.handle("hermes:bootstrap:repair", async () => {
   rememberLog("[bootstrap] repair requested by renderer; clearing marker + latched failure");
   try {
-    if (fileExists(BOOTSTRAP_COMPLETE_MARKER)) {
-      fs.rmSync(BOOTSTRAP_COMPLETE_MARKER, { force: true });
+    for (const markerPath of [BOOTSTRAP_COMPLETE_MARKER, LEGACY_HERMES_BOOTSTRAP_COMPLETE_MARKER]) {
+      if (fileExists(markerPath)) {
+        fs.rmSync(markerPath, { force: true });
+      }
     }
   } catch (error) {
     rememberLog(`[bootstrap] failed to remove marker during repair: ${error.message}`);
@@ -14943,7 +14949,7 @@ async function runDesktopUninstall(mode) {
     return {
       ok: false,
       error: "agent-missing",
-      message: `Can't run the uninstaller: no Hermes agent venv at ${VENV_ROOT}.`
+      message: `Can't run the uninstaller: no Argus agent venv at ${VENV_ROOT}.`
     };
   }
   let py = venvPy;
@@ -15016,12 +15022,16 @@ ipcMain.handle("hermes:uninstall:run", async (_event, payload) => {
 });
 ipcMain.handle("hermes:vscode-theme:fetch", async (_event, id) => fetchMarketplaceThemes(String(id || "")));
 ipcMain.handle("hermes:vscode-theme:search", async (_event, query) => searchMarketplaceThemes(String(query || ""), 20));
-var HERMES_PROTOCOL = "hermes";
+var ARGUS_PROTOCOL = "argus";
+var LEGACY_HERMES_PROTOCOL = "hermes";
+var ARGUS_PROTOCOLS = [ARGUS_PROTOCOL, LEGACY_HERMES_PROTOCOL];
 var _pendingDeepLink = null;
 var _rendererReadyForDeepLink = false;
 function _extractDeepLink(argv) {
   if (!Array.isArray(argv)) return null;
-  return argv.find((a) => typeof a === "string" && a.startsWith(`${HERMES_PROTOCOL}://`)) || null;
+  return argv.find(
+    (a) => typeof a === "string" && ARGUS_PROTOCOLS.some((scheme) => a.startsWith(`${scheme}://`))
+  ) || null;
 }
 function handleDeepLink(url) {
   if (!url || typeof url !== "string") return;
@@ -15058,17 +15068,19 @@ ipcMain.handle("hermes:deep-link-ready", () => {
     const queued = _pendingDeepLink;
     _pendingDeepLink = null;
     handleDeepLink(
-      `${HERMES_PROTOCOL}://${queued.kind}/${encodeURIComponent(queued.name)}` + (Object.keys(queued.params).length ? "?" + new URLSearchParams(queued.params).toString() : "")
+      `${ARGUS_PROTOCOL}://${queued.kind}/${encodeURIComponent(queued.name)}` + (Object.keys(queued.params).length ? "?" + new URLSearchParams(queued.params).toString() : "")
     );
   }
   return { ok: true };
 });
 function registerDeepLinkProtocol() {
   try {
-    if (process.defaultApp && process.argv.length >= 2) {
-      app.setAsDefaultProtocolClient(HERMES_PROTOCOL, process.execPath, [path.resolve(process.argv[1])]);
-    } else {
-      app.setAsDefaultProtocolClient(HERMES_PROTOCOL);
+    for (const scheme of ARGUS_PROTOCOLS) {
+      if (process.defaultApp && process.argv.length >= 2) {
+        app.setAsDefaultProtocolClient(scheme, process.execPath, [path.resolve(process.argv[1])]);
+      } else {
+        app.setAsDefaultProtocolClient(scheme);
+      }
     }
   } catch (err) {
     rememberLog(`[deeplink] protocol registration failed: ${err.message}`);

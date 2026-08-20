@@ -63,7 +63,7 @@ Bundled skills (in `skills/`) ship with every Argus install. They should be **br
 
 If your skill is official and useful but not universally needed (e.g., a paid service integration, a heavyweight dependency), put it in **`optional-skills/`** — it ships with the repo but isn't activated by default. Users can discover it via `argus skills browse` (labeled "official") and install it with `argus skills install` (no third-party warning, built-in trust).
 
-If your skill is specialized, community-contributed, or niche, it's better suited for a **Skills Hub** — upload it to a skills registry and share it in the [Nous Research Discord](https://discord.gg/NousResearch). Users can install it with `argus skills install`.
+If your skill is specialized, community-contributed, or niche, it's better suited for a **Skills Hub** — upload it to a skills registry and share it in [Argus Discussions](https://github.com/MMArgus-Team/Argus/discussions). Users can install it with `argus skills install`.
 
 ---
 
@@ -100,15 +100,15 @@ This isn't a quality bar — it's a coupling-and-maintenance decision. Memory pr
 
 For most contributors, the best development bootstrap is the same path users
 take: run the standard installer, then work inside the repository it cloned.
-The installer creates the Argus venv, wires the `hermes` command, stamps the
+The installer creates the Argus venv, wires the `argus` command, stamps the
 install method for `argus update`, and clones the full git project into
-`$HERMES_HOME/argus-agent` (usually `~/.argus/argus-agent`). That keeps your
+`$ARGUS_HOME/argus` (usually `~/.argus/argus`). That keeps your
 development environment on the same layout the CLI, updater, lazy dependency
 installer, gateway, and docs assume.
 
 ```bash
-curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
-cd "${HERMES_HOME:-$HOME/.argus}/argus-agent"
+curl -fsSL https://raw.githubusercontent.com/MMArgus-Team/Argus/main/scripts/install.sh | bash
+cd "${ARGUS_HOME:-$HOME/.argus}/argus-agent"
 
 # Add dev/test extras on top of the standard install.
 uv pip install -e ".[all,dev]"
@@ -128,7 +128,7 @@ scripts/run_tests.sh
 
 Use this only if you intentionally do not want Argus' managed install layout
 (for example, a throwaway clone inside a container or CI job). If you install
-this way, make sure you run the `hermes` entrypoint from this venv; running the
+this way, make sure you run the `argus` entrypoint from this venv; running the
 system `python3 -m argus_cli.main` can pick up unrelated system Python
 packages.
 
@@ -161,7 +161,7 @@ echo "OPENROUTER_API_KEY=***" >> ~/.argus/.env
 ### Run
 
 ```bash
-# The standard installer already put `hermes` on PATH.
+# The standard installer already put `argus` on PATH.
 argus doctor
 argus chat -q "Hello"
 ```
@@ -250,7 +250,7 @@ argus-agent/
 ├── skills/                   # Bundled skills (copied to ~/.argus/skills/ on install)
 ├── optional-skills/          # Official optional skills (discoverable via hub, not activated by default)
 ├── tests/                    # Test suite
-├── website/                  # Documentation site (hermes-agent.nousresearch.com)
+├── website/                  # Documentation site (mmargus-team.github.io/Argus/docs)
 │
 ├── cli-config.yaml.example   # Example configuration (copied to ~/.argus/config.yaml)
 └── AGENTS.md                 # Development guide for AI coding assistants
@@ -920,7 +920,7 @@ refactor/description   # Code restructuring
 ### Before submitting
 
 1. **Run tests**: `scripts/run_tests.sh` (recommended; same as CI) or `pytest tests/ -v` with the project venv activated
-2. **Test manually**: Run `hermes` and exercise the code path you changed
+2. **Test manually**: Run `argus` and exercise the code path you changed
 3. **Check cross-platform impact**: If you touch file I/O, process management, or terminal handling, consider macOS, Linux, and WSL2
 4. **Keep PRs focused**: One logical change per PR. Don't mix a bug fix with a refactor with a new feature.
 
@@ -973,8 +973,7 @@ test(tools): add unit tests for file_operations
 
 ## Community
 
-- **Discord**: [discord.gg/NousResearch](https://discord.gg/NousResearch) — for questions, showcasing projects, and sharing skills
-- **GitHub Discussions**: For design proposals and architecture discussions
+- **GitHub Discussions**: [MMArgus-Team/Argus Discussions](https://github.com/MMArgus-Team/Argus/discussions) — for questions, showcases, and design proposals
 - **Skills Hub**: Upload specialized skills to a registry and share them with the community
 
 ---

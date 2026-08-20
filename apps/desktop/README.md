@@ -4,7 +4,7 @@
 
 **The native desktop client for Argus** — packs everything from [the root Argus project](../../README.md) (real-time multimodal video Agent) into one cross-platform window: watch-and-chat multimodal conversation, camera/screen capture, streaming tool output, right-hand preview and file browsing, voice, and Computer Use — no terminal required. Built on **Electron + React 19 + Vite**, packageable as **macOS / Windows / Linux** installers.
 
-> In-app branding is **Argus** (`productName: "Argus"`, `appId: com.argus.desktop`), and every desktop environment variable is `ARGUS_DESKTOP_*`. What still carries upstream `hermes` names is *internal only*: the Python backend package (`hermes_cli/`) and the backend executable Electron looks for on `PATH` (`hermes`). Paths and env keys are all `argus` / `ARGUS_*` and match what `install.sh` / `install.ps1` create, so a desktop install and a CLI install stay interchangeable.
+> In-app branding is **Argus** (`productName: "Argus"`, `appId: com.argus.desktop`). The desktop resolves the canonical `argus` executable first. The upstream Python package name (`hermes_cli/`) and legacy `hermes` executable/env overrides remain compatibility-only so existing installations continue to work.
 
 ---
 
@@ -84,7 +84,7 @@ The dev server first runs `scripts/assert-root-install.cjs` to verify you really
 To point at a specific source checkout, or isolate it from your real config:
 
 ```bash
-ARGUS_DESKTOP_HERMES_ROOT=/path/to/clone npm run dev   # use a specific backend checkout
+ARGUS_DESKTOP_ARGUS_ROOT=/path/to/clone npm run dev   # use a specific backend checkout
 ARGUS_HOME=/tmp/throwaway npm run dev                  # use a throwaway config directory
 npm run dev:fake-boot                                  # rehearse the boot overlay with deterministic delays
 ```
@@ -120,7 +120,7 @@ macOS/Windows signing and notarization happen automatically when the matching cr
 ## How it works
 
 - A packaged app = Electron shell + native React chat UI. On first launch it can install the Argus runtime into `ARGUS_HOME` (default `~/.argus` on macOS/Linux, `%LOCALAPPDATA%\argus` on Windows), with the code itself under `<ARGUS_HOME>/argus` — the same layout `install.sh` / `install.ps1` produce, so a desktop install and a CLI install are interchangeable.
-- **Backend discovery order**: `ARGUS_DESKTOP_HERMES_ROOT` → a completed managed install → a `hermes` executable found on `PATH` (unless `ARGUS_DESKTOP_IGNORE_EXISTING=1` is set) → finally `ARGUS_DESKTOP_HERMES`, an explicit override for packaging and troubleshooting.
+- **Backend discovery order**: `ARGUS_DESKTOP_ARGUS_ROOT` → a completed managed install → an `argus` executable found on `PATH` (unless `ARGUS_DESKTOP_IGNORE_EXISTING=1` is set) → finally `ARGUS_DESKTOP_ARGUS`, an explicit override for packaging and troubleshooting. The older `ARGUS_DESKTOP_HERMES_ROOT`, `ARGUS_DESKTOP_HERMES`, and `hermes` command are accepted as fallbacks.
 - Installation, backend discovery, and self-update logic all live in `electron/main.cjs`; the renderer ↔ main bridge is in `electron/preload.cjs`.
 
 ### Directory guide
@@ -148,7 +148,7 @@ Startup logs are at `ARGUS_HOME/logs/desktop.log` (includes backend output and t
 
 ```bash
 # Force the first-run bootstrap to run again
-rm "$HOME/.argus/argus/.hermes-bootstrap-complete"
+rm "$HOME/.argus/argus/.argus-bootstrap-complete"
 # Rebuild a broken Python venv
 rm -rf "$HOME/.argus/argus/venv"
 # Reset a stuck macOS microphone grant (macOS only)
@@ -159,7 +159,7 @@ tccutil reset Microphone com.argus.desktop
 
 ```powershell
 # Force the first-run bootstrap to run again
-Remove-Item "$env:LOCALAPPDATA\argus\argus\.hermes-bootstrap-complete"
+Remove-Item "$env:LOCALAPPDATA\argus\argus\.argus-bootstrap-complete"
 # Rebuild a broken Python venv
 Remove-Item -Recurse -Force "$env:LOCALAPPDATA\argus\argus\venv"
 ```

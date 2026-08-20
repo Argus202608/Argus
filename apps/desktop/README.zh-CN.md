@@ -4,7 +4,7 @@
 
 **Argus 的原生桌面客户端** —— 把[根项目 Argus](../../README.zh-CN.md)（多模态实时视频 Agent）的全部能力装进一个跨平台窗口：边看边聊的多模态对话、摄像头/屏幕捕获、流式工具输出、右侧预览与文件浏览、语音、Computer Use，无需终端。基于 **Electron + React 19 + Vite**，可打包为 **macOS / Windows / Linux** 安装包。
 
-> 应用内品牌为 **Argus**（`productName: "Argus"`、`appId: com.argus.desktop`），桌面端环境变量也已全部是 `ARGUS_DESKTOP_*`。仍保留上游 `hermes` 命名的只剩*内部实现*：Python 后端包（`hermes_cli/`）和 Electron 在 `PATH` 上查找的后端可执行文件名（`hermes`）。路径与环境变量均已是 `argus` / `ARGUS_*`，与 `install.sh` / `install.ps1` 实际创建的一致，因此桌面安装与 CLI 安装可以互换。
+> 应用内品牌为 **Argus**（`productName: "Argus"`、`appId: com.argus.desktop`）。桌面端会优先解析规范的 `argus` 可执行文件；上游 Python 包名（`hermes_cli/`）以及旧的 `hermes` 命令和环境变量仅作为兼容入口保留，已有安装仍可继续使用。
 
 ---
 
@@ -84,7 +84,7 @@ dev server 会先跑 `scripts/assert-root-install.cjs` 校验你确实是从根�
 指向特定源码 checkout，或把它与你真实配置隔离：
 
 ```bash
-ARGUS_DESKTOP_HERMES_ROOT=/path/to/clone npm run dev   # 用指定的后端源码
+ARGUS_DESKTOP_ARGUS_ROOT=/path/to/clone npm run dev   # 用指定的后端源码
 ARGUS_HOME=/tmp/throwaway npm run dev                  # 用一次性配置目录
 npm run dev:fake-boot                                  # 用确定性延迟演练启动遮罩
 ```
@@ -120,7 +120,7 @@ macOS/Windows 签名与公证在环境里有对应凭证时自动进行（macOS�
 ## 工作原理
 
 - 打包后的 app = Electron 外壳 + 原生 React 聊天界面。首次启动可把 Argus 运行时装进 `ARGUS_HOME`（macOS/Linux 默认 `~/.argus`，Windows 默认 `%LOCALAPPDATA%\argus`），代码本身放在 `<ARGUS_HOME>/argus` —— 与 `install.sh` / `install.ps1` 产出的布局相同，因此桌面安装与 CLI 安装可互换。
-- **后端定位顺序**：`ARGUS_DESKTOP_HERMES_ROOT` → 已完成的托管安装 → `PATH` 上探测到的 `hermes` 可执行文件（除非设了 `ARGUS_DESKTOP_IGNORE_EXISTING=1`）→ 最后是给打包/排障用的显式覆盖 `ARGUS_DESKTOP_HERMES`。
+- **后端定位顺序**：`ARGUS_DESKTOP_ARGUS_ROOT` → 已完成的托管安装 → `PATH` 上探测到的 `argus` 可执行文件（除非设了 `ARGUS_DESKTOP_IGNORE_EXISTING=1`）→ 最后是给打包/排障用的显式覆盖 `ARGUS_DESKTOP_ARGUS`。旧的 `ARGUS_DESKTOP_HERMES_ROOT`、`ARGUS_DESKTOP_HERMES` 和 `hermes` 命令仍作为兜底兼容入口。
 - 安装、后端定位、自更新逻辑都在 `electron/main.cjs`；渲染进程与主进程的桥接在 `electron/preload.cjs`。
 
 ### 目录导览
@@ -148,7 +148,7 @@ apps/desktop/
 
 ```bash
 # 强制重跑首次启动引导
-rm "$HOME/.argus/argus/.hermes-bootstrap-complete"
+rm "$HOME/.argus/argus/.argus-bootstrap-complete"
 # 重建损坏的 Python venv
 rm -rf "$HOME/.argus/argus/venv"
 # 重置卡住的 macOS 麦克风授权（仅 macOS）
@@ -159,7 +159,7 @@ tccutil reset Microphone com.argus.desktop
 
 ```powershell
 # 强制重跑首次启动引导
-Remove-Item "$env:LOCALAPPDATA\argus\argus\.hermes-bootstrap-complete"
+Remove-Item "$env:LOCALAPPDATA\argus\argus\.argus-bootstrap-complete"
 # 重建损坏的 Python venv
 Remove-Item -Recurse -Force "$env:LOCALAPPDATA\argus\argus\venv"
 ```

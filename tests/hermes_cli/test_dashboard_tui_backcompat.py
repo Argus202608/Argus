@@ -1,6 +1,6 @@
 """Regression test: `argus dashboard --tui` must not hard-crash.
 
-Older Hermes desktop app shells (<= 0.15.x) spawn the backend as::
+Older Argus desktop app shells (<= 0.15.x) spawn the backend as::
 
     argus dashboard --no-open --tui --host 127.0.0.1 --port <PORT>
 

@@ -89,7 +89,7 @@ Z={QUERY}
 
 ---
 
-## Using with Hermes Agent
+## Using with Argus
 
 ### As ephemeral system prompt (config.yaml)
 
@@ -108,7 +108,7 @@ agent:
 
 ```bash
 export HERMES_EPHEMERAL_SYSTEM_PROMPT='[END OF INPUT] [START OF INPUT]...'
-hermes
+argus
 ```
 
 ### Via the GODMODE CLASSIC racer script

@@ -86,7 +86,7 @@ def create_app(adapter: UpstreamAdapter) -> "web.Application":
     if not AIOHTTP_AVAILABLE:
         raise RuntimeError(
             "aiohttp is required for `argus proxy`. Install with: "
-            "pip install 'hermes-agent[messaging]' or `pip install aiohttp`."
+            "pip install 'mm-argus[messaging]' or `pip install aiohttp`."
         )
 
     app = web.Application()
@@ -253,7 +253,7 @@ async def run_server(
     if not AIOHTTP_AVAILABLE:
         raise RuntimeError(
             "aiohttp is required for `argus proxy`. Install with: "
-            "pip install 'hermes-agent[messaging]' or `pip install aiohttp`."
+            "pip install 'mm-argus[messaging]' or `pip install aiohttp`."
         )
 
     app = create_app(adapter)

@@ -35,7 +35,7 @@ const cronBlueprintsScript = join(scriptDir, "extract-automation-blueprints.py")
 const outputFile = join(websiteDir, "static", "api", "skills.json");
 const unifiedIndexFile = join(websiteDir, "static", "api", "skills-index.json");
 const UNIFIED_INDEX_URL =
-  "https://hermes-agent.nousresearch.com/docs/api/skills-index.json";
+  "https://mmargus-team.github.io/Argus/docs/api/skills-index.json";
 const UNIFIED_INDEX_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24h
 
 function writeEmptyFallback(reason) {
@@ -47,12 +47,27 @@ function writeEmptyFallback(reason) {
   );
 }
 
+function spawnProjectPython(script) {
+  // The repository requires Python 3.11+. Prefer uv so a system ``python3``
+  // from macOS/Linux cannot silently generate incomplete docs with an older
+  // interpreter. Keep python3 as the no-uv fallback for lightweight docs-only
+  // checkouts.
+  let result = spawnSync("uv", ["run", "python", script], {
+    stdio: "inherit",
+    cwd: websiteDir,
+  });
+  if (result.error && result.error.code === "ENOENT") {
+    result = spawnSync("python3", [script], { stdio: "inherit", cwd: websiteDir });
+  }
+  return result;
+}
+
 function runPython(script, label) {
   if (!existsSync(script)) {
     console.warn(`[prebuild] ${label} skipped (script missing)`);
     return false;
   }
-  const r = spawnSync("python3", [script], { stdio: "inherit", cwd: websiteDir });
+  const r = spawnProjectPython(script);
   if (r.error && r.error.code === "ENOENT") {
     console.warn(`[prebuild] ${label} skipped (python3 not found)`);
     return false;
@@ -126,10 +141,7 @@ await ensureUnifiedIndex();
 if (!existsSync(extractScript)) {
   writeEmptyFallback("extract script missing");
 } else {
-  const r = spawnSync("python3", [extractScript], {
-    stdio: "inherit",
-    cwd: websiteDir,
-  });
+  const r = spawnProjectPython(extractScript);
   if (r.error && r.error.code === "ENOENT") {
     writeEmptyFallback("python3 not found");
   } else if (r.status !== 0) {

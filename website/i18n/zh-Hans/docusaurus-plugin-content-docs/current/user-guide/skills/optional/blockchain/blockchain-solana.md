@@ -14,7 +14,7 @@ description: "使用 USD 定价查询 Solana 区块链数据——钱包余额�
 
 | | |
 |---|---|
-| 来源 | 可选 — 通过 `hermes skills install official/blockchain/solana` 安装 |
+| 来源 | 可选 — 通过 `argus skills install official/blockchain/solana` 安装 |
 | 路径 | `optional-skills/blockchain/solana` |
 | 版本 | `0.2.0` |
 | 作者 | Deniz Alagoz (gizdusum)，由 Hermes Agent 增强 |

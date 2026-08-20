@@ -108,7 +108,7 @@ SET_LIVE_WATCHER_SCHEMA = {
                 "type": "string",
                 "description": (
                     "A short summary of task_instruction for the UI (a few words, "
-                    "e.g. 'Hermes Iteration AI Minutes' / 'Screen Rendering Code Review'). Shown on the "
+                    "e.g. 'Argus Iteration AI Minutes' / 'Screen Rendering Code Review'). Shown on the "
                     "deep-analysis card so many tasks don't get confused. "
                     "Set on create/update; auto-derived from task_instruction if omitted."
                 ),

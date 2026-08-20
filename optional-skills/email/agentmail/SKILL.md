@@ -47,7 +47,7 @@ mcp_servers:
 
 ### 3. Restart Hermes
 ```bash
-hermes
+argus
 ```
 All 11 AgentMail tools are now available automatically.
 
@@ -115,7 +115,7 @@ All 11 AgentMail tools are now available automatically.
 ## Verification
 After setup, test with:
 ```
-hermes --toolsets mcp -q "Create an AgentMail inbox called test-agent and tell me its email address"
+argus --toolsets mcp -q "Create an AgentMail inbox called test-agent and tell me its email address"
 ```
 You should see the new inbox address returned.
 

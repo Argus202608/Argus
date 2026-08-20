@@ -286,7 +286,7 @@ class TestCreateProfile:
         assert not (profile_dir / "profiles").exists()
 
     def test_clone_all_excludes_default_infrastructure(self, profile_env):
-        """--clone-all from default profile excludes hermes-agent, .worktrees,
+        """--clone-all from default profile excludes code checkouts, .worktrees,
         bin, node_modules at root, plus __pycache__/*.pyc/*.pyo/*.sock/*.tmp
         at any depth.  Profile data (config, env, skills, logs) must be
         preserved — clone-all means "complete snapshot minus infrastructure
@@ -295,6 +295,9 @@ class TestCreateProfile:
         tmp_path = profile_env
         default_home = tmp_path / ".argus"
         # Simulate infrastructure dirs that only the default profile has
+        (default_home / "argus" / ".git").mkdir(parents=True)
+        (default_home / "argus" / "venv" / "bin").mkdir(parents=True)
+        (default_home / "argus" / "README.md").write_text("repo")
         (default_home / "hermes-agent" / ".git").mkdir(parents=True)
         (default_home / "hermes-agent" / "venv" / "bin").mkdir(parents=True)
         (default_home / "hermes-agent" / "README.md").write_text("repo")
@@ -322,6 +325,7 @@ class TestCreateProfile:
         profile_dir = create_profile("cloned", clone_all=True, no_alias=True)
 
         # Infrastructure must be excluded
+        assert not (profile_dir / "argus").exists()
         assert not (profile_dir / "hermes-agent").exists()
         assert not (profile_dir / ".worktrees").exists()
         assert not (profile_dir / "profiles").exists()

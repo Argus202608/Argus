@@ -98,7 +98,7 @@ cfg["skills"]["always_load"] = skills
 
 # Note: we do NOT touch cfg["approvals"] — that's a security-sensitive
 # setting (manual confirmation of tool calls). Workspace cwd is overridden
-# per-task by `--workspace dir:<path>` on `hermes kanban create`, so we
+# per-task by `--workspace dir:<path>` on `argus kanban create`, so we
 # don't need to mutate cfg["terminal"]["cwd"] either.
 
 with open(p, "w") as f:
@@ -154,7 +154,7 @@ TEAM_EOF
 # ─────────────────────────────────────────────────────────────────────
 echo "═══ Firing initial kanban task ═══"
 
-hermes kanban create "Direct production of {{TITLE}}" \
+argus kanban create "Direct production of {{TITLE}}" \
     --assignee director \
     --workspace dir:"$WORKSPACE" \
     --tenant "$TENANT" \
@@ -181,6 +181,6 @@ echo ""
 echo "Monitor with:"
 echo "  hermes kanban watch --tenant $TENANT"
 echo "  hermes kanban list  --tenant $TENANT"
-echo "  hermes dashboard"
+echo "  argus dashboard"
 echo ""
 echo "Workspace: $WORKSPACE"

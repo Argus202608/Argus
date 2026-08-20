@@ -4,11 +4,11 @@ sidebar_position: 9
 
 # 添加平台适配器
 
-本指南介绍如何向 Hermes gateway 添加新的消息平台。平台适配器将 Hermes 连接到外部消息服务（Telegram、Discord、WeCom 等），使用户可以通过该服务与 agent 交互。
+本指南介绍如何向 Argus gateway 添加新的消息平台。平台适配器将 Argus 连接到外部消息服务（Telegram、Discord、WeCom 等），使用户可以通过该服务与 agent 交互。
 
 :::tip
 添加平台有两种方式：
-- **Plugin**（推荐用于社区/第三方）：将 plugin 目录放入 `~/.hermes/plugins/` — 无需修改任何核心代码。参见下方 [Plugin 路径](#plugin-path-recommended)。
+- **Plugin**（推荐用于社区/第三方）：将 plugin 目录放入 `~/.argus/plugins/` — 无需修改任何核心代码。参见下方 [Plugin 路径](#plugin-path-recommended)。
 - **内置**：需修改代码、配置和文档共 20+ 个文件。参见下方 [内置清单](#step-by-step-checklist)。
 :::
 
@@ -30,17 +30,17 @@ sidebar_position: 9
 
 ## Plugin 路径（推荐）{#plugin-path-recommended}
 
-Plugin 系统允许你在不修改任何 Hermes 核心代码的情况下添加平台适配器。你的 plugin 是一个包含两个文件的目录：
+Plugin 系统允许你在不修改任何 Argus 核心代码的情况下添加平台适配器。你的 plugin 是一个包含两个文件的目录：
 
 ```
-~/.hermes/plugins/my-platform/
+~/.argus/plugins/my-platform/
   plugin.yaml      # Plugin 元数据
   adapter.py       # 适配器类 + register() 入口点
 ```
 
 ### plugin.yaml
 
-Plugin 元数据。`requires_env` 和 `optional_env` 块会自动填充 `hermes config` UI 条目（参见下方[在 hermes config 中暴露环境变量](#surfacing-env-vars-in-hermes-config)）。
+Plugin 元数据。`requires_env` 和 `optional_env` 块会自动填充 `argus config` UI 条目（参见下方[在 argus config 中暴露环境变量](#surfacing-env-vars-in-hermes-config)）。
 
 ```yaml
 name: my-platform
@@ -115,7 +115,7 @@ def _env_enablement() -> dict | None:
 
 
 def register(ctx):
-    """Plugin 入口点 — 由 Hermes plugin 系统调用。"""
+    """Plugin 入口点 — 由 Argus plugin 系统调用。"""
     ctx.register_platform(
         name="my_platform",
         label="My Platform",
@@ -182,7 +182,7 @@ gateway:
 | 仅环境变量自动启用 | `env_enablement_fn` 填充 `PlatformConfig.extra` + `home_channel` |
 | YAML 配置桥接 | `apply_yaml_config_fn` 将 `config.yaml` 键转换为环境变量/extras |
 | Cron 投递 | `cron_deliver_env_var` 使 `deliver=<name>` 生效 |
-| `hermes config` UI 条目 | `plugin.yaml` 中的 `requires_env` / `optional_env` 自动填充 |
+| `argus config` UI 条目 | `plugin.yaml` 中的 `requires_env` / `optional_env` 自动填充 |
 | send_message 工具 | 通过实时 gateway 适配器路由 |
 | Webhook 跨平台投递 | 检查注册表中的已知平台 |
 | `/update` 命令访问 | `allow_update_command` 标志 |
@@ -190,15 +190,15 @@ gateway:
 | 系统 prompt 提示 | `platform_hint` 注入 LLM 上下文 |
 | 消息分块 | `max_message_length` 用于智能分割 |
 | PII 脱敏 | `pii_safe` 标志 |
-| `hermes status` | 显示带 `(plugin)` 标签的 plugin 平台 |
-| `hermes gateway setup` | Plugin 平台出现在设置菜单中 |
-| `hermes tools` / `hermes skills` | Plugin 平台出现在每平台配置中 |
+| `argus status` | 显示带 `(plugin)` 标签的 plugin 平台 |
+| `argus gateway setup` | Plugin 平台出现在设置菜单中 |
+| `argus tools` / `argus skills` | Plugin 平台出现在每平台配置中 |
 | Token 锁（多配置文件） | 在 `connect()` 中使用 `acquire_scoped_lock()` |
 | 孤立配置警告 | Plugin 缺失时输出描述性日志 |
 
 ## 环境变量驱动的自动配置
 
-大多数用户通过将环境变量写入 `~/.hermes/.env` 来配置平台，而不是编辑 `config.yaml`。`env_enablement_fn` hook 允许你的 plugin 在适配器构建**之前**读取这些环境变量，使 `hermes gateway status`、`get_connected_platforms()` 和 cron 投递无需实例化平台 SDK 即可看到正确状态。
+大多数用户通过将环境变量写入 `~/.argus/.env` 来配置平台，而不是编辑 `config.yaml`。`env_enablement_fn` hook 允许你的 plugin 在适配器构建**之前**读取这些环境变量，使 `argus gateway status`、`get_connected_platforms()` 和 cron 投递无需实例化平台 SDK 即可看到正确状态。
 
 ```python
 def _env_enablement() -> dict | None:
@@ -293,7 +293,7 @@ ctx.register_platform(
 
 ### 进程外 cron 投递
 
-`cron_deliver_env_var` 使你的平台成为可识别的 `deliver=` 目标。要在 cron 任务运行于独立进程（即 `hermes cron run` 与 `hermes gateway` 分离）时使实际发送成功，需注册 `standalone_sender_fn`：
+`cron_deliver_env_var` 使你的平台成为可识别的 `deliver=` 目标。要在 cron 任务运行于独立进程（即 `argus cron run` 与 `argus gateway` 分离）时使实际发送成功，需注册 `standalone_sender_fn`：
 
 ```python
 async def _standalone_send(
@@ -322,7 +322,7 @@ ctx.register_platform(
 
 该函数接收与实时适配器相同的 `pconfig` 和 `chat_id`，以及可选的 `thread_id`、`media_files` 和 `force_document` 关键字参数。返回 `{"success": True, "message_id": ...}` 视为成功投递；返回 `{"error": "..."}` 会将消息记录到 cron 的 `delivery_errors` 中。函数内抛出的异常由调度器捕获并报告为 `Plugin standalone send failed: <reason>`。参考实现位于 `plugins/platforms/{irc,teams,google_chat}/adapter.py`。
 
-## 在 `hermes config` 中暴露环境变量 {#surfacing-env-vars-in-hermes-config}
+## 在 `argus config` 中暴露环境变量 {#surfacing-env-vars-in-hermes-config}
 
 `hermes_cli/config.py` 在导入时扫描 `plugins/platforms/*/plugin.yaml`，并从 `requires_env` 和（可选的）`optional_env` 块自动填充 `OPTIONAL_ENV_VARS`。使用富字典形式可提供完整的描述、prompt、password 标志和 URL — CLI 设置 UI 会自动识别。
 
@@ -333,7 +333,7 @@ label: My Platform
 kind: platform
 version: 1.0.0
 description: >
-  My Platform gateway adapter for Hermes Agent.
+  My Platform gateway adapter for Argus Agent.
 author: Your Name
 requires_env:
   - name: MY_PLATFORM_TOKEN
@@ -457,7 +457,7 @@ LINE 两者都支持：阈值默认为 45 秒用于免费 postback 获取，`LIN
 ## 分步清单（内置路径）{#step-by-step-checklist}
 
 :::note
-此清单用于将平台直接添加到 Hermes 核心代码库 — 通常由核心贡献者为官方支持的平台执行。社区/第三方平台应使用上方的 [Plugin 路径](#plugin-path-recommended)。
+此清单用于将平台直接添加到 Argus 核心代码库 — 通常由核心贡献者为官方支持的平台执行。社区/第三方平台应使用上方的 [Plugin 路径](#plugin-path-recommended)。
 :::
 
 ### 1. Platform 枚举

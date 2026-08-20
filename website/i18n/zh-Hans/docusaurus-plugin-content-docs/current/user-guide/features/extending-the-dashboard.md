@@ -1,14 +1,14 @@
 ---
 sidebar_position: 17
 title: "扩展 Dashboard"
-description: "为 Hermes Web Dashboard 构建主题和插件——调色板、字体排版、布局、自定义标签页、shell 插槽、页面级插槽以及后端 API 路由"
+description: "为 Argus Web Dashboard 构建主题和插件——调色板、字体排版、布局、自定义标签页、shell 插槽、页面级插槽以及后端 API 路由"
 ---
 
 # 扩展 Dashboard
 
-Hermes Web Dashboard（`hermes dashboard`）在设计上支持换肤和扩展，无需 fork 代码库。对外暴露三个层次：
+Argus Web Dashboard（`argus dashboard`）在设计上支持换肤和扩展，无需 fork 代码库。对外暴露三个层次：
 
-1. **主题（Themes）** — YAML 文件，用于重绘 dashboard 的调色板、字体排版、布局以及各组件的外观。将文件放入 `~/.hermes/dashboard-themes/`，即可在主题切换器中看到它。
+1. **主题（Themes）** — YAML 文件，用于重绘 dashboard 的调色板、字体排版、布局以及各组件的外观。将文件放入 `~/.argus/dashboard-themes/`，即可在主题切换器中看到它。
 2. **UI 插件（UI plugins）** — 一个包含 `manifest.json` 和 JavaScript bundle 的目录，可注册标签页、替换内置页面、通过页面级插槽增强内置页面，或向命名 shell 插槽注入组件。
 3. **后端插件（Backend plugins）** — 插件目录内的 Python 文件，暴露一个 FastAPI `router`；路由挂载在 `/api/plugins/<name>/` 下，由插件的 UI 调用。
 
@@ -54,16 +54,16 @@ Hermes Web Dashboard（`hermes dashboard`）在设计上支持换肤和扩展，
 
 ## 主题
 
-主题是存储在 `~/.hermes/dashboard-themes/` 中的 YAML 文件。文件名无关紧要（系统使用主题的 `name:` 字段），但惯例是 `<name>.yaml`。所有字段均为可选——缺失的键会回退到内置的 `default` 主题，因此一个主题可以只包含一个颜色。
+主题是存储在 `~/.argus/dashboard-themes/` 中的 YAML 文件。文件名无关紧要（系统使用主题的 `name:` 字段），但惯例是 `<name>.yaml`。所有字段均为可选——缺失的键会回退到内置的 `default` 主题，因此一个主题可以只包含一个颜色。
 
 ### 快速上手——你的第一个主题
 
 ```bash
-mkdir -p ~/.hermes/dashboard-themes
+mkdir -p ~/.argus/dashboard-themes
 ```
 
 ```yaml
-# ~/.hermes/dashboard-themes/neon.yaml
+# ~/.argus/dashboard-themes/neon.yaml
 name: neon
 label: Neon
 description: Pure magenta on black
@@ -264,22 +264,22 @@ CSS 在主题应用时以单个带作用域的 `<style data-hermes-theme-css>` �
 
 | 主题 | 调色板 | 字体排版 | 布局 |
 |-------|---------|------------|--------|
-| **Hermes Teal**（`default`） | 深青色 + 奶油色 | 系统字体栈，15px | 0.5rem 圆角，comfortable |
-| **Hermes Teal (Large)**（`default-large`） | 同 default | 系统字体栈，18px，行高 1.65 | 0.5rem 圆角，spacious |
+| **Argus Teal**（`default`） | 深青色 + 奶油色 | 系统字体栈，15px | 0.5rem 圆角，comfortable |
+| **Argus Teal (Large)**（`default-large`） | 同 default | 系统字体栈，18px，行高 1.65 | 0.5rem 圆角，spacious |
 | **Midnight**（`midnight`） | 深蓝紫色 | Inter + JetBrains Mono，14px | 0.75rem 圆角，comfortable |
 | **Ember**（`ember`） | 暖深红 + 古铜色 | Spectral（衬线）+ IBM Plex Mono，15px | 0.25rem 圆角，comfortable |
 | **Mono**（`mono`） | 灰度 | IBM Plex Sans + IBM Plex Mono，13px | 0 圆角，compact |
 | **Cyberpunk**（`cyberpunk`） | 黑底霓虹绿 | Share Tech Mono 全局，14px | 0 圆角，compact |
 | **Rosé**（`rose`） | 粉色 + 象牙色 | Fraunces（衬线）+ DM Mono，16px | 1rem 圆角，spacious |
 
-引用 Google Fonts 的主题（除 Hermes Teal 外均如此）会按需加载样式表——首次切换时会向 `<head>` 注入一个 `<link>` 标签。
+引用 Google Fonts 的主题（除 Argus Teal 外均如此）会按需加载样式表——首次切换时会向 `<head>` 注入一个 `<link>` 标签。
 
 ### 完整主题 YAML 参考
 
 所有配置项汇总在一个文件中——复制后删除不需要的部分：
 
 ```yaml
-# ~/.hermes/dashboard-themes/ocean.yaml
+# ~/.argus/dashboard-themes/ocean.yaml
 name: ocean
 label: Ocean Deep
 description: Deep sea blues with coral accents
@@ -341,7 +341,7 @@ customCSS: |
 
 ## 插件
 
-Dashboard 插件是一个包含 `manifest.json`、预构建 JS bundle，以及可选的 CSS 文件和带 FastAPI 路由的 Python 文件的目录。插件与其他 Hermes 插件一起存放在 `~/.hermes/plugins/<name>/`——dashboard 扩展是该插件目录内的 `dashboard/` 子文件夹，因此一个插件可以从单次安装中同时扩展 CLI/gateway 和 dashboard。
+Dashboard 插件是一个包含 `manifest.json`、预构建 JS bundle，以及可选的 CSS 文件和带 FastAPI 路由的 Python 文件的目录。插件与其他 Argus 插件一起存放在 `~/.argus/plugins/<name>/`——dashboard 扩展是该插件目录内的 `dashboard/` 子文件夹，因此一个插件可以从单次安装中同时扩展 CLI/gateway 和 dashboard。
 
 插件不打包 React 或 UI 组件，而是使用暴露在 `window.__HERMES_PLUGIN_SDK__` 上的 **Plugin SDK**。这使插件 bundle 保持极小体积（通常只有几 KB），并避免版本冲突。
 
@@ -350,13 +350,13 @@ Dashboard 插件是一个包含 `manifest.json`、预构建 JS bundle，以及�
 创建目录结构：
 
 ```bash
-mkdir -p ~/.hermes/plugins/my-plugin/dashboard/dist
+mkdir -p ~/.argus/plugins/my-plugin/dashboard/dist
 ```
 
 编写 manifest：
 
 ```json
-// ~/.hermes/plugins/my-plugin/dashboard/manifest.json
+// ~/.argus/plugins/my-plugin/dashboard/manifest.json
 {
   "name": "my-plugin",
   "label": "My Plugin",
@@ -373,7 +373,7 @@ mkdir -p ~/.hermes/plugins/my-plugin/dashboard/dist
 编写 JS bundle（普通 IIFE——无需构建步骤）：
 
 ```javascript
-// ~/.hermes/plugins/my-plugin/dashboard/dist/index.js
+// ~/.argus/plugins/my-plugin/dashboard/dist/index.js
 (function () {
   "use strict";
 
@@ -407,7 +407,7 @@ mkdir -p ~/.hermes/plugins/my-plugin/dashboard/dist
 ### 目录结构
 
 ```
-~/.hermes/plugins/my-plugin/
+~/.argus/plugins/my-plugin/
 ├── plugin.yaml              # optional — existing CLI/gateway plugin manifest
 ├── __init__.py              # optional — existing CLI/gateway hooks
 └── dashboard/               # dashboard extension
@@ -506,7 +506,7 @@ SDK.components.TabsList
 SDK.components.TabsTrigger
 SDK.components.PluginSlot    // render a named slot (useful for nested plugin UIs)
 
-// Hermes API client + raw fetcher
+// Argus API client + raw fetcher
 SDK.api                      // typed client — getStatus, getSessions, getConfig, ...
 SDK.fetchJSON                // raw fetch for custom endpoints (plugin-registered routes)
 
@@ -529,7 +529,7 @@ SDK.fetchJSON("/api/plugins/my-plugin/data")
 
 `fetchJSON` 会自动注入会话认证 token，将错误作为异常抛出，并自动解析 JSON。
 
-#### 调用内置 Hermes 端点
+#### 调用内置 Argus 端点
 
 ```javascript
 // Agent status
@@ -559,7 +559,7 @@ window.__HERMES_PLUGINS__.registerSlot("my-plugin", "header-left", MyCrest);
 | 插槽 | 位置 |
 |------|----------|
 | `backdrop` | `<Backdrop />` 层叠栈内，噪点层之上。 |
-| `header-left` | 顶栏 Hermes 品牌之前。 |
+| `header-left` | 顶栏 Argus 品牌之前。 |
 | `header-right` | 顶栏主题/语言切换器之前。 |
 | `header-banner` | 导航栏下方的全宽条带。 |
 | `sidebar` | Cockpit 侧边栏轨道——**仅在 `layoutVariant === "cockpit"` 时渲染**。 |
@@ -642,7 +642,7 @@ Shell 只为上述插槽渲染 `<PluginSlot name="..." />`。注册表接受额�
 最简示例——在 Sessions 页面顶部固定一个横幅：
 
 ```json
-// ~/.hermes/plugins/session-notes/dashboard/manifest.json
+// ~/.argus/plugins/session-notes/dashboard/manifest.json
 {
   "name": "session-notes",
   "label": "Session Notes",
@@ -653,7 +653,7 @@ Shell 只为上述插槽渲染 `<PluginSlot name="..." />`。注册表接受额�
 ```
 
 ```javascript
-// ~/.hermes/plugins/session-notes/dashboard/dist/index.js
+// ~/.argus/plugins/session-notes/dashboard/dist/index.js
 (function () {
   const SDK = window.__HERMES_PLUGIN_SDK__;
   const { React } = SDK;
@@ -708,7 +708,7 @@ Bundle 仍需调用带占位符组件的 `register()`（以防有人直接访问
 插件可通过在 manifest 中设置 `api` 来注册 FastAPI 路由。创建文件并导出 `router`：
 
 ```python
-# ~/.hermes/plugins/my-plugin/dashboard/plugin_api.py
+# ~/.argus/plugins/my-plugin/dashboard/plugin_api.py
 from fastapi import APIRouter
 
 router = APIRouter()
@@ -729,7 +729,7 @@ async def do_action(body: dict):
 
 插件 API 路由绕过会话 token 认证，因为 dashboard 服务器默认绑定到 localhost。**如果运行不受信任的插件，请勿使用 `--host 0.0.0.0` 将 dashboard 暴露在公共接口上**——其路由也会变得可访问。
 
-#### 访问 Hermes 内部模块
+#### 访问 Argus 内部模块
 
 后端路由在 dashboard 进程内运行，因此可以直接从 hermes-agent 代码库导入：
 
@@ -788,10 +788,10 @@ Dashboard 扫描三个目录中的 `dashboard/manifest.json`：
 
 | 优先级 | 目录 | 来源标签 |
 |----------|-----------|--------------|
-| 1（冲突时优先） | `~/.hermes/plugins/<name>/dashboard/` | `user` |
+| 1（冲突时优先） | `~/.argus/plugins/<name>/dashboard/` | `user` |
 | 2 | `<repo>/plugins/memory/<name>/dashboard/` | `bundled` |
 | 2 | `<repo>/plugins/<name>/dashboard/` | `bundled` |
-| 3 | `./.hermes/plugins/<name>/dashboard/` | `project`——仅在设置 `HERMES_ENABLE_PROJECT_PLUGINS` 时生效 |
+| 3 | `./.argus/plugins/<name>/dashboard/` | `project`——仅在设置 `HERMES_ENABLE_PROJECT_PLUGINS` 时生效 |
 
 发现结果在每个 dashboard 进程中缓存。添加新插件后，可以：
 
@@ -800,7 +800,7 @@ Dashboard 扫描三个目录中的 `dashboard/manifest.json`：
 curl http://127.0.0.1:9119/api/dashboard/plugins/rescan
 ```
 
-……或重启 `hermes dashboard`。
+……或重启 `argus dashboard`。
 
 #### 插件加载生命周期
 
@@ -836,13 +836,13 @@ git clone https://github.com/NousResearch/hermes-example-plugins.git
 
 # Theme
 cp hermes-example-plugins/strike-freedom-cockpit/theme/strike-freedom.yaml \
-   ~/.hermes/dashboard-themes/
+   ~/.argus/dashboard-themes/
 
 # Plugin
-cp -r hermes-example-plugins/strike-freedom-cockpit ~/.hermes/plugins/
+cp -r hermes-example-plugins/strike-freedom-cockpit ~/.argus/plugins/
 ```
 
-打开 dashboard，从主题切换器中选择 **Strike Freedom**。驾驶舱侧边栏出现，徽标显示在顶栏，标语替换底栏。切换回 **Hermes Teal**，插件仍然安装但不可见（`sidebar` 插槽仅在 `cockpit` 布局变体下渲染）。
+打开 dashboard，从主题切换器中选择 **Strike Freedom**。驾驶舱侧边栏出现，徽标显示在顶栏，标语替换底栏。切换回 **Argus Teal**，插件仍然安装但不可见（`sidebar` 插槽仅在 `cockpit` 布局变体下渲染）。
 
 阅读插件源码（伴随仓库中的 `strike-freedom-cockpit/dashboard/dist/index.js`），了解它如何读取 CSS 变量、防范不支持插槽的旧版 dashboard，以及如何从单个 bundle 注册三个插槽。
 
@@ -879,10 +879,10 @@ cp -r hermes-example-plugins/strike-freedom-cockpit ~/.hermes/plugins/
 ## 故障排查
 
 **我的主题没有出现在选择器中。**
-检查文件是否在 `~/.hermes/dashboard-themes/` 中且以 `.yaml` 或 `.yml` 结尾。刷新页面。运行 `curl http://127.0.0.1:9119/api/dashboard/themes`——你的主题应出现在响应中。如果 YAML 有解析错误，dashboard 会记录到 `~/.hermes/logs/` 下的 `errors.log`。
+检查文件是否在 `~/.argus/dashboard-themes/` 中且以 `.yaml` 或 `.yml` 结尾。刷新页面。运行 `curl http://127.0.0.1:9119/api/dashboard/themes`——你的主题应出现在响应中。如果 YAML 有解析错误，dashboard 会记录到 `~/.argus/logs/` 下的 `errors.log`。
 
 **我的插件标签页没有显示。**
-1. 检查 manifest 是否在 `~/.hermes/plugins/<name>/dashboard/manifest.json`（注意 `dashboard/` 子目录）。
+1. 检查 manifest 是否在 `~/.argus/plugins/<name>/dashboard/manifest.json`（注意 `dashboard/` 子目录）。
 2. 运行 `curl http://127.0.0.1:9119/api/dashboard/plugins/rescan` 强制重新发现。
 3. 打开浏览器开发工具 → Network——确认 `manifest.json`、`index.js` 和任何 CSS 均无 404 加载成功。
 4. 打开浏览器开发工具 → Console——查找 IIFE 执行期间的错误或 `window.__HERMES_PLUGINS__ is undefined`（表示 SDK 未初始化，通常是更早的 React 渲染崩溃导致）。
@@ -893,9 +893,9 @@ cp -r hermes-example-plugins/strike-freedom-cockpit ~/.hermes/plugins/
 
 **插件后端路由返回 404。**
 1. 确认 manifest 中有 `"api": "plugin_api.py"` 且指向 `dashboard/` 内的现有文件。
-2. 重启 `hermes dashboard`——插件 API 路由在启动时挂载一次，**不会**在重新扫描时挂载。
+2. 重启 `argus dashboard`——插件 API 路由在启动时挂载一次，**不会**在重新扫描时挂载。
 3. 检查 `plugin_api.py` 是否导出了模块级的 `router = APIRouter()`。其他导出名称不会被识别。
-4. 查看 `~/.hermes/logs/errors.log` 中的 `Failed to load plugin <name> API routes`——导入错误会记录在那里。
+4. 查看 `~/.argus/logs/errors.log` 中的 `Failed to load plugin <name> API routes`——导入错误会记录在那里。
 
 **切换主题后我的颜色覆盖丢失了。**
 `colorOverrides` 的作用域限于激活主题，切换主题时会被清除——这是设计行为。如果你希望覆盖持久化，请将其写入主题的 YAML，而非实时切换器。
@@ -904,4 +904,4 @@ cp -r hermes-example-plugins/strike-freedom-cockpit ~/.hermes/plugins/
 `customCSS` 块每个主题上限为 32 KiB。可将大型样式表拆分到多个主题中，或改用通过 `css` 字段注入完整样式表的插件（无大小限制）。
 
 **我想在 PyPI 上发布插件。**
-Dashboard 插件通过目录结构安装，而非 pip 入口点。目前最简洁的分发方式是用户克隆到 `~/.hermes/plugins/` 的 git 仓库。基于 pip 的 dashboard 插件安装器目前尚未实现。
+Dashboard 插件通过目录结构安装，而非 pip 入口点。目前最简洁的分发方式是用户克隆到 `~/.argus/plugins/` 的 git 仓库。基于 pip 的 dashboard 插件安装器目前尚未实现。

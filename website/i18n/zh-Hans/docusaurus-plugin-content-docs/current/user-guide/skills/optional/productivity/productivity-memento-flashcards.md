@@ -14,7 +14,7 @@ description: "间隔重复闪卡系统"
 
 | | |
 |---|---|
-| 来源 | 可选 — 使用 `hermes skills install official/productivity/memento-flashcards` 安装 |
+| 来源 | 可选 — 使用 `argus skills install official/productivity/memento-flashcards` 安装 |
 | 路径 | `optional-skills/productivity/memento-flashcards` |
 | 版本 | `1.0.0` |
 | 作者 | Memento AI |

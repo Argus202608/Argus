@@ -21,13 +21,13 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  IMAGE_NAME: nousresearch/hermes-agent
+  IMAGE_NAME: mmargus/argus
 
 jobs:
   # Build, test, and optionally push the amd64 image.
   build-amd64:
     # Only run on the upstream repository, not on forks
-    if: github.repository == 'NousResearch/hermes-agent'
+    if: github.repository == 'MMArgus-Team/Argus' && vars.ARGUS_ENABLE_DOCKER_CI == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     outputs:
@@ -146,7 +146,7 @@ jobs:
   # Build, test, and optionally push the arm64 image.
   # ---------------------------------------------------------------------------
   build-arm64:
-    if: github.repository == 'NousResearch/hermes-agent'
+    if: github.repository == 'MMArgus-Team/Argus' && vars.ARGUS_ENABLE_DOCKER_CI == 'true'
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 45
     outputs:
@@ -190,8 +190,8 @@ jobs:
           tags: ${{ env.IMAGE_NAME }}:test
           build-args: |
             HERMES_GIT_SHA=${{ github.sha }}
-          cache-from: type=registry,ref=ghcr.io/nousresearch/hermes-agent:buildcache-arm64
-          cache-to: type=registry,ref=ghcr.io/nousresearch/hermes-agent:buildcache-arm64,mode=max
+          cache-from: type=registry,ref=ghcr.io/mmargus/argus:buildcache-arm64
+          cache-to: type=registry,ref=ghcr.io/mmargus/argus:buildcache-arm64,mode=max
 
       - name: Install uv for docker tests
         uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # 8.2.0
@@ -233,8 +233,8 @@ jobs:
           build-args: |
             HERMES_GIT_SHA=${{ github.sha }}
           outputs: type=image,name=${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
-          cache-from: type=registry,ref=ghcr.io/nousresearch/hermes-agent:buildcache-arm64
-          cache-to: type=registry,ref=ghcr.io/nousresearch/hermes-agent:buildcache-arm64,mode=max
+          cache-from: type=registry,ref=ghcr.io/mmargus/argus:buildcache-arm64
+          cache-to: type=registry,ref=ghcr.io/mmargus/argus:buildcache-arm64,mode=max
 
       - name: Export digest
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' || github.event_name == 'release'
@@ -261,7 +261,7 @@ jobs:
   # On releases: tags :<release_tag_name>.
   # ---------------------------------------------------------------------------
   merge:
-    if: github.repository == 'NousResearch/hermes-agent' && (github.event_name == 'push' && github.ref == 'refs/heads/main' || github.event_name == 'release')
+    if: github.repository == 'MMArgus-Team/Argus' && vars.ARGUS_ENABLE_DOCKER_CI == 'true' && (github.event_name == 'push' && github.ref == 'refs/heads/main' || github.event_name == 'release')
     runs-on: ubuntu-latest
     needs: [build-amd64, build-arm64]
     timeout-minutes: 10

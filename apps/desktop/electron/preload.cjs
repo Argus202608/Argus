@@ -11,7 +11,7 @@ function supportsDisplayMediaSystemAudio() {
   return match !== null && Number.parseInt(match[1], 10) >= 13
 }
 
-contextBridge.exposeInMainWorld('hermesDesktop', {
+const argusDesktop = {
   // Static renderer capability from the Electron process/host OS, rather than
   // a renderer UA guess. Electron 40 supports system-audio display capture on
   // Windows and on macOS 13+ (CoreAudio Tap); Linux remains disabled here.
@@ -239,4 +239,9 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
     fetchMarketplace: id => ipcRenderer.invoke('hermes:vscode-theme:fetch', id),
     searchMarketplace: query => ipcRenderer.invoke('hermes:vscode-theme:search', query)
   }
-})
+}
+
+// Canonical renderer bridge. The legacy name remains exposed for third-party
+// preload consumers and older renderer bundles during rolling upgrades.
+contextBridge.exposeInMainWorld('argusDesktop', argusDesktop)
+contextBridge.exposeInMainWorld('hermesDesktop', argusDesktop)

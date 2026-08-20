@@ -3,7 +3,7 @@ label: Raft
 kind: platform
 version: 1.0.0
 description: >
-  Raft gateway adapter for Hermes Agent.
+  Raft gateway adapter for Argus.
   Connects to a Raft workspace as an external agent via a local
   wake-channel bridge. The adapter starts a loopback HTTP endpoint
   that receives content-free wake hints from the bridge, then

@@ -75,7 +75,7 @@ export function isWatchWindow(): boolean {
 // True when running inside the Electron desktop shell (the preload bridge is
 // present). The "open in new window" affordance is desktop-only.
 export function canOpenSessionWindow(): boolean {
-  return typeof window !== 'undefined' && typeof window.hermesDesktop?.openSessionWindow === 'function'
+  return typeof window !== 'undefined' && typeof window.argusDesktop?.openSessionWindow === 'function'
 }
 
 type WindowOpenResult = { ok: boolean; error?: string } | undefined
@@ -102,14 +102,14 @@ export async function openSessionInNewWindow(sessionId: string, opts?: { watch?:
     return
   }
 
-  await openWindow(() => window.hermesDesktop.openSessionWindow(sessionId, opts), 'Could not open chat in a new window')
+  await openWindow(() => window.argusDesktop.openSessionWindow(sessionId, opts), 'Could not open chat in a new window')
 }
 
 // Open a fresh compact window on the new-session draft.
 export async function openNewSessionInNewWindow(): Promise<void> {
-  if (!canOpenSessionWindow() || typeof window.hermesDesktop.openNewSessionWindow !== 'function') {
+  if (!canOpenSessionWindow() || typeof window.argusDesktop.openNewSessionWindow !== 'function') {
     return
   }
 
-  await openWindow(() => window.hermesDesktop.openNewSessionWindow(), 'Could not open new session window')
+  await openWindow(() => window.argusDesktop.openNewSessionWindow(), 'Could not open new session window')
 }

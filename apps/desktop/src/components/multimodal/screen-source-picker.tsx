@@ -90,7 +90,7 @@ export function ScreenSourcePickerHost(): React.JSX.Element | null {
   // off; screens/windows never yield audio on the web either).
   const [shareAudio, setShareAudio] = useState<boolean>(false)
   const [activeTab, setActiveTab] = useState<'screen' | 'window'>('screen')
-  const systemAudioSupported = window.hermesDesktop?.screenShareSystemAudio === true
+  const systemAudioSupported = window.argusDesktop?.screenShareSystemAudio === true
   const effectiveShareAudio = systemAudioSupported && shareAudio
 
   useEffect(() => {
@@ -107,7 +107,7 @@ export function ScreenSourcePickerHost(): React.JSX.Element | null {
     setError('')
     void (async () => {
       try {
-        const bridge = window.hermesDesktop?.multimodalSourcePicker
+        const bridge = window.argusDesktop?.multimodalSourcePicker
         if (!bridge) throw new Error('multimodalSourcePicker unavailable (renderer only)')
         const res = await bridge.listSources()
         if (cancelled) return

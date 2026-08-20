@@ -99,7 +99,7 @@ class FakeBot:
         self.intents = intents
         self.allowed_mentions = allowed_mentions
         self.application_id = 999
-        self.user = SimpleNamespace(id=999, name="Hermes")
+        self.user = SimpleNamespace(id=999, name="Argus")
         self._events = {}
         self.tree = FakeTree()
         self.http = SimpleNamespace(
@@ -512,7 +512,7 @@ async def test_safe_sync_slash_commands_only_mutates_diffs():
 
     desired_same = {
         "name": "status",
-        "description": "Show Hermes session status",
+        "description": "Show Argus session status",
         "type": 1,
         "options": [],
         "nsfw": False,
@@ -691,7 +691,7 @@ async def test_post_connect_initialization_skips_same_fingerprint_after_success(
         def to_dict(self, tree):
             return {
                 "name": "status",
-                "description": "Show Hermes status",
+                "description": "Show Argus status",
                 "type": 1,
                 "options": [],
             }
@@ -728,7 +728,7 @@ async def test_post_connect_initialization_respects_discord_retry_after(tmp_path
         def to_dict(self, tree):
             return {
                 "name": "status",
-                "description": "Show Hermes status",
+                "description": "Show Argus status",
                 "type": 1,
                 "options": [],
             }
@@ -767,7 +767,7 @@ async def test_post_connect_initialization_reraises_non_rate_limit_exceptions(tm
 
     class _DesiredCommand:
         def to_dict(self, tree):
-            return {"name": "status", "description": "Show Hermes status", "type": 1, "options": []}
+            return {"name": "status", "description": "Show Argus status", "type": 1, "options": []}
 
     adapter._client = SimpleNamespace(
         tree=SimpleNamespace(get_commands=lambda: [_DesiredCommand()]),
@@ -826,7 +826,7 @@ async def test_safe_sync_slash_commands_paces_mutation_writes(monkeypatch):
 
     desired_one = {
         "name": "status",
-        "description": "Show Hermes status",
+        "description": "Show Argus status",
         "type": 1,
         "options": [],
     }

@@ -40,7 +40,7 @@ def _build_plan_update_from_todo_result(result: Any) -> AgentPlanUpdate | None:
     """Translate Hermes' todo tool result into ACP's native plan update.
 
     Zed renders ``sessionUpdate: plan`` as its first-class task/todo panel. The
-    Hermes agent already maintains task state through the ``todo`` tool, so the
+    Argus already maintains task state through the ``todo`` tool, so the
     ACP adapter should expose that state natively instead of only as a generic
     tool-call transcript block.
     """

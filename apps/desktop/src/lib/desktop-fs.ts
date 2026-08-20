@@ -37,7 +37,7 @@ function fsPath(endpoint: string, filePath: string) {
 }
 
 function bridge() {
-  const desktop = window.hermesDesktop
+  const desktop = window.argusDesktop
 
   if (!desktop) {
     throw new Error('Argus Desktop bridge is unavailable')

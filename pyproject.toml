@@ -18,7 +18,7 @@ readme = "README.md"
 # <3.14 makes uv refuse 3.14 with a clear error instead of attempting that
 # build. Raise the ceiling once our Rust transitives ship cp314 wheels.
 requires-python = ">=3.11,<3.14"
-authors = [{ name = "Nous Research" }, { name = "Argus Contributors" }]
+authors = [{ name = "MMArgus Team" }, { name = "Argus Contributors" }]
 maintainers = [{ name = "Argus Contributors" }]
 license = "MIT"
 license-files = ["LICENSE"]
@@ -37,7 +37,7 @@ dependencies = [
   # `uv lock` so the transitive resolution stays consistent. Don't
   # introduce ranges back without a written justification.
   #
-  # Scope rule: only packages used by EVERY hermes session belong here.
+  # Scope rule: only packages used by EVERY Argus session belong here.
   # Anything that's provider-specific (`anthropic`, `firecrawl-py`,
   # `exa-py`, `fal-client`, `edge-tts`, `parallel-web`) belongs in an
   # extra and gets lazy-installed via `tools/lazy_deps.py` when the
@@ -147,7 +147,7 @@ dependencies = [
 # OpenRouter or other aggregators).
 anthropic = ["anthropic==0.87.0"]  # CVE-2026-34450, CVE-2026-34452
 # Web search backends — each only loaded when the user picks it as their
-# search provider (configured via `hermes tools` or config.yaml).
+# search provider (configured via `argus tools` or config.yaml).
 exa = ["exa-py==2.10.2"]
 firecrawl = ["firecrawl-py==4.17.0"]
 parallel-web = ["parallel-web==0.4.2"]
@@ -205,7 +205,7 @@ homeassistant = ["aiohttp==3.13.4"]
 sms = ["aiohttp==3.13.4"]
 teams = ["microsoft-teams-apps==2.0.13.4", "aiohttp==3.13.4"]
 # Computer use — macOS background desktop control via cua-driver (MCP stdio).
-# The cua-driver binary itself is installed via `hermes tools` post-setup
+# The cua-driver binary itself is installed via `argus tools` post-setup
 # (curl install script); this extra just pins the MCP client used to talk
 # to it, which is already provided by the `mcp` extra.
 computer-use = ["mcp==1.26.0", "starlette==1.0.1"]  # starlette: CVE-2026-48710
@@ -260,7 +260,7 @@ youtube = [
   # at first invocation with ModuleNotFoundError (issue #22243).
   "youtube-transcript-api==1.2.4",
 ]
-# `hermes dashboard` (localhost SPA + API).  Not in core to keep the default install lean.
+# `argus dashboard` (localhost SPA + API).  Not in core to keep the default install lean.
 # starlette==1.0.1 pinned for CVE-2026-48710 (BadHost) — fastapi pulls Starlette
 # transitively and pre-1.0.1 is the vulnerable range. See the mcp extra above.
 web = ["fastapi==0.133.1", "uvicorn[standard]==0.41.0", "starlette==1.0.1", "python-multipart==0.0.27"]
@@ -305,7 +305,9 @@ Issues = "https://github.com/MMArgus-Team/Argus/issues"
 Documentation = "https://github.com/MMArgus-Team/Argus/tree/main/website/docs"
 
 [project.scripts]
-argus = "hermes_cli.main:main"
+argus = "argus_cli.main:main"
+argus-agent = "run_agent:main"
+argus-acp = "acp_adapter.entry:main"
 mm-argus = "run_agent:main"
 # Backward-compatible entry points inherited from Hermes Agent.
 hermes = "hermes_cli.main:main"
@@ -325,7 +327,7 @@ py-modules = ["run_agent", "model_tools", "toolsets", "batch_runner", "trajector
 locales = ["locales/*.yaml"]
 # Shipped MCP catalog (optional-mcps/<name>/manifest.yaml). Same bare-data-dir
 # case as locales: data-files ships it in the wheel, `graft optional-mcps` in
-# MANIFEST.in ships it in the sdist. Without this, `hermes mcp catalog` and the
+# MANIFEST.in ships it in the sdist. Without this, `argus mcp catalog` and the
 # dashboard catalog screen come up empty on packaged installs even though the
 # manifests exist in the repo (hermes_cli/mcp_catalog.py:_catalog_root resolves
 # the packaged dir; list_catalog() returns [] when it's missing).
@@ -361,7 +363,7 @@ plugins = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["agent", "agent.*", "tools", "tools.*", "hermes_cli", "hermes_cli.*", "gateway", "gateway.*", "tui_gateway", "tui_gateway.*", "cron", "cron.*", "acp_adapter", "plugins", "plugins.*", "providers", "providers.*"]
+include = ["agent", "agent.*", "tools", "tools.*", "argus_cli", "argus_cli.*", "hermes_cli", "hermes_cli.*", "gateway", "gateway.*", "tui_gateway", "tui_gateway.*", "cron", "cron.*", "acp_adapter", "plugins", "plugins.*", "providers", "providers.*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -765,7 +765,7 @@ export async function startScreenCapture(): Promise<void> {
   // Part 2: let the user pick which screen/window to share *before* we call
   // getDisplayMedia, then persist the choice into the main process so
   // setDisplayMediaRequestHandler can match against this exact source id.
-  const bridge = window.hermesDesktop?.multimodalSourcePicker
+  const bridge = window.argusDesktop?.multimodalSourcePicker
   let picked: { id: string; name: string; shareAudio: boolean } | null = null
   try {
     const mod = await import('@/components/multimodal/screen-source-picker')
@@ -792,7 +792,7 @@ export async function startScreenCapture(): Promise<void> {
   // must not request an unsupported system-audio path; main.cjs independently
   // enforces the Windows + macOS 13+ boundary.
   const shareAudio =
-    window.hermesDesktop?.screenShareSystemAudio === true && picked.shareAudio
+    window.argusDesktop?.screenShareSystemAudio === true && picked.shareAudio
   const light = preferLightCapture()
   const width = light ? 1280 : 1920
   const height = light ? 720 : 1080

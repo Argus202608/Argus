@@ -1,5 +1,5 @@
 """
-Session-scoped context variables for the Hermes gateway.
+Session-scoped context variables for the Argus gateway.
 
 Replaces the previous ``os.environ``-based session state
 (``ARGUS_SESSION_PLATFORM``, ``ARGUS_SESSION_CHAT_ID``, etc.) with

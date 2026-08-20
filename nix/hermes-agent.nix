@@ -1,9 +1,9 @@
-# nix/hermes-agent.nix — Overridable Hermes Agent package
+# nix/hermes-agent.nix — Overridable Argus package (legacy filename retained)
 #
 # callPackage auto-wires nixpkgs args; flake inputs are passed explicitly.
 # Users override via:
-#   pkgs.hermes-agent.override { extraPythonPackages = [...]; }
-#   pkgs.hermes-agent.override { extraDependencyGroups = [ "hindsight" ]; }
+#   pkgs.argus.override { extraPythonPackages = [...]; }
+#   pkgs.argus.override { extraDependencyGroups = [ "hindsight" ]; }
 {
   lib,
   stdenv,
@@ -151,7 +151,7 @@ let
   '';
 in
 stdenv.mkDerivation (finalAttrs: {
-  pname = "hermes-agent";
+  pname = "mm-argus";
   version = (fromTOML (builtins.readFile ../pyproject.toml)).project.version;
 
   dontUnpack = true;
@@ -161,23 +161,23 @@ stdenv.mkDerivation (finalAttrs: {
   installPhase = ''
     runHook preInstall
 
-    mkdir -p $out/share/hermes-agent $out/bin
-    cp -r ${bundledSkills} $out/share/hermes-agent/skills
-    cp -r ${bundledPlugins} $out/share/hermes-agent/plugins
-    cp -r ${bundledLocales} $out/share/hermes-agent/locales
-    cp -r ${hermesWeb} $out/share/hermes-agent/web_dist
+    mkdir -p $out/share/argus $out/bin
+    cp -r ${bundledSkills} $out/share/argus/skills
+    cp -r ${bundledPlugins} $out/share/argus/plugins
+    cp -r ${bundledLocales} $out/share/argus/locales
+    cp -r ${hermesWeb} $out/share/argus/web_dist
 
     mkdir -p $out/ui-tui
-    cp -r ${hermesTui}/lib/hermes-tui/* $out/ui-tui/
+    cp -r ${hermesTui}/lib/argus-tui/* $out/ui-tui/
 
     ${lib.concatMapStringsSep "\n"
       (name: ''
         makeWrapper ${hermesVenv}/bin/${name} $out/bin/${name} \
           --suffix PATH : "${runtimePath}" \
-          --set ARGUS_BUNDLED_SKILLS $out/share/hermes-agent/skills \
-          --set ARGUS_BUNDLED_PLUGINS $out/share/hermes-agent/plugins \
-          --set ARGUS_BUNDLED_LOCALES $out/share/hermes-agent/locales \
-          --set ARGUS_WEB_DIST $out/share/hermes-agent/web_dist \
+          --set ARGUS_BUNDLED_SKILLS $out/share/argus/skills \
+          --set ARGUS_BUNDLED_PLUGINS $out/share/argus/plugins \
+          --set ARGUS_BUNDLED_LOCALES $out/share/argus/locales \
+          --set ARGUS_WEB_DIST $out/share/argus/web_dist \
           --set ARGUS_TUI_DIR $out/ui-tui \
           --set ARGUS_PYTHON ${hermesVenv}/bin/python3 \
           --set ARGUS_NODE ${lib.getExe nodejs} \
@@ -185,6 +185,11 @@ stdenv.mkDerivation (finalAttrs: {
           ${lib.optionalString (extraPythonPackages != [ ]) ''--suffix PYTHONPATH : "${pythonPath}"''}
       '')
       [
+        "argus"
+        "argus-agent"
+        "argus-acp"
+        "mm-argus"
+        # Compatibility entry points for pre-Argus integrations.
         "hermes"
         "hermes-agent"
         "hermes-acp"
@@ -208,13 +213,23 @@ stdenv.mkDerivation (finalAttrs: {
       hermesVenv
       ;
 
-    # `hermesDesktop` references `finalAttrs.finalPackage` (this whole
+    argusTui = hermesTui;
+    argusWeb = hermesWeb;
+    argusNpmLib = hermesNpmLib;
+    argusVenv = hermesVenv;
+
+    # The desktop derivations reference `finalAttrs.finalPackage` (this whole
     # derivation, after all overrides are applied) so the desktop wrapper
     # can prepend its `/bin` to PATH.  The desktop's resolver step 4
-    # ("existing hermes on PATH") then picks up the fully wrapped
-    # `hermes` binary — venv with all deps, bundled skills/plugins,
+    # ("existing Argus CLI on PATH") then picks up the fully wrapped
+    # `argus` binary — venv with all deps, bundled skills/plugins,
     # runtime PATH (ripgrep/git/ffmpeg/etc).  No re-implementation
     # of the agent resolution in the desktop wrapper.
+    argusDesktop = callPackage ./desktop.nix {
+      inherit hermesNpmLib electron;
+      hermesAgent = finalAttrs.finalPackage;
+    };
+    # Compatibility attribute for flakes that used the pre-Argus name.
     hermesDesktop = callPackage ./desktop.nix {
       inherit hermesNpmLib electron;
       hermesAgent = finalAttrs.finalPackage;
@@ -228,9 +243,9 @@ stdenv.mkDerivation (finalAttrs: {
   };
 
   meta = with lib; {
-    description = "AI agent with advanced tool-calling capabilities";
+    description = "Argus multimodal AI agent with advanced tool-calling capabilities";
     homepage = "https://github.com/MMArgus-Team/Argus";
-    mainProgram = "hermes";
+    mainProgram = "argus";
     license = licenses.mit;
     platforms = platforms.unix;
   };

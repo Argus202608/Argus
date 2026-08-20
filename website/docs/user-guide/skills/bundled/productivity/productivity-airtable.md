@@ -25,7 +25,7 @@ Airtable REST API via curl. Records CRUD, filters, upserts.
 ## Reference: full SKILL.md
 
 :::info
-The following is the complete skill definition that Hermes loads when this skill is triggered. This is what the agent sees as instructions when the skill is active.
+The following is the complete skill definition that Argus loads when this skill is triggered. This is what the agent sees as instructions when the skill is active.
 :::
 
 # Airtable — Bases, Tables & Records
@@ -40,7 +40,7 @@ Work with Airtable's REST API directly via `curl` using the `terminal` tool. No 
    - `data.records:write` — create / update / delete rows
    - `schema.bases:read` — list bases and tables
 3. **Important:** in the same token UI, add each base you want to access to the token's **Access** list. PATs are scoped per-base — a valid token on the wrong base returns `403`.
-4. Store the token in `${HERMES_HOME:-~/.hermes}/.env` (or via `hermes setup`):
+4. Store the token in `${HERMES_HOME:-~/.hermes}/.env` (or via `argus setup`):
    ```
    AIRTABLE_API_KEY=pat_your_token_here
    ```

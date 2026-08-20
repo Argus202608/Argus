@@ -14,7 +14,7 @@ description: "通过 curl 使用 Shopify Admin 与 Storefront GraphQL API"
 
 | | |
 |---|---|
-| 来源 | 可选 — 通过 `hermes skills install official/productivity/shopify` 安装 |
+| 来源 | 可选 — 通过 `argus skills install official/productivity/shopify` 安装 |
 | 路径 | `optional-skills/productivity/shopify` |
 | 版本 | `1.0.0` |
 | 作者 | community |

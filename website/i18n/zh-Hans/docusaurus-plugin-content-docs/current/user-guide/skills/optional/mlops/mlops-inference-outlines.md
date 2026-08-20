@@ -14,7 +14,7 @@ Outlines：结构化 JSON/regex/Pydantic LLM 生成。
 
 | | |
 |---|---|
-| 来源 | 可选 — 使用 `hermes skills install official/mlops/outlines` 安装 |
+| 来源 | 可选 — 使用 `argus skills install official/mlops/outlines` 安装 |
 | 路径 | `optional-skills/mlops/inference/outlines` |
 | 版本 | `1.0.0` |
 | 作者 | Orchestra Research |

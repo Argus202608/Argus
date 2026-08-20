@@ -280,7 +280,7 @@ export async function fetchProjectSessions(projectId: string): Promise<SidebarPr
 let didScanRepos = false
 
 export async function scanAndRecordRepos(force = false): Promise<void> {
-  const scan = window.hermesDesktop?.git?.scanRepos
+  const scan = window.argusDesktop?.git?.scanRepos
 
   if (!scan || (didScanRepos && !force)) {
     return
@@ -340,7 +340,7 @@ export async function generateProjectIdea(name: string): Promise<string> {
 async function writeProjectIdea(folder: null | string | undefined, idea: string): Promise<void> {
   const dir = (folder || '').trim()
   const body = idea.trim()
-  const write = window.hermesDesktop?.writeTextFile
+  const write = window.argusDesktop?.writeTextFile
 
   if (!dir || !body || !write) {
     return
@@ -624,13 +624,13 @@ export function refreshWorktrees(): void {
 }
 
 // Spin up a fresh worktree the lightest way (`git worktree add -b`) under the
-// repo, returning where Hermes should start working. Git is the source of
+// repo, returning where Argus should start working. Git is the source of
 // truth; the caller starts a session in the returned path.
 export async function startWorkInRepo(
   repoPath: string,
   options?: { name?: string; branch?: string; base?: string; existingBranch?: string }
 ): Promise<null | { path: string; branch: string }> {
-  const git = window.hermesDesktop?.git
+  const git = window.argusDesktop?.git
 
   if (!git || !repoPath) {
     return null
@@ -645,7 +645,7 @@ export async function startWorkInRepo(
 // Local branches for the composer's "convert a branch into a worktree" picker.
 // Empty on a remote backend / non-repo (the Electron probe can't run).
 export async function listRepoBranches(repoPath: string): Promise<HermesGitBranch[]> {
-  const git = window.hermesDesktop?.git
+  const git = window.argusDesktop?.git
 
   if (!git?.branchList || !repoPath) {
     return []
@@ -655,7 +655,7 @@ export async function listRepoBranches(repoPath: string): Promise<HermesGitBranc
 }
 
 export async function switchBranchInRepo(repoPath: string, branch: string): Promise<void> {
-  const git = window.hermesDesktop?.git
+  const git = window.argusDesktop?.git
 
   if (!git || !repoPath || !branch.trim()) {
     return
@@ -708,7 +708,7 @@ export async function removeWorktreePath(
   worktreePath: string,
   options?: { force?: boolean }
 ): Promise<void> {
-  const git = window.hermesDesktop?.git
+  const git = window.argusDesktop?.git
 
   if (!git) {
     return
@@ -721,21 +721,21 @@ export async function removeWorktreePath(
 // Reveal a project/worktree path in the OS file manager (git-GUI standard).
 export async function revealPath(path: null | string): Promise<void> {
   if (path) {
-    await window.hermesDesktop?.revealPath?.(path)
+    await window.argusDesktop?.revealPath?.(path)
   }
 }
 
 // Copy a path to the clipboard (git-GUI standard).
 export async function copyPath(path: null | string): Promise<void> {
   if (path) {
-    await window.hermesDesktop?.writeClipboard?.(path)
+    await window.argusDesktop?.writeClipboard?.(path)
   }
 }
 
 // Open the native directory picker (reuses the Electron default-project-dir
 // chooser). Returns the chosen absolute path, or null when cancelled.
 export async function pickProjectFolder(): Promise<null | string> {
-  const pick = window.hermesDesktop?.settings?.pickDefaultProjectDir
+  const pick = window.argusDesktop?.settings?.pickDefaultProjectDir
 
   if (!pick) {
     return null

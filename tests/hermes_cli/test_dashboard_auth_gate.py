@@ -46,11 +46,15 @@ def test_loopback_protected_route_requires_token(client_loopback):
     assert r.status_code == 401
 
 
-def test_loopback_protected_route_accepts_session_token(client_loopback):
-    """The injected SPA token unlocks protected /api/ routes."""
+@pytest.mark.parametrize(
+    "header_name",
+    ["X-Argus-Session-Token", "X-Hermes-Session-Token"],
+)
+def test_loopback_protected_route_accepts_session_token(client_loopback, header_name):
+    """The canonical token header and legacy alias unlock protected routes."""
     r = client_loopback.get(
         "/api/sessions",
-        headers={"X-Hermes-Session-Token": web_server._SESSION_TOKEN},
+        headers={header_name: web_server._SESSION_TOKEN},
     )
     # 200 or 404 (no sessions yet) both prove the auth layer let it through.
     # 500 is also acceptable if there's a downstream issue unrelated to auth.

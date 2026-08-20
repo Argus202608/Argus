@@ -80,6 +80,11 @@ def _symlink_file_or_skip(link: Path, target: Path) -> None:
 # ---------------------------------------------------------------------------
 
 class TestShouldExclude:
+    def test_excludes_canonical_argus_checkout(self):
+        from hermes_cli.backup import _should_exclude
+        assert _should_exclude(Path("argus/run_agent.py"))
+        assert _should_exclude(Path("argus/.git/HEAD"))
+
     def test_excludes_hermes_agent(self):
         from hermes_cli.backup import _should_exclude
         assert _should_exclude(Path("hermes-agent/run_agent.py"))
@@ -305,6 +310,23 @@ class TestBackup:
             agent_files = [n for n in names if "hermes-agent" in n]
             assert agent_files == [], f"hermes-agent files leaked into backup: {agent_files}"
 
+    def test_excludes_canonical_argus_checkout(self, tmp_path, monkeypatch):
+        hermes_home = tmp_path / ".argus"
+        hermes_home.mkdir()
+        (hermes_home / "argus" / ".git").mkdir(parents=True)
+        (hermes_home / "argus" / "run_agent.py").write_text("# code\n")
+        (hermes_home / "config.yaml").write_text("model: test\n")
+
+        monkeypatch.setenv("ARGUS_HOME", str(hermes_home))
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        out_zip = tmp_path / "backup.zip"
+        from hermes_cli.backup import run_backup
+        run_backup(Namespace(output=str(out_zip)))
+
+        with zipfile.ZipFile(out_zip, "r") as zf:
+            assert not any(name.startswith("argus/") for name in zf.namelist())
+
     def test_excludes_dependency_and_cache_trees(self, tmp_path, monkeypatch):
         """A plugin venv / site-packages / pip cache under HERMES_HOME must be
         pruned by the walk, while real data (skills, config) is preserved.
@@ -345,7 +367,7 @@ class TestBackup:
         # Add a nested hermes-agent directory inside skills (like the real layout)
         nested = hermes_home / "skills" / "autonomous-ai-agents" / "hermes-agent"
         nested.mkdir(parents=True)
-        (nested / "SKILL.md").write_text("# Hermes Agent Skill\n")
+        (nested / "SKILL.md").write_text("# Argus Skill\n")
         (nested / "sub").mkdir()
         (nested / "sub" / "item.txt").write_text("nested content\n")
 
@@ -408,7 +430,7 @@ class TestBackup:
             assert pid_files == []
 
     def test_default_output_path(self, tmp_path, monkeypatch):
-        """When no output path given, zip goes to ~/hermes-backup-*.zip."""
+        """When no output path is given, zip goes to ~/argus-backup-*.zip."""
         hermes_home = tmp_path / ".argus"
         hermes_home.mkdir()
         (hermes_home / "config.yaml").write_text("model: test\n")
@@ -422,7 +444,7 @@ class TestBackup:
         run_backup(args)
 
         # Should exist in home dir
-        zips = list(tmp_path.glob("hermes-backup-*.zip"))
+        zips = list(tmp_path.glob("argus-backup-*.zip"))
         assert len(zips) == 1
 
     def test_skips_symlinked_files(self, tmp_path, monkeypatch):
@@ -996,7 +1018,7 @@ class TestBackupEdgeCases:
         from hermes_cli.backup import run_backup
         run_backup(args)
 
-        zips = list(out_dir.glob("hermes-backup-*.zip"))
+        zips = list(out_dir.glob("argus-backup-*.zip"))
         assert len(zips) == 1
 
     def test_output_without_zip_suffix(self, tmp_path, monkeypatch):

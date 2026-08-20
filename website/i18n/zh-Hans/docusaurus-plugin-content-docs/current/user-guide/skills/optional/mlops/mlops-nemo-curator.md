@@ -14,7 +14,7 @@ description: "用于 LLM 训练的 GPU 加速数据整理工具"
 
 | | |
 |---|---|
-| 来源 | 可选 — 通过 `hermes skills install official/mlops/nemo-curator` 安装 |
+| 来源 | 可选 — 通过 `argus skills install official/mlops/nemo-curator` 安装 |
 | 路径 | `optional-skills/mlops/nemo-curator` |
 | 版本 | `1.0.0` |
 | 作者 | Orchestra Research |
@@ -390,8 +390,8 @@ cluster.close()
 
 ## 参考资料
 
-- **[过滤指南](https://github.com/NousResearch/hermes-agent/blob/main/optional-skills/mlops/nemo-curator/references/filtering.md)** - 30+ 质量过滤器与启发式规则
-- **[去重指南](https://github.com/NousResearch/hermes-agent/blob/main/optional-skills/mlops/nemo-curator/references/deduplication.md)** - 精确、模糊、语义去重方法
+- **[过滤指南](https://github.com/MMArgus-Team/Argus/blob/main/optional-skills/mlops/nemo-curator/references/filtering.md)** - 30+ 质量过滤器与启发式规则
+- **[去重指南](https://github.com/MMArgus-Team/Argus/blob/main/optional-skills/mlops/nemo-curator/references/deduplication.md)** - 精确、模糊、语义去重方法
 
 ## 资源
 

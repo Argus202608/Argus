@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Bootstrap Open WebUI against Hermes Agent's OpenAI-compatible API server.
+# Bootstrap Open WebUI against Argus's OpenAI-compatible API server.
 #
 # Idempotent by design:
 # - ensures ~/.argus/.env has API server settings
 # - installs Open WebUI into ~/.local/open-webui-venv
-# - writes a reusable launcher at ~/.local/bin/start-open-webui-hermes.sh
+# - writes a reusable launcher at ~/.local/bin/start-open-webui-argus.sh
 # - optionally installs a user service (launchd on macOS, systemd --user on Linux)
 #
 # Usage:
@@ -15,18 +15,18 @@ set -euo pipefail
 # Optional environment overrides:
 #   OPEN_WEBUI_PORT=8080
 #   OPEN_WEBUI_HOST=127.0.0.1
-#   OPEN_WEBUI_NAME='Johnny Hermes'
+#   OPEN_WEBUI_NAME='Argus'
 #   OPEN_WEBUI_ENABLE_SIGNUP=true
 #   OPEN_WEBUI_ENABLE_SERVICE=auto   # auto|true|false
 #   OPEN_WEBUI_VENV=~/.local/open-webui-venv
 #   OPEN_WEBUI_DATA_DIR=~/.local/share/open-webui/data
 #   ARGUS_API_PORT=8642
 #   ARGUS_API_HOST=127.0.0.1
-#   ARGUS_API_MODEL_NAME='Hermes Agent'
+#   ARGUS_API_MODEL_NAME='Argus'
 
 OPEN_WEBUI_PORT="${OPEN_WEBUI_PORT:-8080}"
 OPEN_WEBUI_HOST="${OPEN_WEBUI_HOST:-127.0.0.1}"
-OPEN_WEBUI_NAME="${OPEN_WEBUI_NAME:-Hermes Agent WebUI}"
+OPEN_WEBUI_NAME="${OPEN_WEBUI_NAME:-Argus WebUI}"
 OPEN_WEBUI_ENABLE_SIGNUP="${OPEN_WEBUI_ENABLE_SIGNUP:-true}"
 OPEN_WEBUI_ENABLE_SERVICE="${OPEN_WEBUI_ENABLE_SERVICE:-auto}"
 OPEN_WEBUI_VENV="${OPEN_WEBUI_VENV:-$HOME/.local/open-webui-venv}"
@@ -35,9 +35,9 @@ ARGUS_ENV_FILE="${ARGUS_ENV_FILE:-$HOME/.argus/.env}"
 ARGUS_API_PORT="${ARGUS_API_PORT:-8642}"
 ARGUS_API_HOST="${ARGUS_API_HOST:-127.0.0.1}"
 ARGUS_API_CONNECT_HOST="${ARGUS_API_CONNECT_HOST:-127.0.0.1}"
-ARGUS_API_MODEL_NAME="${ARGUS_API_MODEL_NAME:-Hermes Agent}"
+ARGUS_API_MODEL_NAME="${ARGUS_API_MODEL_NAME:-Argus}"
 ARGUS_API_BASE_URL="http://${ARGUS_API_CONNECT_HOST}:${ARGUS_API_PORT}/v1"
-LAUNCHER_PATH="$HOME/.local/bin/start-open-webui-hermes.sh"
+LAUNCHER_PATH="$HOME/.local/bin/start-open-webui-argus.sh"
 LOG_DIR="$HOME/.argus/logs"
 
 log() {
@@ -222,7 +222,7 @@ ensure_env_permissions() {
 }
 
 install_launchd_service() {
-  local plist="$HOME/Library/LaunchAgents/ai.openwebui.hermes.plist"
+  local plist="$HOME/Library/LaunchAgents/ai.openwebui.argus.plist"
   mkdir -p "$(dirname "$plist")"
   cat > "$plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -230,7 +230,7 @@ install_launchd_service() {
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>ai.openwebui.hermes</string>
+  <string>ai.openwebui.argus</string>
   <key>ProgramArguments</key>
   <array>
     <string>/bin/bash</string>
@@ -251,23 +251,23 @@ install_launchd_service() {
 EOF
   launchctl bootout "gui/$(id -u)" "$plist" >/dev/null 2>&1 || true
   launchctl bootstrap "gui/$(id -u)" "$plist"
-  launchctl enable "gui/$(id -u)/ai.openwebui.hermes"
-  launchctl kickstart -k "gui/$(id -u)/ai.openwebui.hermes"
+  launchctl enable "gui/$(id -u)/ai.openwebui.argus"
+  launchctl kickstart -k "gui/$(id -u)/ai.openwebui.argus"
 }
 
 install_systemd_user_service() {
   require_cmd systemctl
   local unit_dir="$HOME/.config/systemd/user"
-  local unit="$unit_dir/openwebui-hermes.service"
+  local unit="$unit_dir/openwebui-argus.service"
   mkdir -p "$unit_dir"
   cat > "$unit" <<EOF
 [Unit]
-Description=Open WebUI connected to Hermes Agent
+Description=Open WebUI connected to Argus
 After=default.target
 
 [Service]
 Type=simple
-ExecStart=/bin/bash %h/.local/bin/start-open-webui-hermes.sh
+ExecStart=/bin/bash %h/.local/bin/start-open-webui-argus.sh
 Restart=always
 RestartSec=3
 WorkingDirectory=%h
@@ -278,7 +278,7 @@ StandardError=append:%h/.argus/logs/openwebui.error.log
 WantedBy=default.target
 EOF
   systemctl --user daemon-reload
-  systemctl --user enable --now openwebui-hermes.service
+  systemctl --user enable --now openwebui-argus.service
 }
 
 start_foreground_hint() {
@@ -287,7 +287,7 @@ start_foreground_hint() {
 }
 
 main() {
-  require_cmd hermes
+  require_cmd argus
   require_cmd curl
   require_cmd python3
 
@@ -299,7 +299,7 @@ main() {
     api_key="$(generate_secret)"
   fi
 
-  log 'Ensuring Hermes API server is configured...'
+  log 'Ensuring the Argus API server is configured...'
   upsert_env API_SERVER_ENABLED true "$ARGUS_ENV_FILE"
   upsert_env API_SERVER_HOST "$ARGUS_API_HOST" "$ARGUS_ENV_FILE"
   upsert_env API_SERVER_PORT "$ARGUS_API_PORT" "$ARGUS_ENV_FILE"
@@ -307,11 +307,11 @@ main() {
   upsert_env API_SERVER_KEY "$api_key" "$ARGUS_ENV_FILE"
   ensure_env_permissions
 
-  log 'Restarting Hermes gateway so API server settings take effect...'
+  log 'Restarting the Argus gateway so API server settings take effect...'
   argus gateway restart >/dev/null 2>&1 || true
   sleep 4
   if ! curl -fsS "http://${ARGUS_API_CONNECT_HOST}:${ARGUS_API_PORT}/health" >/dev/null; then
-    log 'Hermes API server did not answer on the first check. Trying to start gateway in the background...'
+    log 'Argus API server did not answer on the first check. Trying to start the gateway in the background...'
     nohup argus gateway run >/dev/null 2>&1 &
     sleep 6
   fi
@@ -342,7 +342,7 @@ main() {
   esac
 
   log "Done. Open WebUI should be available at: http://${OPEN_WEBUI_HOST}:${OPEN_WEBUI_PORT}"
-  log "Hermes API endpoint: ${ARGUS_API_BASE_URL}"
+  log "Argus API endpoint: ${ARGUS_API_BASE_URL}"
   log 'Important: Open WebUI persists connection settings after first launch. If you later save a wrong API key in the Admin UI, update/delete that connection there or reset its database.'
 }
 

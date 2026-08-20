@@ -14,7 +14,7 @@ description: "连接到运行中的 NeuroSkill 实例，将用户的实时认知
 
 | | |
 |---|---|
-| 来源 | 可选 — 通过 `hermes skills install official/health/neuroskill-bci` 安装 |
+| 来源 | 可选 — 通过 `argus skills install official/health/neuroskill-bci` 安装 |
 | 路径 | `optional-skills/health/neuroskill-bci` |
 | 版本 | `1.0.0` |
 | 作者 | Hermes Agent + Nous Research |

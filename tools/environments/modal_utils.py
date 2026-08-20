@@ -1,6 +1,6 @@
-"""Shared Hermes-side execution flow for Modal transports.
+"""Shared Argus-side execution flow for Modal transports.
 
-This module deliberately stops at the Hermes boundary:
+This module deliberately stops at the Argus boundary:
 - command preparation
 - cwd/timeout normalization
 - stdin/sudo shell wrapping

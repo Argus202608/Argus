@@ -11,7 +11,7 @@ import {
   runToolsetPostSetup,
   selectToolsetProvider,
   setEnvVar
-} from '@/hermes'
+} from '@/argus'
 import { useI18n } from '@/i18n'
 import { Check, Loader2, Save, Terminal } from '@/lib/icons'
 import { cn } from '@/lib/utils'

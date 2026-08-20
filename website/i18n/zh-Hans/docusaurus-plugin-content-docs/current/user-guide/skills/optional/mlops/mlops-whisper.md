@@ -14,7 +14,7 @@ OpenAI 的通用语音识别模型。支持 99 种语言、转录、翻译为英
 
 | | |
 |---|---|
-| 来源 | 可选 — 通过 `hermes skills install official/mlops/whisper` 安装 |
+| 来源 | 可选 — 通过 `argus skills install official/mlops/whisper` 安装 |
 | 路径 | `optional-skills/mlops/whisper` |
 | 版本 | `1.0.0` |
 | 作者 | Orchestra Research |

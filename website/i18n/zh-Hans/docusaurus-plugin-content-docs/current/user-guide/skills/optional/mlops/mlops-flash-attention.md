@@ -14,7 +14,7 @@ description: "通过 Flash Attention 优化 Transformer 注意力机制，实现
 
 | | |
 |---|---|
-| 来源 | 可选 — 通过 `hermes skills install official/mlops/flash-attention` 安装 |
+| 来源 | 可选 — 通过 `argus skills install official/mlops/flash-attention` 安装 |
 | 路径 | `optional-skills/mlops/flash-attention` |
 | 版本 | `1.0.0` |
 | 作者 | Orchestra Research |
@@ -359,9 +359,9 @@ Flash Attention 使用 float16/bfloat16 以提升速度，不支持 float32。
 
 ## 高级主题
 
-**与 HuggingFace Transformers 集成**：参见 [references/transformers-integration.md](https://github.com/NousResearch/hermes-agent/blob/main/optional-skills/mlops/flash-attention/references/transformers-integration.md)，了解如何在 BERT、GPT、Llama 模型中启用 Flash Attention。
+**与 HuggingFace Transformers 集成**：参见 [references/transformers-integration.md](https://github.com/MMArgus-Team/Argus/blob/main/optional-skills/mlops/flash-attention/references/transformers-integration.md)，了解如何在 BERT、GPT、Llama 模型中启用 Flash Attention。
 
-**性能基准测试**：参见 [references/benchmarks.md](https://github.com/NousResearch/hermes-agent/blob/main/optional-skills/mlops/flash-attention/references/benchmarks.md)，查看跨 GPU 和序列长度的详细速度与内存对比。
+**性能基准测试**：参见 [references/benchmarks.md](https://github.com/MMArgus-Team/Argus/blob/main/optional-skills/mlops/flash-attention/references/benchmarks.md)，查看跨 GPU 和序列长度的详细速度与内存对比。
 
 ## 硬件要求
 

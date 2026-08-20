@@ -14,7 +14,7 @@ description: "面向 AI 应用的开源 embedding 数据库"
 
 | | |
 |---|---|
-| 来源 | 可选 — 通过 `hermes skills install official/mlops/chroma` 安装 |
+| 来源 | 可选 — 通过 `argus skills install official/mlops/chroma` 安装 |
 | 路径 | `optional-skills/mlops/chroma` |
 | 版本 | `1.0.0` |
 | 作者 | Orchestra Research |

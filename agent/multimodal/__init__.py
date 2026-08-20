@@ -1,6 +1,6 @@
 """Hermes multimodal subsystem — always-on video/audio streaming agent.
 
-The mainline ``/multimodal`` page drives the main Hermes agent plus three
+The mainline ``/multimodal`` page drives the main Argus plus three
 resident modules sharing one FrameBuffer + MemoryStore:
 
   * :class:`agent.multimodal.memory_backend.MemoryBackend` —

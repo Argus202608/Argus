@@ -2,7 +2,7 @@ import { useStore } from '@nanostores/react'
 import { useEffect, useMemo, useState } from 'react'
 
 import type { HermesGitWorktree } from '@/global'
-import type { SessionInfo } from '@/hermes'
+import type { SessionInfo } from '@/argus'
 import { mapPool } from '@/lib/pool'
 import { $sidebarWorkspaceCollapsedIds, toggleWorkspaceNodeCollapsed } from '@/store/layout'
 import { $worktreeRefreshToken } from '@/store/projects'
@@ -88,7 +88,7 @@ export function useRepoWorktreeMap(
   const refreshToken = useStore($worktreeRefreshToken)
 
   useEffect(() => {
-    const git = window.hermesDesktop?.git
+    const git = window.argusDesktop?.git
 
     if (!enabled || !repoPaths.length || !git?.worktreeList) {
       setMap({})

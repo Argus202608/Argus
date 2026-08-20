@@ -11,7 +11,7 @@ const {
   pathEnvKey
 } = require('./backend-env.cjs')
 
-test('desktop backend PATH adds Hermes-managed bins and missing POSIX sane entries', () => {
+test('desktop backend PATH adds Argus-managed bins and missing POSIX sane entries', () => {
   const result = buildDesktopBackendPath({
     hermesHome: '/Users/test/.argus',
     venvRoot: '/Users/test/.argus/argus/venv',
@@ -67,7 +67,7 @@ test('buildDesktopBackendEnv extends PYTHONPATH and backend PATH together', () =
   assert.ok(env.PATH.includes('/opt/homebrew/bin'))
 })
 
-test('normalizeHermesHomeRoot maps profile homes back to the global Hermes root', () => {
+test('normalizeHermesHomeRoot maps profile homes back to the global Argus root', () => {
   assert.equal(
     normalizeHermesHomeRoot('/Users/test/.argus/profiles/oracle', { pathModule: path.posix }),
     '/Users/test/.argus'

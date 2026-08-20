@@ -1,6 +1,6 @@
 # Adding a New Messaging Platform
 
-There are two ways to add a platform to the Hermes gateway:
+There are two ways to add a platform to the Argus gateway:
 
 ## Plugin Path (Recommended for Community/Third-Party)
 
@@ -19,7 +19,7 @@ status display, gateway setup, and more.
 - `env_enablement_fn: () -> Optional[dict]` — seeds `PlatformConfig.extra`
   (and an optional `home_channel` dict) from env vars BEFORE the adapter is
   constructed.  Without this, env-only setups don't surface in
-  `hermes gateway status` or `get_connected_platforms()` until the SDK
+  `argus gateway status` or `get_connected_platforms()` until the SDK
   instantiates.
 - `apply_yaml_config_fn: (yaml_cfg, platform_cfg) -> Optional[dict]` —
   translate this platform's `config.yaml` keys into env vars and/or seed

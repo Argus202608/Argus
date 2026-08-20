@@ -14,7 +14,7 @@ Control Blender directly from Hermes via socket connection to the blender-mcp ad
 
 | | |
 |---|---|
-| Source | Optional — install with `hermes skills install official/creative/blender-mcp` |
+| Source | Optional — install with `argus skills install official/creative/blender-mcp` |
 | Path | `optional-skills/creative/blender-mcp` |
 | Version | `1.0.0` |
 | Author | alireza78a |
@@ -23,7 +23,7 @@ Control Blender directly from Hermes via socket connection to the blender-mcp ad
 ## Reference: full SKILL.md
 
 :::info
-The following is the complete skill definition that Hermes loads when this skill is triggered. This is what the agent sees as instructions when the skill is active.
+The following is the complete skill definition that Argus loads when this skill is triggered. This is what the agent sees as instructions when the skill is active.
 :::
 
 # Blender MCP

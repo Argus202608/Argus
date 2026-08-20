@@ -44,7 +44,7 @@ export const $repoChangeByPath = computed([$repoStatus, $currentCwd], (status, c
 })
 
 async function loadWorktrees(target: string): Promise<void> {
-  const list = window.hermesDesktop?.git?.worktreeList
+  const list = window.argusDesktop?.git?.worktreeList
 
   if (!list) {
     $repoWorktrees.set([])
@@ -80,7 +80,7 @@ const normalizeCwd = (cwd?: null | string): null | string => cwd?.trim() || null
  */
 export async function refreshRepoStatus(cwd?: null | string): Promise<void> {
   const target = normalizeCwd(cwd ?? $currentCwd.get())
-  const probe = window.hermesDesktop?.git?.repoStatus
+  const probe = window.argusDesktop?.git?.repoStatus
   const seq = (repoStatusRefreshSeq += 1)
 
   if (!target || !probe) {

@@ -2,9 +2,9 @@
 
 [ntfy](https://ntfy.sh/) is a simple HTTP-based pub-sub notification service. It works with the free public server at `ntfy.sh` or any self-hosted instance, and supports any client that can make HTTP requests — phones, browsers, scripts, watches.
 
-ntfy makes a great lightweight push channel for Hermes: subscribe to a topic from the [ntfy mobile app](https://ntfy.sh/docs/subscribe/phone/), send messages to the topic to talk to the agent, get the response back on your phone.
+ntfy makes a great lightweight push channel for Argus: subscribe to a topic from the [ntfy mobile app](https://ntfy.sh/docs/subscribe/phone/), send messages to the topic to talk to the agent, get the response back on your phone.
 
-> Run `hermes gateway setup` and pick **ntfy** for a guided walk-through.
+> Run `argus gateway setup` and pick **ntfy** for a guided walk-through.
 
 ## Prerequisites
 
@@ -12,21 +12,21 @@ ntfy makes a great lightweight push channel for Hermes: subscribe to a topic fro
 - The [ntfy mobile app](https://ntfy.sh/docs/subscribe/phone/) installed and subscribed to that topic
 - Optional: a self-hosted ntfy server, or an `ntfy.sh` account token for private/reserved topics
 
-That's it. No SDK, no daemon, no Node.js. The adapter uses `httpx` which is already a Hermes dependency.
+That's it. No SDK, no daemon, no Node.js. The adapter uses `httpx` which is already an Argus dependency.
 
-## Configure Hermes
+## Configure Argus
 
 ### Via setup wizard
 
 ```bash
-hermes gateway setup
+argus gateway setup
 ```
 
 Select **ntfy** and follow the prompts.
 
 ### Via environment variables
 
-Add these to `~/.hermes/.env`:
+Add these to `~/.argus/.env`:
 
 ```
 NTFY_TOPIC=hermes-myname-2026
@@ -48,7 +48,7 @@ NTFY_HOME_CHANNEL=hermes-myname-2026
 
 ## Identity model — read this before deploying
 
-ntfy has no native authenticated user identity. The `title` field on a published message is **publisher-controlled** and can be anything the sender wants. The Hermes adapter does NOT use `title` for authorization — it would let any publisher who knows the topic spoof an allowed user.
+ntfy has no native authenticated user identity. The `title` field on a published message is **publisher-controlled** and can be anything the sender wants. The Argus adapter does NOT use `title` for authorization — it would let any publisher who knows the topic spoof an allowed user.
 
 Instead, **the topic name itself is the identity**. Every message published to the topic is treated as coming from the same logical user (the topic). `NTFY_ALLOWED_USERS` is therefore typically just the topic name itself — a single-entry allowlist that gates the whole channel.
 
@@ -66,9 +66,9 @@ In all cases, do not put sensitive data through ntfy unless the underlying topic
 2. On your phone: install the [ntfy app](https://ntfy.sh/docs/subscribe/phone/), tap **+**, enter `hermes-myname-2026`
 3. On the host:
    ```bash
-   echo 'NTFY_TOPIC=hermes-myname-2026' >> ~/.hermes/.env
-   echo 'NTFY_ALLOWED_USERS=hermes-myname-2026' >> ~/.hermes/.env
-   hermes gateway restart
+   echo 'NTFY_TOPIC=hermes-myname-2026' >> ~/.argus/.env
+   echo 'NTFY_ALLOWED_USERS=hermes-myname-2026' >> ~/.argus/.env
+   argus gateway restart
    ```
 4. From the ntfy app, send a message to the topic. The agent's reply lands as a push notification.
 
@@ -106,7 +106,7 @@ go install heckel.io/ntfy/v2@latest
 ntfy serve
 ```
 
-Then point Hermes at it:
+Then point Argus at it:
 
 ```
 NTFY_SERVER_URL=https://ntfy.mydomain.com
@@ -118,7 +118,7 @@ Self-hosting gives you topic access control, message persistence policies, attac
 
 ## Markdown formatting
 
-ntfy clients render markdown when the publisher sets the `X-Markdown: true` header. To enable for outgoing Hermes replies:
+ntfy clients render markdown when the publisher sets the `X-Markdown: true` header. To enable for outgoing Argus replies:
 
 ```
 NTFY_MARKDOWN=true
@@ -137,11 +137,11 @@ The mobile app supports a subset of CommonMark — bold, italic, lists, links, f
 
 ## Outgoing-only setup (notifications without inbound)
 
-If you only want Hermes to *push* notifications to ntfy (cron summaries, alerts) and never accept messages back, set both `NTFY_TOPIC` and `NTFY_PUBLISH_TOPIC` to the same value and skip `NTFY_ALLOWED_USERS` entirely. With no allowlist, the agent never responds to inbound messages — your phone gets the pushes, but the conversation is one-way.
+If you only want Argus to *push* notifications to ntfy (cron summaries, alerts) and never accept messages back, set both `NTFY_TOPIC` and `NTFY_PUBLISH_TOPIC` to the same value and skip `NTFY_ALLOWED_USERS` entirely. With no allowlist, the agent never responds to inbound messages — your phone gets the pushes, but the conversation is one-way.
 
 ## Limits
 
-- **Message size**: ntfy caps message bodies at 4096 chars. Hermes truncates with a warning when this is exceeded.
+- **Message size**: ntfy caps message bodies at 4096 chars. Argus truncates with a warning when this is exceeded.
 - **No typing indicators**: the protocol doesn't expose one; `send_typing` is a no-op.
 - **No threads or attachments**: ntfy is plain push notifications. Long replies stay in the message body, no thread fanout.
 - **No native user identity**: see the identity-model section above.

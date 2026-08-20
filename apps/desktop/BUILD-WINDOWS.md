@@ -84,7 +84,7 @@ apps\desktop\release\
 
 ### 首次运行
 
-应用会把 Argus 运行时安装到 `%LOCALAPPDATA%\hermes`（即 `HERMES_HOME`，
+应用会把 Argus 运行时安装到 `%LOCALAPPDATA%\argus`（即 `ARGUS_HOME`，
 与 CLI 安装同一布局，二者可互换），随后引导你选择 provider / model。
 
 ---

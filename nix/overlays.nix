@@ -1,11 +1,12 @@
-# nix/overlays.nix — Expose pkgs.hermes-agent for external NixOS configs
+# nix/overlays.nix — Expose pkgs.argus with a legacy package alias
 { inputs, ... }:
 {
   flake.overlays.default = final: _: {
-    hermes-agent = final.callPackage ./hermes-agent.nix {
+    argus = final.callPackage ./hermes-agent.nix {
       inherit (inputs) uv2nix pyproject-nix pyproject-build-systems;
       npm-lockfile-fix = inputs.npm-lockfile-fix.packages.${final.stdenv.hostPlatform.system}.default;
       rev = inputs.self.rev or null;
     };
+    hermes-agent = final.argus;
   };
 }

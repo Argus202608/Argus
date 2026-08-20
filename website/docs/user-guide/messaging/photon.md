@@ -4,7 +4,7 @@ sidebar_position: 18
 
 # Photon iMessage
 
-Connect Hermes to **iMessage** through [Photon][photon], a managed
+Connect Argus to **iMessage** through [Photon][photon], a managed
 service that handles the Apple line allocation and abuse-prevention
 layer so you don't have to run your own Mac relay.
 
@@ -16,7 +16,7 @@ recommended starting point.
 
 :::info Free to start
 Photon's shared-line pool is free. No subscription is required to send
-your first iMessage from Hermes — just a phone number we can bind to
+your first iMessage from Argus — just a phone number we can bind to
 your account.
 :::
 
@@ -26,7 +26,7 @@ Photon is a **persistent-connection** channel, like Discord or Slack —
 **no webhook, no public URL, no signing secret to manage.**
 
 The `spectrum-ts` SDK holds a long-lived **gRPC stream** to Photon for
-both directions. Because the SDK is TypeScript-only, Hermes runs it in a
+both directions. Because the SDK is TypeScript-only, Argus runs it in a
 small supervised **Node sidecar** and talks to it over loopback:
 
 - **Inbound** — the sidecar consumes the SDK's `app.messages` gRPC
@@ -52,21 +52,21 @@ That's it — there is no public URL or tunnel to set up.
 Either run the unified gateway wizard and pick **Photon iMessage**:
 
 ```bash
-hermes gateway setup
+argus gateway setup
 ```
 
 …or run the Photon setup directly (the wizard calls the same flow):
 
 ```bash
 # Device-code login + project + user + sidecar deps, all in one
-hermes photon setup --phone +15551234567
+argus photon setup --phone +15551234567
 ```
 
 The setup, in order:
 
 1. **Device login** (`client_id=photon-cli`) — opens
    `https://app.photon.codes/` for approval and stores the bearer token.
-2. **Finds or creates** the `Hermes Agent` project on your account.
+2. **Finds or creates** the `Argus Agent` project on your account.
 3. **Enables Spectrum**, reads the project's Spectrum id, and rotates
    the project secret.
 4. **Registers your phone number** as a Spectrum user — skipped if a
@@ -75,33 +75,33 @@ The setup, in order:
    your agent.
 6. **Runs `npm install`** inside the plugin's sidecar directory.
 
-Runtime credentials are written to `~/.hermes/.env`
+Runtime credentials are written to `~/.argus/.env`
 (`PHOTON_PROJECT_ID` = the Spectrum project id, `PHOTON_PROJECT_SECRET`),
 the same place every other channel keeps its token. Management metadata
-(device token, dashboard project id) lives in `~/.hermes/auth.json` under
+(device token, dashboard project id) lives in `~/.argus/auth.json` under
 `credential_pool.photon` / `credential_pool.photon_project`.
 
 ## Authorizing users
 
-Photon uses the same authorization model as every other Hermes
+Photon uses the same authorization model as every other Argus
 channel. Choose one approach:
 
 **DM pairing (default).** When an unknown number messages your Photon
-line, Hermes replies with a pairing code. Approve it with:
+line, Argus replies with a pairing code. Approve it with:
 
 ```bash
-hermes pairing approve photon <CODE>
+argus pairing approve photon <CODE>
 ```
 
-Use `hermes pairing list` to see pending codes and approved users.
+Use `argus pairing list` to see pending codes and approved users.
 
-**Pre-authorize specific numbers** (in `~/.hermes/.env`):
+**Pre-authorize specific numbers** (in `~/.argus/.env`):
 
 ```bash
 PHOTON_ALLOWED_USERS=+15551234567,+15559876543
 ```
 
-**Open access** (dev only, in `~/.hermes/.env`):
+**Open access** (dev only, in `~/.argus/.env`):
 
 ```bash
 PHOTON_ALLOW_ALL_USERS=true
@@ -113,7 +113,7 @@ deliberately restricted access).
 
 ### Require mentions in group chats
 
-By default Hermes responds to every authorized DM and group message.
+By default Argus responds to every authorized DM and group message.
 To make group chats opt-in, enable mention gating (DMs still always
 work):
 
@@ -126,8 +126,8 @@ gateway:
 ```
 
 With `require_mention: true`, group-chat messages are ignored unless
-they match a wake-word pattern. The defaults match `Hermes` and
-`@Hermes agent` variants. For a custom agent name, set regex patterns:
+they match a wake-word pattern. The defaults match `Argus` and
+`@Argus agent` variants. For a custom agent name, set regex patterns:
 
 ```yaml
 gateway:
@@ -145,7 +145,7 @@ BlueBubbles iMessage channel uses.
 ## Start the gateway
 
 ```bash
-hermes gateway start
+argus gateway start
 ```
 
 You'll see something like:
@@ -154,16 +154,16 @@ You'll see something like:
 [photon] connected — sidecar on 127.0.0.1:8789, streaming inbound over gRPC
 ```
 
-Send an iMessage to your assigned number and Hermes will reply.
+Send an iMessage to your assigned number and Argus will reply.
 
 ## Status & troubleshooting
 
 ```bash
-hermes photon status
+argus photon status
 ```
 
 Prints saved credentials, sidecar health, your registered number, and the
-assigned iMessage line Hermes uses. When a Photon token and dashboard project
+assigned iMessage line Argus uses. When a Photon token and dashboard project
 are available, `status` refreshes missing number rows from the dashboard
 without provisioning new lines.
 
@@ -182,14 +182,14 @@ Photon iMessage status
 
 Common issues:
 
-- **`sidecar deps : ✗ run hermes photon install-sidecar`** — Node is
+- **`sidecar deps : ✗ run argus photon install-sidecar`** — Node is
   installed but `spectrum-ts` isn't. Run the suggested command.
-- **`device token : ✗ missing`** — run `hermes photon setup` to log in.
+- **`device token : ✗ missing`** — run `argus photon setup` to log in.
 - **`No iMessage line assigned yet`** — Spectrum is enabled but no line
-  has been provisioned; re-run `hermes photon setup` or check the
+  has been provisioned; re-run `argus photon setup` or check the
   [dashboard][app].
 - **Sidecar won't start** — confirm `node --version` is 18.17+ and that
-  `hermes photon install-sidecar` completed without errors.
+  `argus photon install-sidecar` completed without errors.
 
 ## Limits today
 
@@ -197,7 +197,7 @@ Common issues:
   filename + MIME type; the agent sees a marker but can't yet read the
   bytes. The SDK exposes attachment bytes via `content.read()`, so this
   is a sidecar follow-up.
-- **Outbound attachments are supported.** Hermes sends images, voice
+- **Outbound attachments are supported.** Argus sends images, voice
   notes, video, and documents through spectrum-ts' `attachment()` /
   `voice()` content builders via the sidecar's `/send-attachment`
   endpoint. Captions arrive as a separate iMessage bubble after the
@@ -220,7 +220,7 @@ Common issues:
 | `PHOTON_ALLOWED_USERS`    | (unset)            | Comma-separated E.164 allowlist            |
 | `PHOTON_ALLOW_ALL_USERS`  | `false`            | Dev only — accept any sender               |
 | `PHOTON_REQUIRE_MENTION`  | `false`            | Require a wake word before responding in groups |
-| `PHOTON_MENTION_PATTERNS` | Hermes wake words  | JSON list / comma / newline regex patterns for group mentions |
+| `PHOTON_MENTION_PATTERNS` | Argus wake words  | JSON list / comma / newline regex patterns for group mentions |
 | `PHOTON_DASHBOARD_HOST`   | `app.photon.codes` | Override the dashboard / device-login host |
 | `PHOTON_SPECTRUM_HOST`    | `spectrum.photon.codes` | Override the Spectrum API host |
 

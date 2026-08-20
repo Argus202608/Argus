@@ -14,7 +14,7 @@ describe('multimodal memory debug REST helpers', () => {
 
   beforeEach(() => {
     api = vi.fn().mockResolvedValue({})
-    Object.defineProperty(window, 'hermesDesktop', {
+    Object.defineProperty(window, 'argusDesktop', {
       configurable: true,
       value: { api }
     })
@@ -24,7 +24,7 @@ describe('multimodal memory debug REST helpers', () => {
   afterEach(() => {
     setApiRequestProfile(null)
     vi.restoreAllMocks()
-    Reflect.deleteProperty(window, 'hermesDesktop')
+    Reflect.deleteProperty(window, 'argusDesktop')
   })
 
   it('lists databases on the active profile with the debug timeout and limit', async () => {

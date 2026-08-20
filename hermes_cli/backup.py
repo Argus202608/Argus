@@ -1,11 +1,11 @@
 """
-Backup and import commands for hermes CLI.
+Backup and import commands for argus CLI.
 
-`hermes backup` creates a zip archive of the entire ~/.argus/ directory
-(excluding the hermes-agent repo and transient files).
+`argus backup` creates a zip archive of the entire ~/.argus/ directory
+(excluding the Argus checkout and transient files).
 
-`hermes import` restores from a backup zip, overlaying onto the current
-HERMES_HOME root.
+`argus import` restores from a backup zip, overlaying onto the current
+ARGUS_HOME root.
 """
 
 import json
@@ -31,9 +31,8 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 # Directory names to skip entirely (matched against each path component)
-# ``hermes-agent`` is special-cased to root level only in ``_should_exclude``
-# so that skill directories like ``skills/autonomous-ai-agents/hermes-agent/``
-# are not accidentally excluded.
+# Checkout names are special-cased to root level only in ``_should_exclude``
+# so similarly named skill directories are not accidentally excluded.
 #
 # The dependency/cache entries below matter for more than tidiness: without
 # them a single plugin venv, MCP-server install, or pip/uv cache living under
@@ -47,7 +46,8 @@ logger = logging.getLogger(__name__)
 # exclude ``.archive`` here because the curator's ``skills/.archive/`` holds
 # restorable user skills that must survive a backup.
 _EXCLUDED_DIRS = {
-    "hermes-agent",     # the codebase repo — re-clone instead
+    "argus",            # canonical codebase checkout — re-clone instead
+    "hermes-agent",     # pre-Argus checkout name — compatibility
     "__pycache__",      # bytecode caches — regenerated on import
     ".git",             # nested git dirs (profiles shouldn't have these, but safety)
     "node_modules",     # js deps — reinstalled on demand
@@ -215,10 +215,10 @@ def _should_exclude(rel_path: Path) -> bool:
     for part in parts:
         if part not in _EXCLUDED_DIRS:
             continue
-        # ``hermes-agent`` only matches at the root level (first component).
+        # Code checkout names only match at the root level (first component).
         # Nested directories with the same name — e.g.
         # ``skills/autonomous-ai-agents/hermes-agent/`` — must be preserved.
-        if part == "hermes-agent" and part != parts[0]:
+        if part in {"argus", "hermes-agent"} and part != parts[0]:
             continue
         return True
 
@@ -290,11 +290,11 @@ def _format_size(nbytes: int) -> str:
 
 
 def run_backup(args) -> None:
-    """Create a zip backup of the Hermes home directory."""
+    """Create a zip backup of the Argus home directory."""
     hermes_root = get_default_hermes_root()
 
     if not hermes_root.is_dir():
-        print(f"Error: Hermes home directory not found at {hermes_root}")
+        print(f"Error: Argus home directory not found at {hermes_root}")
         sys.exit(1)
 
     # Determine output path
@@ -303,10 +303,10 @@ def run_backup(args) -> None:
         # If user gave a directory, put the zip inside it
         if out_path.is_dir():
             stamp = datetime.now().strftime("%Y-%m-%d-%H%M%S")
-            out_path = out_path / f"hermes-backup-{stamp}.zip"
+            out_path = out_path / f"argus-backup-{stamp}.zip"
     else:
         stamp = datetime.now().strftime("%Y-%m-%d-%H%M%S")
-        out_path = Path.home() / f"hermes-backup-{stamp}.zip"
+        out_path = Path.home() / f"argus-backup-{stamp}.zip"
 
     # Ensure the suffix is .zip
     if out_path.suffix.lower() != ".zip":
@@ -325,13 +325,13 @@ def run_backup(args) -> None:
         rel_dir = dp.relative_to(hermes_root)
 
         # Prune excluded directories in-place so os.walk doesn't descend
-        # ``hermes-agent`` is only pruned at the root level; nested dirs
-        # with the same name (e.g. in skills/) must be preserved.
+        # Checkout names are only pruned at the root level; nested dirs with
+        # the same name (for example in skills/) must be preserved.
         is_root = rel_dir == Path(".")
         orig_dirnames = dirnames[:]
         dirnames[:] = [
             d for d in dirnames
-            if d not in _EXCLUDED_DIRS or (d == "hermes-agent" and not is_root)
+            if d not in _EXCLUDED_DIRS or (d in {"argus", "hermes-agent"} and not is_root)
         ]
         for removed in set(orig_dirnames) - set(dirnames):
             skipped_dirs.add(str(rel_dir / removed))
@@ -469,7 +469,7 @@ def run_backup(args) -> None:
 # ---------------------------------------------------------------------------
 
 def _validate_backup_zip(zf: zipfile.ZipFile) -> tuple[bool, str]:
-    """Check that a zip looks like a Hermes backup.
+    """Check that a zip looks like a Argus backup.
 
     Returns (ok, reason).
     """
@@ -488,7 +488,7 @@ def _validate_backup_zip(zf: zipfile.ZipFile) -> tuple[bool, str]:
 
     if not found:
         return False, (
-            "zip does not appear to be a Hermes backup "
+            "zip does not appear to be a Argus backup "
             "(no config.yaml, .env, or state databases found)"
         )
 
@@ -520,7 +520,7 @@ def _detect_prefix(zf: zipfile.ZipFile) -> str:
 
 
 def run_import(args) -> None:
-    """Restore a Hermes backup from a zip file."""
+    """Restore a Argus backup from a zip file."""
     zip_path = Path(args.zipfile).expanduser().resolve()
 
     if not zip_path.is_file():
@@ -556,7 +556,7 @@ def run_import(args) -> None:
 
         if (has_config or has_env) and not args.force:
             print()
-            print("Warning: Target directory already has Hermes configuration.")
+            print("Warning: Target directory already has Argus configuration.")
             print("Importing will overwrite existing files with backup contents.")
             print()
             try:
@@ -722,12 +722,12 @@ def run_import(args) -> None:
                 # hermes_cli.profiles might not be available (fresh install)
                 if any(profiles_dir.iterdir()):
                     print(f"\n  Profiles detected but aliases could not be created.")
-                    print(f"  Run: argus profile list  (after installing hermes)")
+                    print(f"  Run: argus profile list  (after installing Argus)")
 
         # Guidance
         print()
-        if not (hermes_root / "hermes-agent").is_dir():
-            print("Note: The hermes-agent codebase was not included in the backup.")
+        if not (hermes_root / "argus").is_dir() and not (hermes_root / "hermes-agent").is_dir():
+            print("Note: The Argus codebase was not included in the backup.")
             print("  If this is a fresh install, run: argus update")
 
         if restored_profiles:
@@ -736,7 +736,7 @@ def run_import(args) -> None:
             for pname in gw_profiles:
                 print(f"  argus -p {pname} gateway install")
 
-        print("Done. Your Hermes configuration has been restored.")
+        print("Done. Your Argus configuration has been restored.")
 
 
 # ---------------------------------------------------------------------------
@@ -1047,7 +1047,7 @@ def restore_cron_jobs_if_emptied(
     Args:
         snapshot_id: The pre-update quick-snapshot id (from
             :func:`create_quick_snapshot`).
-        hermes_home: Override for the Hermes home directory (tests).
+        hermes_home: Override for the Argus home directory (tests).
 
     Returns:
         ``None`` when no action was taken (the common, healthy path). On a

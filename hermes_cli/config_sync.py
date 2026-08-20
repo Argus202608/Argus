@@ -1,9 +1,9 @@
 """Sync the project-root config.yaml into the active HERMES_HOME at startup.
 
 The project directory's ``config.yaml`` is the single source of truth (tracked
-in git, travels with the repo across machines). But every Hermes reader loads
+in git, travels with the repo across machines). But every Argus reader loads
 config from ``<HERMES_HOME>/config.yaml`` (platform default on Windows is
-``%LOCALAPPDATA%\\hermes``), and there is no config-path override. So at startup
+``%LOCALAPPDATA%\\argus``), and there is no config-path override. So at startup
 we copy the project config over the HERMES_HOME copy — one-way, project wins.
 
 Call ``sync_project_config()`` early in an entrypoint (before any load_config /
@@ -114,7 +114,7 @@ def sync_project_weights() -> bool:
     project's local model weights.
 
     The project directory holds the real weights (fetched by download_weights.py,
-    not tracked in git); every Hermes reader resolves relative model paths under
+    not tracked in git); every Argus reader resolves relative model paths under
     HERMES_HOME. So we link the two. One-way, project → HERMES_HOME.
 
     Link strategy (best-effort, never blocks startup):

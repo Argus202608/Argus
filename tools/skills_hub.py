@@ -3575,10 +3575,15 @@ def check_for_skill_updates(
 
 
 # ---------------------------------------------------------------------------
-# Hermes centralized index source
+# Argus centralized index source
 # ---------------------------------------------------------------------------
 
-HERMES_INDEX_URL = "https://hermes-agent.nousresearch.com/docs/api/skills-index.json"
+# Canonical public endpoint. The upstream URL remains a network fallback until
+# the Argus GitHub Pages deployment is live, so a branding migration cannot
+# make Skills Hub search disappear for existing installations.
+ARGUS_INDEX_URL = "https://mmargus-team.github.io/Argus/docs/api/skills-index.json"
+LEGACY_HERMES_INDEX_URL = "https://hermes-agent.nousresearch.com/docs/api/skills-index.json"
+HERMES_INDEX_URL = ARGUS_INDEX_URL  # deprecated import-compatible alias
 HERMES_INDEX_CACHE_FILE = INDEX_CACHE_DIR / "hermes-index.json"
 HERMES_INDEX_TTL = 6 * 3600  # 6 hours
 
@@ -3599,15 +3604,20 @@ def _load_hermes_index() -> Optional[dict]:
         except (OSError, json.JSONDecodeError):
             pass
 
-    # Fetch from docs site
-    try:
-        resp = httpx.get(HERMES_INDEX_URL, timeout=15, follow_redirects=True)
-        if resp.status_code != 200:
-            logger.debug("Hermes index fetch returned %d", resp.status_code)
-            return _load_stale_index_cache()
-        data = resp.json()
-    except (httpx.HTTPError, json.JSONDecodeError) as e:
-        logger.debug("Hermes index fetch failed: %s", e)
+    # Fetch the Argus index first. During the public-site cutover, fall back to
+    # the upstream catalog rather than returning an empty Skills Hub.
+    data = None
+    for index_url in (HERMES_INDEX_URL, LEGACY_HERMES_INDEX_URL):
+        try:
+            resp = httpx.get(index_url, timeout=15, follow_redirects=True)
+            if resp.status_code != 200:
+                logger.debug("Skills index fetch from %s returned %d", index_url, resp.status_code)
+                continue
+            data = resp.json()
+            break
+        except (httpx.HTTPError, json.JSONDecodeError) as e:
+            logger.debug("Skills index fetch from %s failed: %s", index_url, e)
+    if data is None:
         return _load_stale_index_cache()
 
     # Validate structure
@@ -3635,7 +3645,7 @@ def _load_stale_index_cache() -> Optional[dict]:
 
 
 class HermesIndexSource(SkillSource):
-    """Skill source backed by the centralized Hermes Skills Index.
+    """Compatibility-named source backed by the centralized Argus Skills Index.
 
     The index is a JSON catalog published to the docs site and rebuilt
     daily by CI.  It contains metadata + resolved GitHub paths for every

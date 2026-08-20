@@ -30,7 +30,7 @@ const path = require('path')
 const UPDATE_MARKER_MAX_AGE_MS = 20 * 60 * 1000
 
 function markerPath(hermesHome) {
-  return path.join(hermesHome, '.hermes-update-in-progress')
+  return path.join(hermesHome, '.argus-update-in-progress')
 }
 
 // True only if a host process with this pid is currently alive. Signal 0 does

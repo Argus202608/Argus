@@ -6,7 +6,7 @@ description: "逐步指南：为整个团队搭建一个 Telegram 机器人，�
 
 # 搭建团队 Telegram 助手
 
-本教程将引导你搭建一个由 Hermes Agent 驱动的 Telegram 机器人，供多名团队成员使用。完成后，你的团队将拥有一个共享 AI 助手，可以向它发消息寻求代码、研究、系统管理等方面的帮助——并通过按用户授权保障安全。
+本教程将引导你搭建一个由 Argus Agent 驱动的 Telegram 机器人，供多名团队成员使用。完成后，你的团队将拥有一个共享 AI 助手，可以向它发消息寻求代码、研究、系统管理等方面的帮助——并通过按用户授权保障安全。
 
 ## 我们要构建什么
 
@@ -24,12 +24,12 @@ description: "逐步指南：为整个团队搭建一个 Telegram 机器人，�
 
 开始前，请确保你已具备：
 
-- **已在服务器或 VPS 上安装 Hermes Agent**（不是你的笔记本——机器人需要持续运行）。如尚未安装，请参阅[安装指南](/getting-started/installation)。
+- **已在服务器或 VPS 上安装 Argus Agent**（不是你的笔记本——机器人需要持续运行）。如尚未安装，请参阅[安装指南](/getting-started/installation)。
 - **一个 Telegram 账号**（机器人所有者）
-- **已配置 LLM 提供商**——至少在 `~/.hermes/.env` 中配置了 OpenAI、Anthropic 或其他受支持提供商的 API 密钥
+- **已配置 LLM 提供商**——至少在 `~/.argus/.env` 中配置了 OpenAI、Anthropic 或其他受支持提供商的 API 密钥
 
 :::tip
-一台 $5/月的 VPS 足以运行 gateway（网关）。Hermes 本身很轻量——花钱的是 LLM API 调用，而那些调用发生在远端。
+一台 $5/月的 VPS 足以运行 gateway（网关）。Argus 本身很轻量——花钱的是 LLM API 调用，而那些调用发生在远端。
 :::
 
 ---
@@ -41,7 +41,7 @@ description: "逐步指南：为整个团队搭建一个 Telegram 机器人，�
 1. **打开 Telegram**，搜索 `@BotFather`，或访问 [t.me/BotFather](https://t.me/BotFather)
 
 2. **发送 `/newbot`**——BotFather 会询问两件事：
-   - **显示名称**——用户看到的名字（例如 `Team Hermes Assistant`）
+   - **显示名称**——用户看到的名字（例如 `Team Argus Assistant`）
    - **用户名**——必须以 `bot` 结尾（例如 `myteam_hermes_bot`）
 
 3. **复制机器人 token**——BotFather 会回复类似内容：
@@ -57,7 +57,7 @@ description: "逐步指南：为整个团队搭建一个 Telegram 机器人，�
    ```
    选择你的机器人，然后输入类似内容：
    ```
-   Team AI assistant powered by Hermes Agent. DM me for help with code, research, debugging, and more.
+   Team AI assistant powered by Argus Agent. DM me for help with code, research, debugging, and more.
    ```
 
 5. **设置机器人命令**（可选——为用户提供命令菜单）：
@@ -86,14 +86,14 @@ description: "逐步指南：为整个团队搭建一个 Telegram 机器人，�
 ### 方式 A：交互式设置（推荐）
 
 ```bash
-hermes gateway setup
+argus gateway setup
 ```
 
 通过方向键选择完成所有配置。选择 **Telegram**，粘贴你的机器人 token，并在提示时输入你的用户 ID。
 
 ### 方式 B：手动配置
 
-在 `~/.hermes/.env` 中添加以下内容：
+在 `~/.argus/.env` 中添加以下内容：
 
 ```bash
 # Telegram bot token from BotFather
@@ -124,13 +124,13 @@ Telegram 用户 ID 是永久性数字，例如 `123456789`。它与可以更改�
 先在前台运行 gateway，确认一切正常：
 
 ```bash
-hermes gateway
+argus gateway
 ```
 
 你应该看到类似输出：
 
 ```
-[Gateway] Starting Hermes Gateway...
+[Gateway] Starting Argus Gateway...
 [Gateway] Telegram adapter connected
 [Gateway] Cron scheduler started (tick every 60s)
 ```
@@ -142,17 +142,17 @@ hermes gateway
 若要持久部署并在重启后自动恢复：
 
 ```bash
-hermes gateway install
-sudo hermes gateway install --system   # 仅 Linux：开机启动的系统服务
+argus gateway install
+sudo argus gateway install --system   # 仅 Linux：开机启动的系统服务
 ```
 
 这会创建一个后台服务：Linux 上默认为用户级 **systemd** 服务，macOS 上为 **launchd** 服务，传入 `--system` 则创建开机启动的 Linux 系统服务。
 
 ```bash
 # Linux——管理默认用户服务
-hermes gateway start
-hermes gateway stop
-hermes gateway status
+argus gateway start
+argus gateway stop
+argus gateway status
 
 # 查看实时日志
 journalctl --user -u hermes-gateway -f
@@ -161,26 +161,26 @@ journalctl --user -u hermes-gateway -f
 sudo loginctl enable-linger $USER
 
 # Linux 服务器——显式系统服务命令
-sudo hermes gateway start --system
-sudo hermes gateway status --system
+sudo argus gateway start --system
+sudo argus gateway status --system
 journalctl -u hermes-gateway -f
 ```
 
 ```bash
 # macOS——管理服务
-hermes gateway start
-hermes gateway stop
-tail -f ~/.hermes/logs/gateway.log
+argus gateway start
+argus gateway stop
+tail -f ~/.argus/logs/gateway.log
 ```
 
 :::tip macOS PATH
-launchd plist 在安装时捕获你的 Shell PATH，以便 gateway 子进程能找到 Node.js 和 ffmpeg 等工具。如果之后安装了新工具，请重新运行 `hermes gateway install` 以更新 plist。
+launchd plist 在安装时捕获你的 Shell PATH，以便 gateway 子进程能找到 Node.js 和 ffmpeg 等工具。如果之后安装了新工具，请重新运行 `argus gateway install` 以更新 plist。
 :::
 
 ### 验证运行状态
 
 ```bash
-hermes gateway status
+argus gateway status
 ```
 
 然后在 Telegram 上向你的机器人发送测试消息。几秒内应收到回复。
@@ -196,14 +196,14 @@ hermes gateway status
 收集每位团队成员的 Telegram 用户 ID（让他们给 [@userinfobot](https://t.me/userinfobot) 发消息），然后以逗号分隔的列表形式添加：
 
 ```bash
-# 在 ~/.hermes/.env 中
+# 在 ~/.argus/.env 中
 TELEGRAM_ALLOWED_USERS=123456789,987654321,555555555
 ```
 
 修改后重启 gateway：
 
 ```bash
-hermes gateway stop && hermes gateway start
+argus gateway stop && argus gateway start
 ```
 
 ### 方式 B：私信配对（推荐用于团队）
@@ -220,7 +220,7 @@ hermes gateway stop && hermes gateway start
 
 3. **你在服务器上审批**：
    ```bash
-   hermes pairing approve telegram XKGH5N7P
+   argus pairing approve telegram XKGH5N7P
    ```
 
 4. **他们即可使用**——机器人立即开始响应他们的消息
@@ -229,13 +229,13 @@ hermes gateway stop && hermes gateway start
 
 ```bash
 # 查看所有待审批和已审批用户
-hermes pairing list
+argus pairing list
 
 # 撤销某人的访问权限
-hermes pairing revoke telegram 987654321
+argus pairing revoke telegram 987654321
 
 # 清除已过期的待审批码
-hermes pairing clear-pending
+argus pairing clear-pending
 ```
 
 :::tip
@@ -260,7 +260,7 @@ hermes pairing clear-pending
 
 **方式 1：** 在机器人所在的任意 Telegram 群组或聊天中使用 `/sethome` 命令。
 
-**方式 2：** 在 `~/.hermes/.env` 中手动设置：
+**方式 2：** 在 `~/.argus/.env` 中手动设置：
 
 ```bash
 TELEGRAM_HOME_CHANNEL=-1001234567890
@@ -271,7 +271,7 @@ TELEGRAM_HOME_CHANNEL_NAME="Team Updates"
 
 ### 配置工具进度显示
 
-控制机器人在使用工具时显示的详细程度。在 `~/.hermes/config.yaml` 中：
+控制机器人在使用工具时显示的详细程度。在 `~/.argus/config.yaml` 中：
 
 ```yaml
 display:
@@ -289,9 +289,9 @@ display:
 
 ### 使用 SOUL.md 设置个性
 
-通过编辑 `~/.hermes/SOUL.md` 自定义机器人的沟通方式：
+通过编辑 `~/.argus/SOUL.md` 自定义机器人的沟通方式：
 
-完整指南请参阅[在 Hermes 中使用 SOUL.md](/guides/use-soul-with-hermes)。
+完整指南请参阅[在 Argus 中使用 SOUL.md](/guides/use-soul-with-argus)。
 
 ```markdown
 # Soul
@@ -306,7 +306,7 @@ before guessing at solutions.
 如果你的团队在特定项目上工作，可以创建上下文文件，让机器人了解你们的技术栈：
 
 ```markdown
-<!-- ~/.hermes/AGENTS.md -->
+<!-- ~/.argus/AGENTS.md -->
 # Team Context
 - We use Python 3.12 with FastAPI and SQLAlchemy
 - Frontend is React with TypeScript
@@ -352,8 +352,8 @@ partitions above 80%, containers that have restarted, or high memory usage.
 
 ```bash
 # 通过 CLI
-hermes cron list          # 查看所有定时任务
-hermes cron status        # 检查调度器是否运行
+argus cron list          # 查看所有定时任务
+argus cron status        # 检查调度器是否运行
 
 # 通过 Telegram 聊天
 /cron list                # 查看任务
@@ -373,12 +373,12 @@ Cron 任务的 prompt 在完全全新的会话中运行，不保留任何先前�
 在共享团队机器人上，使用 Docker 作为终端后端，让 agent 命令在容器中运行，而非直接在宿主机上运行：
 
 ```bash
-# 在 ~/.hermes/.env 中
+# 在 ~/.argus/.env 中
 TERMINAL_BACKEND=docker
 TERMINAL_DOCKER_IMAGE=nikolaik/python-nodejs:python3.11-nodejs20
 ```
 
-或在 `~/.hermes/config.yaml` 中：
+或在 `~/.argus/config.yaml` 中：
 
 ```yaml
 terminal:
@@ -394,33 +394,33 @@ terminal:
 
 ```bash
 # 检查 gateway 是否运行
-hermes gateway status
+argus gateway status
 
 # 查看实时日志（Linux）
 journalctl --user -u hermes-gateway -f
 
 # 查看实时日志（macOS）
-tail -f ~/.hermes/logs/gateway.log
+tail -f ~/.argus/logs/gateway.log
 ```
 
-### 保持 Hermes 更新
+### 保持 Argus 更新
 
 在 Telegram 中向机器人发送 `/update`——它会拉取最新版本并重启。或在服务器上执行：
 
 ```bash
-hermes update
-hermes gateway stop && hermes gateway start
+argus update
+argus gateway stop && argus gateway start
 ```
 
 ### 日志位置
 
 | 内容 | 位置 |
 |------|----------|
-| Gateway 日志 | `journalctl --user -u hermes-gateway`（Linux）或 `~/.hermes/logs/gateway.log`（macOS） |
-| Cron 任务输出 | `~/.hermes/cron/output/{job_id}/{timestamp}.md` |
-| Cron 任务定义 | `~/.hermes/cron/jobs.json` |
-| 配对数据 | `~/.hermes/pairing/` |
-| 会话历史 | `~/.hermes/sessions/` |
+| Gateway 日志 | `journalctl --user -u hermes-gateway`（Linux）或 `~/.argus/logs/gateway.log`（macOS） |
+| Cron 任务输出 | `~/.argus/cron/output/{job_id}/{timestamp}.md` |
+| Cron 任务定义 | `~/.argus/cron/jobs.json` |
+| 配对数据 | `~/.argus/pairing/` |
+| 会话历史 | `~/.argus/sessions/` |
 
 ---
 

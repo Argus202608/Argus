@@ -14,7 +14,7 @@ OpenAI 连接视觉与语言的模型。支持零样本图像分类、图文匹�
 
 | | |
 |---|---|
-| 来源 | 可选 — 通过 `hermes skills install official/mlops/clip` 安装 |
+| 来源 | 可选 — 通过 `argus skills install official/mlops/clip` 安装 |
 | 路径 | `optional-skills/mlops/clip` |
 | 版本 | `1.0.0` |
 | 作者 | Orchestra Research |

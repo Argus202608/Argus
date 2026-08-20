@@ -1,6 +1,6 @@
 # disk-cleanup
 
-Auto-tracks and cleans up ephemeral files created during Hermes Agent
+Auto-tracks and cleans up ephemeral files created during Argus
 sessions — test scripts, temp outputs, cron logs, stale chrome profiles.
 Scoped strictly to `$HERMES_HOME` and `/tmp/hermes-*`.
 

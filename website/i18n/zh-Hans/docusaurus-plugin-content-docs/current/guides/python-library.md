@@ -1,44 +1,44 @@
 ---
 sidebar_position: 5
-title: "将 Hermes 作为 Python 库使用"
+title: "将 Argus 作为 Python 库使用"
 description: "将 AIAgent 嵌入你自己的 Python 脚本、Web 应用或自动化流水线——无需 CLI"
 ---
 
-# 将 Hermes 作为 Python 库使用
+# 将 Argus 作为 Python 库使用
 
-Hermes 不仅仅是一个 CLI 工具。你可以直接导入 `AIAgent`，在自己的 Python 脚本、Web 应用或自动化流水线中以编程方式使用它。本指南将介绍具体方法。
+Argus 不仅仅是一个 CLI 工具。你可以直接导入 `AIAgent`，在自己的 Python 脚本、Web 应用或自动化流水线中以编程方式使用它。本指南将介绍具体方法。
 
 ---
 
 ## 安装
 
-直接从仓库安装 Hermes：
+直接从仓库安装 Argus：
 
 ```bash
-pip install git+https://github.com/NousResearch/hermes-agent.git
+pip install git+https://github.com/MMArgus-Team/Argus.git
 ```
 
 或使用 [uv](https://docs.astral.sh/uv/)：
 
 ```bash
-uv pip install git+https://github.com/NousResearch/hermes-agent.git
+uv pip install git+https://github.com/MMArgus-Team/Argus.git
 ```
 
 也可以在 `requirements.txt` 中固定版本：
 
 ```text
-hermes-agent @ git+https://github.com/NousResearch/hermes-agent.git
+mm-argus @ git+https://github.com/MMArgus-Team/Argus.git
 ```
 
 :::tip
-将 Hermes 作为库使用时，CLI 所需的环境变量同样必须设置。至少需要设置 `OPENROUTER_API_KEY`（若直接访问提供商，则设置 `OPENAI_API_KEY` 或 `ANTHROPIC_API_KEY`）。
+将 Argus 作为库使用时，CLI 所需的环境变量同样必须设置。至少需要设置 `OPENROUTER_API_KEY`（若直接访问提供商，则设置 `OPENAI_API_KEY` 或 `ANTHROPIC_API_KEY`）。
 :::
 
 ---
 
 ## 基本用法
 
-使用 Hermes 最简单的方式是 `chat()` 方法——传入一条消息，返回一个字符串：
+使用 Argus 最简单的方式是 `chat()` 方法——传入一条消息，返回一个字符串：
 
 ```python
 from run_agent import AIAgent
@@ -54,7 +54,7 @@ print(response)
 `chat()` 在内部处理完整的对话循环——工具调用、重试等一切事务——并仅返回最终的文本响应。
 
 :::warning
-将 Hermes 嵌入自己的代码时，务必设置 `quiet_mode=True`。否则，agent 会打印 CLI 的加载动画、进度指示器及其他终端输出，从而干扰你的应用输出。
+将 Argus 嵌入自己的代码时，务必设置 `quiet_mode=True`。否则，agent 会打印 CLI 的加载动画、进度指示器及其他终端输出，从而干扰你的应用输出。
 :::
 
 ---
@@ -187,7 +187,7 @@ print(response)
 
 ## 批量处理
 
-如需并行运行大量 prompt，Hermes 提供了 `batch_runner.py`，它可管理并发的 `AIAgent` 实例并进行适当的资源隔离：
+如需并行运行大量 prompt，Argus 提供了 `batch_runner.py`，它可管理并发的 `AIAgent` 实例并进行适当的资源隔离：
 
 ```bash
 python batch_runner.py --input prompts.jsonl --output results.jsonl
@@ -266,7 +266,7 @@ client = discord.Client(intents=discord.Intents.default())
 async def on_message(message):
     if message.author == client.user:
         return
-    if message.content.startswith("!hermes "):
+    if message.content.startswith("!argus "):
         query = message.content[8:]
         agent = AIAgent(
             model="anthropic/claude-sonnet-4",

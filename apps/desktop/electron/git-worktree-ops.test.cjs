@@ -31,7 +31,7 @@ test('parseWorktrees: main checkout + linked worktree', () => {
     '',
     'worktree /repo/.worktrees/feat',
     'HEAD def456',
-    'branch refs/heads/hermes/feat',
+    'branch refs/heads/argus/feat',
     ''
   ].join('\n')
 
@@ -41,7 +41,7 @@ test('parseWorktrees: main checkout + linked worktree', () => {
   assert.equal(trees[0].path, '/repo')
   assert.equal(trees[0].branch, 'main')
   assert.equal(trees[1].path, '/repo/.worktrees/feat')
-  assert.equal(trees[1].branch, 'hermes/feat')
+  assert.equal(trees[1].branch, 'argus/feat')
 })
 
 test('parseWorktrees: detached + locked flags', () => {

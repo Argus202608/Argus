@@ -14,19 +14,19 @@ Roleplay the most difficult, tech-resistant user for your product. Browse the ap
 
 | | |
 |---|---|
-| Source | Optional — install with `hermes skills install official/dogfood/adversarial-ux-test` |
+| Source | Optional — install with `argus skills install official/dogfood/adversarial-ux-test` |
 | Path | `optional-skills/dogfood/adversarial-ux-test` |
 | Version | `1.0.0` |
 | Author | Omni @ Comelse |
 | License | MIT |
 | Platforms | linux, macos, windows |
 | Tags | `qa`, `ux`, `testing`, `adversarial`, `dogfood`, `personas`, `user-testing` |
-| Related skills | [`dogfood`](/docs/user-guide/skills/bundled/dogfood/dogfood-dogfood) |
+| Related skills | [`dogfood`](/user-guide/skills/bundled/dogfood/dogfood-dogfood) |
 
 ## Reference: full SKILL.md
 
 :::info
-The following is the complete skill definition that Hermes loads when this skill is triggered. This is what the agent sees as instructions when the skill is active.
+The following is the complete skill definition that Argus loads when this skill is triggered. This is what the agent sees as instructions when the skill is active.
 :::
 
 # Adversarial UX Test

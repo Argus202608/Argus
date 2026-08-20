@@ -253,3 +253,8 @@ class TestDefaultPlatformWebSearchCoverage:
 
     def test_hermes_api_server_toolset_includes_web_search(self):
         assert "web_search" in resolve_toolset("hermes-api-server")
+
+    def test_argus_aliases_match_legacy_platform_toolsets(self):
+        assert resolve_toolset("argus-cli") == resolve_toolset("hermes-cli")
+        assert resolve_toolset("argus-telegram") == resolve_toolset("hermes-telegram")
+        assert resolve_toolset("argus-api-server") == resolve_toolset("hermes-api-server")

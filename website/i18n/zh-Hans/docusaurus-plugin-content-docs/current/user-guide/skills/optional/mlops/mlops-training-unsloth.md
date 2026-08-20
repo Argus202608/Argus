@@ -14,7 +14,7 @@ Unsloth：2-5倍更快的 LoRA/QLoRA 微调，更少显存。
 
 | | |
 |---|---|
-| 来源 | 可选 — 通过 `hermes skills install official/mlops/unsloth` 安装 |
+| 来源 | 可选 — 通过 `argus skills install official/mlops/unsloth` 安装 |
 | 路径 | `optional-skills/mlops/training/unsloth` |
 | 版本 | `1.0.0` |
 | 作者 | Orchestra Research |

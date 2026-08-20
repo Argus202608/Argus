@@ -8,10 +8,10 @@ import {
 } from './screen-source-picker'
 
 const desktopWindow = window as unknown as {
-  hermesDesktop?: Window['hermesDesktop']
+  argusDesktop?: Window['argusDesktop']
 }
 
-const initialHermesDesktop = desktopWindow.hermesDesktop
+const initialHermesDesktop = desktopWindow.argusDesktop
 
 const DISPLAY_SOURCE = {
   appIconDataUrl: '',
@@ -28,14 +28,14 @@ function installDesktopBridge(systemAudioSupported?: boolean): void {
       ? {}
       : { screenShareSystemAudio: systemAudioSupported }
 
-  desktopWindow.hermesDesktop = {
+  desktopWindow.argusDesktop = {
     ...capability,
     multimodalSourcePicker: {
       getSelectedSource: vi.fn(async () => null),
       listSources: vi.fn(async () => ({ ok: true, sources: [DISPLAY_SOURCE] })),
       setSelectedSource: vi.fn(async () => ({ ok: true }))
     }
-  } as unknown as Window['hermesDesktop']
+  } as unknown as Window['argusDesktop']
 }
 
 async function openRenderedPicker(): Promise<{ result: Promise<PickedSource | null> }> {
@@ -68,9 +68,9 @@ describe('ScreenSourcePickerHost system audio', () => {
     vi.restoreAllMocks()
 
     if (initialHermesDesktop) {
-      desktopWindow.hermesDesktop = initialHermesDesktop
+      desktopWindow.argusDesktop = initialHermesDesktop
     } else {
-      delete desktopWindow.hermesDesktop
+      delete desktopWindow.argusDesktop
     }
   })
 

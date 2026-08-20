@@ -18,8 +18,8 @@ class TestBuildOrHeaders:
         from agent.auxiliary_client import build_or_headers
 
         headers = build_or_headers(or_config={"response_cache": False})
-        assert headers["HTTP-Referer"] == "https://hermes-agent.nousresearch.com"
-        assert headers["X-Title"] == "Hermes Agent"
+        assert headers["HTTP-Referer"] == "https://github.com/MMArgus-Team/Argus"
+        assert headers["X-Title"] == "Argus"
         assert headers["X-OpenRouter-Categories"] == "productivity,cli-agent"
 
     def test_cache_enabled(self):

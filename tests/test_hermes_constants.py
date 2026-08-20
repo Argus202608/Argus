@@ -30,8 +30,9 @@ class TestGetDefaultHermesRoot:
     """Tests for get_default_hermes_root() — Docker/custom deployment awareness."""
 
     def test_no_hermes_home_returns_native(self, tmp_path, monkeypatch):
-        """When HERMES_HOME is not set, returns ~/.argus."""
+        """When neither home variable is set, returns ~/.argus."""
         monkeypatch.delenv("ARGUS_HOME", raising=False)
+        monkeypatch.delenv("HERMES_HOME", raising=False)
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
         assert get_default_hermes_root() == tmp_path / ".argus"
@@ -83,6 +84,7 @@ class TestGetDefaultHermesRoot:
         """Native Windows falls back to %LOCALAPPDATA%\\argus, not ~/.argus."""
         local_appdata = tmp_path / "LocalAppData"
         monkeypatch.delenv("ARGUS_HOME", raising=False)
+        monkeypatch.delenv("HERMES_HOME", raising=False)
         monkeypatch.setenv("LOCALAPPDATA", str(local_appdata))
         monkeypatch.setattr(Path, "home", lambda: tmp_path / "Home")
         monkeypatch.setattr(hermes_constants.sys, "platform", "win32")
@@ -93,6 +95,7 @@ class TestGetDefaultHermesRoot:
         """Windows fallback still uses AppData/Local/argus without LOCALAPPDATA."""
         home = tmp_path / "Home"
         monkeypatch.delenv("ARGUS_HOME", raising=False)
+        monkeypatch.delenv("HERMES_HOME", raising=False)
         monkeypatch.delenv("LOCALAPPDATA", raising=False)
         monkeypatch.setattr(Path, "home", lambda: home)
         monkeypatch.setattr(hermes_constants.sys, "platform", "win32")
@@ -107,12 +110,29 @@ class TestGetHermesHome:
         """When ARGUS_HOME is unset on Windows, use %LOCALAPPDATA%\\argus."""
         local_appdata = tmp_path / "LocalAppData"
         monkeypatch.delenv("ARGUS_HOME", raising=False)
+        monkeypatch.delenv("HERMES_HOME", raising=False)
         monkeypatch.setenv("LOCALAPPDATA", str(local_appdata))
         monkeypatch.setattr(Path, "home", lambda: tmp_path / "Home")
         monkeypatch.setattr(hermes_constants.sys, "platform", "win32")
         monkeypatch.setattr(hermes_constants, "_profile_fallback_warned", False)
 
         assert get_hermes_home() == local_appdata / "argus"
+
+    def test_argus_home_wins_over_legacy_alias(self, tmp_path, monkeypatch):
+        canonical = tmp_path / "canonical"
+        legacy = tmp_path / "legacy"
+        monkeypatch.setenv("ARGUS_HOME", str(canonical))
+        monkeypatch.setenv("HERMES_HOME", str(legacy))
+
+        assert get_hermes_home() == canonical
+
+    def test_legacy_hermes_home_remains_supported(self, tmp_path, monkeypatch):
+        legacy = tmp_path / "legacy"
+        monkeypatch.delenv("ARGUS_HOME", raising=False)
+        monkeypatch.setenv("HERMES_HOME", str(legacy))
+
+        assert get_hermes_home() == legacy
+        assert get_default_hermes_root() == legacy
 
 
 class TestHermesManagedNode:

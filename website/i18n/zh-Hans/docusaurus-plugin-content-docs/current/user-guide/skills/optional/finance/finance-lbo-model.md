@@ -14,7 +14,7 @@ description: "在 Excel 中构建杠杆收购模型——资金来源与用途�
 
 | | |
 |---|---|
-| 来源 | 可选——通过 `hermes skills install official/finance/lbo-model` 安装 |
+| 来源 | 可选——通过 `argus skills install official/finance/lbo-model` 安装 |
 | 路径 | `optional-skills/finance/lbo-model` |
 | 版本 | `1.0.0` |
 | 作者 | Anthropic（由 Nous Research 改编） |

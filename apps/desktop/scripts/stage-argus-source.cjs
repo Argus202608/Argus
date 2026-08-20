@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 /**
- * stage-hermes-source.cjs
+ * stage-argus-source.cjs
  *
- * Snapshots the git-tracked Hermes agent source into
- * apps/desktop/build/hermes-src/, so a SELF-CONTAINED desktop build can ship
- * its own agent source (electron-builder extraResources → resources/hermes-src)
+ * Snapshots the git-tracked Argus agent source into
+ * apps/desktop/build/argus-src/, so a SELF-CONTAINED desktop build can ship
+ * its own agent source (electron-builder extraResources → resources/argus-src)
  * and bootstrap from it OFFLINE, instead of cloning a (possibly unpushed) commit
  * from GitHub. See bootstrap-runner.cjs (bundledSourceRoot) + install.ps1
  * (-LocalSource).
@@ -17,7 +17,7 @@
  * (node_modules, .venv, caches, logs, egg-info, __pycache__) since those are
  * gitignored / untracked. No hand-maintained allow/deny list to drift.
  *
- * Idempotent: wipes + rewrites build/hermes-src each run.
+ * Idempotent: wipes + rewrites build/argus-src each run.
  */
 const { execFileSync } = require('node:child_process')
 const fs = require('node:fs')
@@ -25,7 +25,7 @@ const path = require('node:path')
 
 const DESKTOP_ROOT = path.resolve(__dirname, '..')
 const REPO_ROOT = path.resolve(DESKTOP_ROOT, '..', '..')
-const OUT_DIR = path.join(DESKTOP_ROOT, 'build', 'hermes-src')
+const OUT_DIR = path.join(DESKTOP_ROOT, 'build', 'argus-src')
 
 function isGitRepo() {
   try {
@@ -44,7 +44,7 @@ function main() {
     // Not fatal: a build from a non-git source tree just won't ship bundled
     // source (bootstrap falls back to its normal GitHub/stamp path). Warn loud.
     console.warn(
-      '[stage-hermes-source] WARNING: repo root is not a git work tree; ' +
+      '[stage-argus-source] WARNING: repo root is not a git work tree; ' +
         'skipping bundled-source snapshot. The packaged app will NOT be ' +
         'self-contained and will try to fetch install from GitHub.'
     )
@@ -55,7 +55,7 @@ function main() {
   fs.rmSync(OUT_DIR, { recursive: true, force: true })
   fs.mkdirSync(OUT_DIR, { recursive: true })
 
-  console.log(`[stage-hermes-source] copying tracked source (working tree) → ${path.relative(REPO_ROOT, OUT_DIR)}`)
+  console.log(`[stage-argus-source] copying tracked source (working tree) → ${path.relative(REPO_ROOT, OUT_DIR)}`)
   // List all tracked files (NUL-delimited to be safe with any path). This is the
   // tracked set; copying from the working tree captures uncommitted edits too.
   const listed = execFileSync('git', ['ls-files'], {
@@ -83,7 +83,7 @@ function main() {
     fs.copyFileSync(src, dest)
     copied++
   }
-  console.log(`[stage-hermes-source] copied ${copied} files`)
+  console.log(`[stage-argus-source] copied ${copied} files`)
 
   // Sanity: the installer + pyproject must be present, else the snapshot is
   // useless and we should fail the build loudly rather than ship a broken app.
@@ -91,11 +91,11 @@ function main() {
   const missing = mustExist.filter(rel => !fs.existsSync(path.join(OUT_DIR, rel)))
   if (missing.length) {
     throw new Error(
-      `[stage-hermes-source] snapshot missing required files: ${missing.join(', ')}. ` +
+      `[stage-argus-source] snapshot missing required files: ${missing.join(', ')}. ` +
         'Bundled-source bootstrap would fail.'
     )
   }
-  console.log('[stage-hermes-source] done')
+  console.log('[stage-argus-source] done')
 }
 
 main()

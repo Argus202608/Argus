@@ -14,19 +14,19 @@ Provision SaaS services + sync creds via Stripe Projects.
 
 | | |
 |---|---|
-| Source | Optional — install with `hermes skills install official/payments/stripe-projects` |
+| Source | Optional — install with `argus skills install official/payments/stripe-projects` |
 | Path | `optional-skills/payments/stripe-projects` |
 | Version | `0.1.0` |
 | Author | Teknium (teknium1), Hermes Agent |
 | License | MIT |
 | Platforms | linux, macos |
 | Tags | `Payments`, `Stripe`, `Projects`, `Provisioning`, `Infrastructure` |
-| Related skills | [`stripe-link-cli`](/docs/user-guide/skills/optional/payments/payments-stripe-link-cli), [`mpp-agent`](/docs/user-guide/skills/optional/payments/payments-mpp-agent) |
+| Related skills | [`stripe-link-cli`](/user-guide/skills/optional/payments/payments-stripe-link-cli), [`mpp-agent`](/user-guide/skills/optional/payments/payments-mpp-agent) |
 
 ## Reference: full SKILL.md
 
 :::info
-The following is the complete skill definition that Hermes loads when this skill is triggered. This is what the agent sees as instructions when the skill is active.
+The following is the complete skill definition that Argus loads when this skill is triggered. This is what the agent sees as instructions when the skill is active.
 :::
 
 # Stripe Projects Skill

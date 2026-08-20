@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Hyperliquid CLI Tool for Hermes Agent
+Hyperliquid CLI Tool for Argus
 -------------------------------------
 Queries the Hyperliquid info endpoint for market and account data.
 Uses only Python standard library - no external packages required.
@@ -1534,7 +1534,7 @@ def _add_json_flag(parser: argparse.ArgumentParser) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Hyperliquid CLI Tool for Hermes Agent")
+    parser = argparse.ArgumentParser(description="Hyperliquid CLI Tool for Argus")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     dexs = subparsers.add_parser("dexs", help="List available perpetual dexs")

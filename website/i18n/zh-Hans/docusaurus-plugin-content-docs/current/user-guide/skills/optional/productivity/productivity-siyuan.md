@@ -14,7 +14,7 @@ description: "通过 curl 调用 SiYuan Note API，在自托管知识库中搜�
 
 | | |
 |---|---|
-| 来源 | 可选 — 使用 `hermes skills install official/productivity/siyuan` 安装 |
+| 来源 | 可选 — 使用 `argus skills install official/productivity/siyuan` 安装 |
 | 路径 | `optional-skills/productivity/siyuan` |
 | 版本 | `1.0.0` |
 | 作者 | FEUAZUR |

@@ -14,7 +14,7 @@ description: "使用 mcporter CLI 列出、配置、认证并直接调用 MCP �
 
 | | |
 |---|---|
-| 来源 | 可选 — 通过 `hermes skills install official/mcp/mcporter` 安装 |
+| 来源 | 可选 — 通过 `argus skills install official/mcp/mcporter` 安装 |
 | 路径 | `optional-skills/mcp/mcporter` |
 | 版本 | `1.0.0` |
 | 作者 | community |

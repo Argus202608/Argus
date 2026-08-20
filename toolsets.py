@@ -440,7 +440,7 @@ TOOLSETS = {
     },
     
     # ==========================================================================
-    # Full Hermes toolsets (CLI + messaging platforms)
+    # Full platform toolsets (CLI + messaging platforms)
     #
     # All platforms share the same core tools. Note: agents do NOT get an
     # agent-callable send_message tool — outbound platform messaging is handled
@@ -648,11 +648,24 @@ TOOLSETS = {
     },
 
     "hermes-gateway": {
-        "description": "Gateway toolset - union of all messaging platform tools",
+        "description": "Argus gateway toolset - union of all messaging platform tools",
         "tools": [],
-        "includes": ["hermes-telegram", "hermes-discord", "hermes-whatsapp", "hermes-slack", "hermes-signal", "hermes-bluebubbles", "hermes-homeassistant", "hermes-email", "hermes-sms", "hermes-mattermost", "hermes-matrix", "hermes-dingtalk", "hermes-feishu", "hermes-wecom", "hermes-wecom-callback", "hermes-weixin", "hermes-qqbot", "hermes-webhook", "hermes-yuanbao"]
+        "includes": ["argus-telegram", "argus-discord", "argus-whatsapp", "argus-slack", "argus-signal", "argus-bluebubbles", "argus-homeassistant", "argus-email", "argus-sms", "argus-mattermost", "argus-matrix", "argus-dingtalk", "argus-feishu", "argus-wecom", "argus-wecom-callback", "argus-weixin", "argus-qqbot", "argus-webhook", "argus-yuanbao"]
     }
 }
+
+# Public Argus names are canonical for new configuration. The inherited
+# ``hermes-*`` names stay registered because third-party plugins and existing
+# config files may still target them. Both names resolve to the same immutable
+# definition, and get_toolset() also merges registry-contributed tools from the
+# legacy name into the Argus alias.
+_ARGUS_TOOLSET_ALIASES = {
+    "argus" + legacy[len("hermes"):]: legacy
+    for legacy in tuple(TOOLSETS)
+    if legacy.startswith("hermes-")
+}
+for canonical, legacy in _ARGUS_TOOLSET_ALIASES.items():
+    TOOLSETS[canonical] = TOOLSETS[legacy]
 
 
 
@@ -668,6 +681,7 @@ def get_toolset(name: str) -> Optional[Dict[str, Any]]:
         None: If toolset not found
     """
     toolset = TOOLSETS.get(name)
+    legacy_name = _ARGUS_TOOLSET_ALIASES.get(name)
 
     try:
         from tools.registry import registry
@@ -678,6 +692,7 @@ def get_toolset(name: str) -> Optional[Dict[str, Any]]:
         merged_tools = sorted(
             set(toolset.get("tools", []))
             | set(registry.get_tool_names_for_toolset(name))
+            | (set(registry.get_tool_names_for_toolset(legacy_name)) if legacy_name else set())
         )
         return {**toolset, "tools": merged_tools}
 

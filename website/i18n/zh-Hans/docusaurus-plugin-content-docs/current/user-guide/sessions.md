@@ -6,13 +6,13 @@ description: "会话持久化、恢复、搜索、管理及各平台会话跟踪
 
 # Sessions（会话）
 
-Hermes Agent 自动将每次对话保存为一个 session。Session 支持对话恢复、跨 session 搜索以及完整的对话历史管理。
+Argus Agent 自动将每次对话保存为一个 session。Session 支持对话恢复、跨 session 搜索以及完整的对话历史管理。
 
 ## Session 的工作原理
 
 每次对话——无论来自 CLI、Telegram、Discord、Slack、WhatsApp、Signal、Matrix、Teams 还是其他任何消息平台——都会以完整消息历史的形式存储为一个 session。Session 记录在：
 
-1. **SQLite 数据库**（`~/.hermes/state.db`）——包含 FTS5 全文搜索的结构化 session 元数据，以及完整消息历史
+1. **SQLite 数据库**（`~/.argus/state.db`）——包含 FTS5 全文搜索的结构化 session 元数据，以及完整消息历史
 
 SQLite 数据库存储：
 - Session ID、来源平台、用户 ID
@@ -26,7 +26,7 @@ SQLite 数据库存储：
 
 ### 哪些内容计入上下文
 
-Hermes 存储 session 历史以便恢复对话，但不会在每次对话时重新发送所有历史字节。每轮对话中，模型看到的是：所选系统 prompt、当前对话窗口，以及 Hermes 为该轮显式注入的内容。
+Argus 存储 session 历史以便恢复对话，但不会在每次对话时重新发送所有历史字节。每轮对话中，模型看到的是：所选系统 prompt、当前对话窗口，以及 Argus 为该轮显式注入的内容。
 
 媒体附件作为轮次范围内的输入处理：
 
@@ -35,12 +35,12 @@ Hermes 存储 session 历史以便恢复对话，但不会在每次对话时重�
 - 文本文档可以将提取的文本包含在内；其他文档类型通常以本地保存路径和简短说明来表示。
 - 附件路径和提取/派生的文本可能出现在对话记录中，但原始图片、音频或二进制文件字节不会被反复复制到后续 prompt 中。
 
-例如，如果用户发送一张图片并要求 Hermes 制作表情包，Hermes 可能会用视觉能力检查该图片一次并运行图像处理脚本。后续轮次不会自动将原始 JPEG 带入上下文，只携带写入对话的内容，例如用户的请求、简短的图片描述、本地缓存路径或最终的助手回复。
+例如，如果用户发送一张图片并要求 Argus 制作表情包，Argus 可能会用视觉能力检查该图片一次并运行图像处理脚本。后续轮次不会自动将原始 JPEG 带入上下文，只携带写入对话的内容，例如用户的请求、简短的图片描述、本地缓存路径或最终的助手回复。
 
 上下文增长最常见的原因不是媒体文件本身，而是冗长的文本：粘贴的转录、完整日志、大型工具输出、长 diff、重复的状态报告以及详细的证明转储。优先使用摘要、文件路径、重点摘录和工具支持的查找，而不是将大型内容复制到聊天中。
 
 :::tip
-当 session 变长时使用 `/compress`，用 `/new` 开启新线程，仅在需要从存储中删除旧的已结束 session 时才使用 `hermes sessions prune`。压缩会减少活跃上下文，而不是隐私删除。向 `/new` 传入名称（例如 `/new payments-refactor`）可以预先设置新 session 的初始标题——便于之后通过 `/resume <name>` 或 `/sessions` 选择器找到它。
+当 session 变长时使用 `/compress`，用 `/new` 开启新线程，仅在需要从存储中删除旧的已结束 session 时才使用 `argus sessions prune`。压缩会减少活跃上下文，而不是隐私删除。向 `/new` 传入名称（例如 `/new payments-refactor`）可以预先设置新 session 的初始标题——便于之后通过 `/resume <name>` 或 `/sessions` 选择器找到它。
 :::
 
 ### Session 来源
@@ -49,7 +49,7 @@ Hermes 存储 session 历史以便恢复对话，但不会在每次对话时重�
 
 | 来源 | 描述 |
 |--------|-------------|
-| `cli` | 交互式 CLI（`hermes` 或 `hermes chat`） |
+| `cli` | 交互式 CLI（`argus` 或 `argus chat`） |
 | `telegram` | Telegram 消息 |
 | `discord` | Discord 服务器/私信 |
 | `slack` | Slack 工作区 |
@@ -80,12 +80,12 @@ Hermes 存储 session 历史以便恢复对话，但不会在每次对话时重�
 
 ```bash
 # 恢复最近的 CLI session
-hermes --continue
-hermes -c
+argus --continue
+argus -c
 
 # 或使用 chat 子命令
-hermes chat --continue
-hermes chat -c
+argus chat --continue
+argus chat -c
 ```
 
 这会从 SQLite 数据库中查找最近的 `cli` session 并加载其完整对话历史。
@@ -96,34 +96,34 @@ hermes chat -c
 
 ```bash
 # 恢复一个命名 session
-hermes -c "my project"
+argus -c "my project"
 
 # 如果存在谱系变体（my project、my project #2、my project #3），
 # 会自动恢复最新的一个
-hermes -c "my project"   # → 恢复 "my project #3"
+argus -c "my project"   # → 恢复 "my project #3"
 ```
 
 ### 恢复特定 Session
 
 ```bash
 # 按 ID 恢复特定 session
-hermes --resume 20250305_091523_a1b2c3d4
-hermes -r 20250305_091523_a1b2c3d4
+argus --resume 20250305_091523_a1b2c3d4
+argus -r 20250305_091523_a1b2c3d4
 
 # 按标题恢复
-hermes --resume "refactoring auth"
+argus --resume "refactoring auth"
 
 # 或使用 chat 子命令
-hermes chat --resume 20250305_091523_a1b2c3d4
+argus chat --resume 20250305_091523_a1b2c3d4
 ```
 
-Session ID 在退出 CLI session 时显示，也可通过 `hermes sessions list` 查找。
+Session ID 在退出 CLI session 时显示，也可通过 `argus sessions list` 查找。
 
 ### 恢复时的对话摘要
 
-恢复 session 时，Hermes 会在输入提示符前以样式化面板显示之前对话的紧凑摘要：
+恢复 session 时，Argus 会在输入提示符前以样式化面板显示之前对话的紧凑摘要：
 
-<img className="docs-terminal-figure" src="/img/docs/session-recap.svg" alt="恢复 Hermes session 时显示的「上次对话」摘要面板的样式化预览。" />
+<img className="docs-terminal-figure" src="/img/docs/session-recap.svg" alt="恢复 Argus session 时显示的「上次对话」摘要面板的样式化预览。" />
 <p className="docs-figure-caption">恢复模式会在返回实时提示符前显示一个紧凑摘要面板，包含最近的用户和助手轮次。</p>
 
 摘要内容：
@@ -134,7 +134,7 @@ Session ID 在退出 CLI session 时显示，也可通过 `hermes sessions list`
 - **最多**显示最近 10 轮，并以"... N earlier messages ..."指示器标注
 - 使用**暗色样式**与活跃对话区分
 
-要禁用摘要并保留最简单的单行行为，在 `~/.hermes/config.yaml` 中设置：
+要禁用摘要并保留最简单的单行行为，在 `~/.argus/config.yaml` 中设置：
 
 ```yaml
 display:
@@ -173,7 +173,7 @@ Session ID 格式为 `YYYYMMDD_HHMMSS_<hex>`——CLI/TUI session 使用 6 位�
 
 6. 从此时起，对话在该平台上继续。在新线程中回复——该频道中任何已授权的用户共享同一 session，之后线程中任何真实用户消息都能无缝加入，因为线程 session 的键不含 `user_id`。
 
-**恢复到 CLI：** 当你想回到桌面时，只需运行 `/resume <title>`（或在 shell 中运行 `hermes -r "<title>"`），从平台停止的地方继续。
+**恢复到 CLI：** 当你想回到桌面时，只需运行 `/resume <title>`（或在 shell 中运行 `argus -r "<title>"`），从平台停止的地方继续。
 
 **故障模式：**
 - 未配置主频道 → CLI 拒绝并提示 `/sethome`。
@@ -189,7 +189,7 @@ Session ID 格式为 `YYYYMMDD_HHMMSS_<hex>`——CLI/TUI session 使用 6 位�
 
 ### 自动生成标题
 
-Hermes 在第一次交换后自动为每个 session 生成简短的描述性标题（3–7 个词）。这在后台线程中使用快速辅助模型运行，不增加延迟。浏览 `hermes sessions list` 或 `hermes sessions browse` 时可以看到自动生成的标题。
+Argus 在第一次交换后自动为每个 session 生成简短的描述性标题（3–7 个词）。这在后台线程中使用快速辅助模型运行，不增加延迟。浏览 `argus sessions list` 或 `argus sessions browse` 时可以看到自动生成的标题。
 
 自动命名每个 session 只触发一次，如果你已手动设置标题则跳过。
 
@@ -206,7 +206,7 @@ Hermes 在第一次交换后自动为每个 session 生成简短的描述性标�
 也可以从命令行重命名现有 session：
 
 ```bash
-hermes sessions rename 20250305_091523_a1b2c3d4 "refactoring auth module"
+argus sessions rename 20250305_091523_a1b2c3d4 "refactoring auth module"
 ```
 
 ### 标题规则
@@ -218,13 +218,13 @@ hermes sessions rename 20250305_091523_a1b2c3d4 "refactoring auth module"
 
 ### 压缩时的自动谱系
 
-当 session 的上下文被压缩（通过 `/compress` 手动或自动触发）时，Hermes 会创建一个新的续接 session。如果原 session 有标题，新 session 会自动获得带编号的标题：
+当 session 的上下文被压缩（通过 `/compress` 手动或自动触发）时，Argus 会创建一个新的续接 session。如果原 session 有标题，新 session 会自动获得带编号的标题：
 
 ```
 "my project" → "my project #2" → "my project #3"
 ```
 
-按名称恢复时（`hermes -c "my project"`），会自动选取谱系中最新的 session。
+按名称恢复时（`argus -c "my project"`），会自动选取谱系中最新的 session。
 
 ### 在消息平台中使用 /title
 
@@ -235,19 +235,19 @@ hermes sessions rename 20250305_091523_a1b2c3d4 "refactoring auth module"
 
 ## Session 管理命令
 
-Hermes 通过 `hermes sessions` 提供完整的 session 管理命令集：
+Argus 通过 `argus sessions` 提供完整的 session 管理命令集：
 
 ### 列出 Session
 
 ```bash
 # 列出最近的 session（默认：最近 20 个）
-hermes sessions list
+argus sessions list
 
 # 按平台过滤
-hermes sessions list --source telegram
+argus sessions list --source telegram
 
 # 显示更多 session
-hermes sessions list --limit 50
+argus sessions list --limit 50
 ```
 
 当 session 有标题时，输出显示标题、预览和相对时间戳：
@@ -273,13 +273,13 @@ What's the weather in Las Vegas?                    3d ago        tele   2025030
 
 ```bash
 # 将所有 session 导出到 JSONL 文件
-hermes sessions export backup.jsonl
+argus sessions export backup.jsonl
 
 # 导出特定平台的 session
-hermes sessions export telegram-history.jsonl --source telegram
+argus sessions export telegram-history.jsonl --source telegram
 
 # 导出单个 session
-hermes sessions export session.jsonl --session-id 20250305_091523_a1b2c3d4
+argus sessions export session.jsonl --session-id 20250305_091523_a1b2c3d4
 ```
 
 导出文件每行包含一个 JSON 对象，包含完整的 session 元数据和所有消息。
@@ -288,20 +288,20 @@ hermes sessions export session.jsonl --session-id 20250305_091523_a1b2c3d4
 
 ```bash
 # 删除特定 session（需确认）
-hermes sessions delete 20250305_091523_a1b2c3d4
+argus sessions delete 20250305_091523_a1b2c3d4
 
 # 不需确认直接删除
-hermes sessions delete 20250305_091523_a1b2c3d4 --yes
+argus sessions delete 20250305_091523_a1b2c3d4 --yes
 ```
 
 ### 重命名 Session
 
 ```bash
 # 设置或更改 session 的标题
-hermes sessions rename 20250305_091523_a1b2c3d4 "debugging auth flow"
+argus sessions rename 20250305_091523_a1b2c3d4 "debugging auth flow"
 
 # 多词标题在 CLI 中不需要引号
-hermes sessions rename 20250305_091523_a1b2c3d4 debugging auth flow
+argus sessions rename 20250305_091523_a1b2c3d4 debugging auth flow
 ```
 
 如果标题已被另一个 session 使用，则显示错误。
@@ -310,16 +310,16 @@ hermes sessions rename 20250305_091523_a1b2c3d4 debugging auth flow
 
 ```bash
 # 删除 90 天前已结束的 session（默认）
-hermes sessions prune
+argus sessions prune
 
 # 自定义时间阈值
-hermes sessions prune --older-than 30
+argus sessions prune --older-than 30
 
 # 仅清理特定平台的 session
-hermes sessions prune --source telegram --older-than 60
+argus sessions prune --source telegram --older-than 60
 
 # 跳过确认
-hermes sessions prune --older-than 30 --yes
+argus sessions prune --older-than 30 --yes
 ```
 
 :::info
@@ -329,7 +329,7 @@ hermes sessions prune --older-than 30 --yes
 ### Session 统计
 
 ```bash
-hermes sessions stats
+argus sessions stats
 ```
 
 输出：
@@ -343,7 +343,7 @@ Total messages: 3847
 Database size: 12.4 MB
 ```
 
-如需更深入的分析——token 用量、费用估算、工具分解和活动模式——请使用 [`hermes insights`](/reference/cli-commands#hermes-insights)。
+如需更深入的分析——token 用量、费用估算、工具分解和活动模式——请使用 [`argus insights`](/reference/cli-commands#argus-insights)。
 
 ## Session 搜索工具
 
@@ -430,13 +430,13 @@ Agent 被提示在以下情况自动使用 session 搜索：
 | 群组线程/话题 | `agent:main:<platform>:group:<chat_id>:<thread_id>` | 所有线程参与者共享 session（默认）。设置 `thread_sessions_per_user: true` 则每用户独立。 |
 | 频道 | `agent:main:<platform>:channel:<chat_id>:<user_id>` | 当平台暴露用户 ID 时，频道内每用户独立 session |
 
-当 Hermes 无法获取共享聊天的参与者标识符时，回退为该房间共享一个 session。
+当 Argus 无法获取共享聊天的参与者标识符时，回退为该房间共享一个 session。
 
 ### 共享与隔离的群组 Session
 
-默认情况下，Hermes 在 `config.yaml` 中使用 `group_sessions_per_user: true`。这意味着：
+默认情况下，Argus 在 `config.yaml` 中使用 `group_sessions_per_user: true`。这意味着：
 
-- Alice 和 Bob 可以在同一个 Discord 频道中与 Hermes 对话，而不共享对话历史
+- Alice 和 Bob 可以在同一个 Discord 频道中与 Argus 对话，而不共享对话历史
 - 一个用户的长时间工具密集型任务不会污染另一个用户的上下文窗口
 - 中断处理也保持每用户独立，因为运行中的 agent 键与隔离的 session 键匹配
 
@@ -465,15 +465,15 @@ Gateway session 根据可配置的策略自动重置：
 
 | 内容 | 路径 | 描述 |
 |------|------|-------------|
-| SQLite 数据库 | `~/.hermes/state.db` | 所有 session 元数据 + 带 FTS5 的消息 |
-| Gateway 消息 | `~/.hermes/state.db` | SQLite——所有 session 消息的权威存储 |
-| Gateway 路由索引 | `~/.hermes/sessions/sessions.json` | 将 session 键映射到活跃 session ID（来源元数据、过期标志） |
+| SQLite 数据库 | `~/.argus/state.db` | 所有 session 元数据 + 带 FTS5 的消息 |
+| Gateway 消息 | `~/.argus/state.db` | SQLite——所有 session 消息的权威存储 |
+| Gateway 路由索引 | `~/.argus/sessions/sessions.json` | 将 session 键映射到活跃 session ID（来源元数据、过期标志） |
 
 SQLite 数据库使用 WAL 模式支持并发读取和单写入，非常适合 gateway 的多平台架构。
 
 :::note 遗留 JSONL 对话记录
-在 state.db 成为权威存储之前创建的 session 可能在 `~/.hermes/sessions/` 中留有
-`*.jsonl` 文件。Hermes 不再写入或读取这些文件。在确认对应 session 存在于
+在 state.db 成为权威存储之前创建的 session 可能在 `~/.argus/sessions/` 中留有
+`*.jsonl` 文件。Argus 不再写入或读取这些文件。在确认对应 session 存在于
 state.db 后可安全删除。
 :::
 
@@ -493,9 +493,9 @@ state.db 后可安全删除。
 - 重置前，agent 保存即将过期 session 中的记忆和技能
 - 可选自动清理：当 `sessions.auto_prune` 为 `true` 时，在 CLI/gateway 启动时清理早于 `sessions.retention_days`（默认 90）天的已结束 session
 - 实际删除了行的清理操作完成后，`state.db` 会执行 `VACUUM` 以回收磁盘空间（SQLite 在普通 DELETE 后不会缩小文件）
-- 清理最多每 `sessions.min_interval_hours`（默认 24）小时运行一次；上次运行时间戳记录在 `state.db` 内部，因此在同一 `HERMES_HOME` 下的所有 Hermes 进程间共享
+- 清理最多每 `sessions.min_interval_hours`（默认 24）小时运行一次；上次运行时间戳记录在 `state.db` 内部，因此在同一 `ARGUS_HOME` 下的所有 Argus 进程间共享
 
-默认为**关闭**——session 历史对 `session_search` 召回很有价值，静默删除可能会让用户感到意外。在 `~/.hermes/config.yaml` 中启用：
+默认为**关闭**——session 历史对 `session_search` 召回很有价值，静默删除可能会让用户感到意外。在 `~/.argus/config.yaml` 中启用：
 
 ```yaml
 sessions:
@@ -511,16 +511,16 @@ sessions:
 
 ```bash
 # 清理 90 天前的 session
-hermes sessions prune
+argus sessions prune
 
 # 删除特定 session
-hermes sessions delete <session_id>
+argus sessions delete <session_id>
 
 # 清理前先导出（备份）
-hermes sessions export backup.jsonl
-hermes sessions prune --older-than 30 --yes
+argus sessions export backup.jsonl
+argus sessions prune --older-than 30 --yes
 ```
 
 :::tip
-数据库增长缓慢（典型情况：数百个 session 约 10–15 MB），session 历史为跨历史对话的 `session_search` 召回提供支持，因此自动清理默认关闭。如果你运行繁重的 gateway/cron 工作负载且 `state.db` 明显影响性能（已观察到的故障模式：约 1000 个 session 的 384 MB state.db 导致 FTS5 插入和 `/resume` 列表变慢），则启用它。使用 `hermes sessions prune` 进行一次性清理，无需开启自动清理。
+数据库增长缓慢（典型情况：数百个 session 约 10–15 MB），session 历史为跨历史对话的 `session_search` 召回提供支持，因此自动清理默认关闭。如果你运行繁重的 gateway/cron 工作负载且 `state.db` 明显影响性能（已观察到的故障模式：约 1000 个 session 的 384 MB state.db 导致 FTS5 插入和 `/resume` 列表变慢），则启用它。使用 `argus sessions prune` 进行一次性清理，无需开启自动清理。
 :::

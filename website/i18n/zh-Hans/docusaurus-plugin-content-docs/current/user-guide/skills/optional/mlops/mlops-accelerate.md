@@ -14,7 +14,7 @@ description: "最简分布式训练 API"
 
 | | |
 |---|---|
-| 来源 | 可选 — 通过 `hermes skills install official/mlops/accelerate` 安装 |
+| 来源 | 可选 — 通过 `argus skills install official/mlops/accelerate` 安装 |
 | 路径 | `optional-skills/mlops/accelerate` |
 | 版本 | `1.0.0` |
 | 作者 | Orchestra Research |
@@ -319,11 +319,11 @@ set_seed(42)
 
 ## 高级主题
 
-**Megatron 集成**：张量并行、流水线并行和序列并行的配置，请参阅 [references/megatron-integration.md](https://github.com/NousResearch/hermes-agent/blob/main/optional-skills/mlops/accelerate/references/megatron-integration.md)。
+**Megatron 集成**：张量并行、流水线并行和序列并行的配置，请参阅 [references/megatron-integration.md](https://github.com/MMArgus-Team/Argus/blob/main/optional-skills/mlops/accelerate/references/megatron-integration.md)。
 
-**自定义插件**：创建自定义分布式插件及高级配置，请参阅 [references/custom-plugins.md](https://github.com/NousResearch/hermes-agent/blob/main/optional-skills/mlops/accelerate/references/custom-plugins.md)。
+**自定义插件**：创建自定义分布式插件及高级配置，请参阅 [references/custom-plugins.md](https://github.com/MMArgus-Team/Argus/blob/main/optional-skills/mlops/accelerate/references/custom-plugins.md)。
 
-**性能调优**：性能分析、内存优化及最佳实践，请参阅 [references/performance.md](https://github.com/NousResearch/hermes-agent/blob/main/optional-skills/mlops/accelerate/references/performance.md)。
+**性能调优**：性能分析、内存优化及最佳实践，请参阅 [references/performance.md](https://github.com/MMArgus-Team/Argus/blob/main/optional-skills/mlops/accelerate/references/performance.md)。
 
 ## 硬件要求
 

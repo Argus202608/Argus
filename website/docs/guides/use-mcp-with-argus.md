@@ -1,25 +1,25 @@
 ---
 sidebar_position: 6
-title: "Use MCP with Hermes"
-description: "A practical guide to connecting MCP servers to Hermes Agent, filtering their tools, and using them safely in real workflows"
+title: "Use MCP with Argus"
+description: "A practical guide to connecting MCP servers to Argus Agent, filtering their tools, and using them safely in real workflows"
 ---
 
-# Use MCP with Hermes
+# Use MCP with Argus
 
-This guide shows how to actually use MCP with Hermes Agent in day-to-day workflows.
+This guide shows how to actually use MCP with Argus Agent in day-to-day workflows.
 
 If the feature page explains what MCP is, this guide is about how to get value from it quickly and safely.
 
 ## When should you use MCP?
 
 Use MCP when:
-- a tool already exists in MCP form and you do not want to build a native Hermes tool
-- you want Hermes to operate against a local or remote system through a clean RPC layer
+- a tool already exists in MCP form and you do not want to build a native Argus tool
+- you want Argus to operate against a local or remote system through a clean RPC layer
 - you want fine-grained per-server exposure control
-- you want to connect Hermes to internal APIs, databases, or company systems without modifying Hermes core
+- you want to connect Argus to internal APIs, databases, or company systems without modifying Argus core
 
 Do not use MCP when:
-- a built-in Hermes tool already solves the job well
+- a built-in Argus tool already solves the job well
 - the server exposes a huge dangerous tool surface and you are not prepared to filter it
 - you only need one very narrow integration and a native tool would be simpler and safer
 
@@ -27,9 +27,9 @@ Do not use MCP when:
 
 Think of MCP as an adapter layer:
 
-- Hermes remains the agent
+- Argus remains the agent
 - MCP servers contribute tools
-- Hermes discovers those tools at startup or reload time
+- Argus discovers those tools at startup or reload time
 - the model can use them like normal tools
 - you control how much of each server is visible
 
@@ -37,12 +37,12 @@ That last part matters. Good MCP usage is not just “connect everything.” It 
 
 ## Step 1: install MCP support
 
-If you installed Hermes with the standard install script, MCP support is already included (the installer runs `uv pip install -e ".[all]"`).
+If you installed Argus with the standard install script, MCP support is already included (the installer runs `uv pip install -e ".[all]"`).
 
 If you installed without extras and need to add MCP separately:
 
 ```bash
-cd ~/.hermes/hermes-agent
+cd ~/.argus/argus
 uv pip install -e ".[mcp]"
 ```
 
@@ -63,10 +63,10 @@ mcp_servers:
     args: ["-y", "@modelcontextprotocol/server-filesystem", "/home/user/my-project"]
 ```
 
-Then start Hermes:
+Then start Argus:
 
 ```bash
-hermes chat
+argus chat
 ```
 
 Now ask something concrete:
@@ -79,8 +79,8 @@ Inspect this project and summarize the repo layout.
 
 You can verify MCP in a few ways:
 
-- Hermes banner/status should show MCP integration when configured
-- ask Hermes what tools it has available
+- Argus banner/status should show MCP integration when configured
+- ask Argus what tools it has available
 - use `/reload-mcp` after config changes
 - check logs if the server failed to connect
 
@@ -109,32 +109,32 @@ mcp_servers:
 
 This is usually the best default for sensitive systems.
 
-## WSL2: bridge Hermes in WSL to Windows Chrome
+## WSL2: bridge Argus in WSL to Windows Chrome
 
 This is the practical setup when:
 
-- Hermes runs inside WSL2
+- Argus runs inside WSL2
 - the browser you want to control is your normal signed-in Chrome on Windows
 - `/browser connect` is awkward or unreliable from WSL
 
-In this setup, Hermes does **not** connect to Chrome directly. Instead:
+In this setup, Argus does **not** connect to Chrome directly. Instead:
 
-- Hermes runs in WSL
-- Hermes starts a local stdio MCP server
+- Argus runs in WSL
+- Argus starts a local stdio MCP server
 - that MCP server is launched through Windows interop (`cmd.exe` or `powershell.exe`)
 - the MCP server attaches to your live Windows Chrome session
 
 Mental model:
 
 ```text
-Hermes (WSL) -> MCP stdio bridge -> Windows Chrome
+Argus (WSL) -> MCP stdio bridge -> Windows Chrome
 ```
 
 ### Why this mode is useful
 
 - you keep your real Windows browser profile, cookies, and logins
-- Hermes stays in its supported Unix environment (WSL2)
-- browser control is exposed as MCP tools instead of relying on Hermes core browser transport
+- Argus stays in its supported Unix environment (WSL2)
+- browser control is exposed as MCP tools instead of relying on Argus core browser transport
 
 ### Recommended server
 
@@ -143,16 +143,16 @@ Use `chrome-devtools-mcp`.
 If your Windows Chrome already has live remote debugging enabled from `chrome://inspect/#remote-debugging`, add it like this from WSL:
 
 ```bash
-hermes mcp add chrome-devtools-win --command cmd.exe --args /c npx -y chrome-devtools-mcp@latest --autoConnect --no-usage-statistics
+argus mcp add chrome-devtools-win --command cmd.exe --args /c npx -y chrome-devtools-mcp@latest --autoConnect --no-usage-statistics
 ```
 
 After saving the server:
 
 ```bash
-hermes mcp test chrome-devtools-win
+argus mcp test chrome-devtools-win
 ```
 
-Then start a fresh Hermes session or run:
+Then start a fresh Argus session or run:
 
 ```text
 /reload-mcp
@@ -160,7 +160,7 @@ Then start a fresh Hermes session or run:
 
 ### Typical prompt
 
-Once loaded, Hermes can use the MCP-prefixed browser tools directly. For example:
+Once loaded, Argus can use the MCP-prefixed browser tools directly. For example:
 
 ```text
 调用 MCP 工具 mcp_chrome_devtools_win_list_pages，列出当前浏览器标签页。
@@ -168,7 +168,7 @@ Once loaded, Hermes can use the MCP-prefixed browser tools directly. For example
 
 ### When `/browser connect` is the wrong tool
 
-If Hermes runs in WSL and Chrome runs on Windows, `/browser connect` may fail even though Chrome is open and debuggable.
+If Argus runs in WSL and Chrome runs on Windows, `/browser connect` may fail even though Chrome is open and debuggable.
 
 Common reasons:
 
@@ -180,8 +180,8 @@ In those cases, keep `/browser connect` for same-environment setups and use MCP 
 
 ### Known pitfalls
 
-- Start Hermes from a Windows-mounted path like `/mnt/c/Users/<you>` or `/mnt/c/workspace/...` when using Windows stdio executables through MCP.
-- If you start Hermes from `/root` or `/home/...`, Windows may emit a `UNC` current-directory warning before the MCP server starts.
+- Start Argus from a Windows-mounted path like `/mnt/c/Users/<you>` or `/mnt/c/workspace/...` when using Windows stdio executables through MCP.
+- If you start Argus from `/root` or `/home/...`, Windows may emit a `UNC` current-directory warning before the MCP server starts.
 - If `chrome-devtools-mcp --autoConnect` times out while enumerating pages, reduce background/frozen tabs in Chrome and retry.
 
 ### Example: blacklist dangerous actions
@@ -209,14 +209,14 @@ mcp_servers:
 
 ## What does filtering actually affect?
 
-There are two categories of MCP-exposed functionality in Hermes:
+There are two categories of MCP-exposed functionality in Argus:
 
 1. Server-native MCP tools
 - filtered with:
   - `tools.include`
   - `tools.exclude`
 
-2. Hermes-added utility wrappers
+2. Argus-added utility wrappers
 - filtered with:
   - `tools.resources`
   - `tools.prompts`
@@ -235,13 +235,13 @@ These wrappers only appear if:
 - your config allows them, and
 - the MCP server session actually supports those capabilities
 
-So Hermes will not pretend a server has resources/prompts if it does not.
+So Argus will not pretend a server has resources/prompts if it does not.
 
 ## Common patterns
 
 ### Pattern 1: local project assistant
 
-Use MCP for a repo-local filesystem or git server when you want Hermes to reason over a bounded workspace.
+Use MCP for a repo-local filesystem or git server when you want Argus to reason over a bounded workspace.
 
 ```yaml
 mcp_servers:
@@ -266,16 +266,16 @@ Check the local git state and summarize what changed recently.
 
 ### Pattern 2: repo-native work record with Open Scaffold
 
-Use [Open Scaffold](https://github.com/graphanov/open-scaffold) when you want Hermes to read a repository's durable AI-work record: mission, plans, evidence notes, handoff packets, and review/gate results. Hermes remains the agent; Open Scaffold remains the repo-local record.
+Use [Open Scaffold](https://github.com/graphanov/open-scaffold) when you want Argus to read a repository's durable AI-work record: mission, plans, evidence notes, handoff packets, and review/gate results. Argus remains the agent; Open Scaffold remains the repo-local record.
 
 Add the server for one scaffolded repository:
 
 ```bash
-hermes mcp add open_scaffold --command npx --args -y open-scaffold@latest mcp serve --repo /absolute/path/to/repo
-hermes mcp test open_scaffold
+argus mcp add open_scaffold --command npx --args -y open-scaffold@latest mcp serve --repo /absolute/path/to/repo
+argus mcp test open_scaffold
 ```
 
-Then keep the exposed surface read-oriented. Choose `select` in the `hermes mcp add` prompt, or edit `config.yaml` afterward:
+Then keep the exposed surface read-oriented. Choose `select` in the `argus mcp add` prompt, or edit `config.yaml` afterward:
 
 ```yaml
 mcp_servers:
@@ -311,8 +311,8 @@ Inspect the active plans and evidence notes, then say whether this repo is ready
 Boundary notes:
 
 - Open Scaffold MCP is local-first and read-only by default.
-- Its write tools require the server to be started with `--allow-write`; do not enable that until you explicitly want Hermes to mutate `.osc` files.
-- Open Scaffold records and gates work; it does not authorize Hermes to merge, publish, deploy, or spawn runtimes.
+- Its write tools require the server to be started with `--allow-write`; do not enable that until you explicitly want Argus to mutate `.osc` files.
+- Open Scaffold records and gates work; it does not authorize Argus to merge, publish, deploy, or spawn runtimes.
 - Pin `open-scaffold@<version>` instead of `@latest` if you need reproducible tool schemas.
 
 ### Pattern 3: GitHub triage assistant
@@ -404,7 +404,7 @@ mcp_servers:
       resources: false
 ```
 
-Start Hermes and ask:
+Start Argus and ask:
 
 ```text
 Search the codebase for references to MCP and summarize the main integration points.
@@ -444,13 +444,13 @@ mcp_servers:
     args: ["-y", "@modelcontextprotocol/server-filesystem", "/home/user/project"]
 ```
 
-Now Hermes can combine them:
+Now Argus can combine them:
 
 ```text
 Inspect the local project files, then create a GitHub issue summarizing the bug you find.
 ```
 
-That is where MCP gets powerful: multi-system workflows without changing Hermes core.
+That is where MCP gets powerful: multi-system workflows without changing Argus core.
 
 ## Safe usage recommendations
 
@@ -509,7 +509,7 @@ Check:
 
 ### "Why do I see fewer tools than the MCP server advertises?"
 
-Because Hermes now respects your per-server policy and capability-aware registration. That is expected, and usually desirable.
+Because Argus now respects your per-server policy and capability-aware registration. That is expected, and usually desirable.
 
 ### "How do I remove an MCP server without deleting the config?"
 

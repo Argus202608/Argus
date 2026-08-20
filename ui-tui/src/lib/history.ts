@@ -1,10 +1,18 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
 const MAX = 1000
 const dir = process.env.ARGUS_HOME ?? join(homedir(), '.argus')
-const file = join(dir, '.hermes_history')
+const file = join(dir, '.argus_history')
+const legacyFile = join(dir, '.hermes_history')
+
+function migrateLegacyHistory() {
+  if (!existsSync(file) && existsSync(legacyFile)) {
+    mkdirSync(dir, { recursive: true })
+    copyFileSync(legacyFile, file)
+  }
+}
 
 let cache: string[] | null = null
 
@@ -14,6 +22,7 @@ export function load() {
   }
 
   try {
+    migrateLegacyHistory()
     if (!existsSync(file)) {
       cache = []
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Solana Blockchain CLI Tool for Hermes Agent
+Solana Blockchain CLI Tool for Argus
 --------------------------------------------
 Queries the Solana JSON-RPC API and CoinGecko for enriched on-chain data.
 Uses only Python standard library — no external packages required.
@@ -643,7 +643,7 @@ def cmd_price(args):
 def main():
     parser = argparse.ArgumentParser(
         prog="solana_client.py",
-        description="Solana blockchain query tool for Hermes Agent",
+        description="Solana blockchain query tool for Argus",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 

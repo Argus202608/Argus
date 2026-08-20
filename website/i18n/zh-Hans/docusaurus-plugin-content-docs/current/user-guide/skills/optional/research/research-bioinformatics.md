@@ -14,7 +14,7 @@ description: "来自 bioSkills 和 ClawBio 的 400+ 生物信息学技能网关"
 
 | | |
 |---|---|
-| 来源 | 可选 — 使用 `hermes skills install official/research/bioinformatics` 安装 |
+| 来源 | 可选 — 使用 `argus skills install official/research/bioinformatics` 安装 |
 | 路径 | `optional-skills/research/bioinformatics` |
 | 版本 | `1.0.0` |
 | 平台 | linux, macos |

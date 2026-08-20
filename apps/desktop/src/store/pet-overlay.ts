@@ -9,7 +9,7 @@ import { $awaitingResponse, $busy } from '@/store/session'
  *
  * Shift-clicking the in-window pet "pops it out" into a transparent,
  * always-on-top OS window (created in electron/main.cjs) that can leave the
- * app's bounds and stays visible while Hermes is minimized. That window carries
+ * app's bounds and stays visible while Argus is minimized. That window carries
  * NO gateway connection — this renderer remains the single source of truth and
  * pushes the live pet state to it over IPC. Control flows back (pop the pet back
  * in, submit a composer message) via `onControl`.
@@ -134,7 +134,7 @@ function currentPayload(): PetOverlayStatePayload {
 }
 
 function pushNow(): void {
-  window.hermesDesktop?.petOverlay?.pushState(currentPayload())
+  window.argusDesktop?.petOverlay?.pushState(currentPayload())
 }
 
 /**
@@ -143,7 +143,7 @@ function pushNow(): void {
  * pet reopens exactly where the user left it.
  */
 function openOverlay(request: PetOverlayOpenRequest): void {
-  const api = window.hermesDesktop?.petOverlay
+  const api = window.argusDesktop?.petOverlay
 
   if (!api || stateUnsubs.length) {
     return
@@ -204,7 +204,7 @@ export function popOutPet(petRect: PetOverlayBounds): void {
  * in-window pet rather than spawning an orphan window at the origin.
  */
 export function restorePetOverlay(): void {
-  if (!window.hermesDesktop?.petOverlay || !$petOverlayActive.get() || stateUnsubs.length) {
+  if (!window.argusDesktop?.petOverlay || !$petOverlayActive.get() || stateUnsubs.length) {
     return
   }
 
@@ -227,7 +227,7 @@ export function popInPet(): void {
 
   stateUnsubs = []
   $petOverlayActive.set(false)
-  void window.hermesDesktop?.petOverlay?.close()
+  void window.argusDesktop?.petOverlay?.close()
 }
 
 /** Register the handler that turns an overlay composer submit into a real send. */
@@ -250,7 +250,7 @@ export function setPetOverlayScaleHandler(fn: ((scale: number) => void) | null):
  * — a second call while already wired is a no-op.
  */
 export function initPetOverlayBridge(): () => void {
-  const api = window.hermesDesktop?.petOverlay
+  const api = window.argusDesktop?.petOverlay
 
   if (!api || controlUnsub) {
     return () => {}

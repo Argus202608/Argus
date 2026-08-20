@@ -18,7 +18,7 @@ import {
   type MmMemoryDebugTablePayload,
   type MmMemoryDebugTraceResponse,
   searchMultimodalMemoryDebug
-} from '@/hermes'
+} from '@/argus'
 import { Activity, Brain, Bug, FileImage, RefreshCw, Search } from '@/lib/icons'
 import { compactQueryWorkerTrajectoryImages } from '@/lib/query-worker-trajectory-cache'
 import { cn } from '@/lib/utils'

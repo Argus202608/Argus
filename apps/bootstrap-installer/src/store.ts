@@ -64,7 +64,7 @@ export type Route = 'welcome' | 'progress' | 'success' | 'failure'
 
 /// How the installer was launched, mirrored from src-tauri AppMode.
 /// 'install' = first-run onboarding (bare launch). 'update' = driven by the
-/// desktop app handing off via `Hermes-Setup.exe --update`.
+/// desktop app handing off via `Argus-Setup.exe --update`.
 export type AppMode = 'install' | 'update'
 
 export const $route = atom<Route>('welcome')
@@ -207,7 +207,7 @@ export async function initialize(): Promise<void> {
           installRoot: payload.installRoot,
           currentStage: null
         })
-        // Install: show the "launch Hermes" success screen. Update: this is a
+        // Install: show the "launch Argus" success screen. Update: this is a
         // hand-off — the installer relaunches the desktop and exits within a
         // few hundred ms, so routing to success just flashes that screen
         // before the window closes. Stay on progress until we exit.
@@ -255,7 +255,7 @@ export async function startInstall(opts?: { branch?: string }): Promise<void> {
 }
 
 export async function startUpdate(): Promise<void> {
-  // Update is driven by the desktop handing off (Hermes-Setup.exe --update);
+  // Update is driven by the desktop handing off (Argus-Setup.exe --update);
   // there's no welcome click. Reset + jump straight to progress, then let the
   // Rust side stream the synthetic update manifest.
   $bootstrap.set(INITIAL)
@@ -270,7 +270,7 @@ export async function cancelInstall(): Promise<void> {
 export async function launchHermesDesktop(): Promise<void> {
   const installRoot = $bootstrap.get().installRoot
   if (!installRoot) throw new Error('no install root')
-  await invoke('launch_hermes_desktop', { installRoot })
+  await invoke('launch_argus_desktop', { installRoot })
 }
 
 export async function openLogDir(): Promise<void> {

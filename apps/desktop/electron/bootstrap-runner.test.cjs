@@ -60,8 +60,8 @@ test('installedAgentInstallScript resolves the installer in the agent checkout',
 test('resolveInstallScript prefers the bundled source (self-contained app) over everything', async () => {
   const home = mkTmpHome()
   try {
-    // Bundled agent source shipped inside the app: resources/hermes-src/scripts/<installer>.
-    const bundledRoot = path.join(home, 'hermes-src')
+    // Bundled agent source shipped inside the app: resources/argus-src/scripts/<installer>.
+    const bundledRoot = path.join(home, 'argus-src')
     const scriptsDir = path.join(bundledRoot, 'scripts')
     fs.mkdirSync(scriptsDir, { recursive: true })
     const bundledScript = path.join(scriptsDir, SCRIPT_NAME)

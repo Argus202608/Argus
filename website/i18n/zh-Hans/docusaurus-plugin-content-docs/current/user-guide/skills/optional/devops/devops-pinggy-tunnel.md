@@ -14,7 +14,7 @@ description: "通过 Pinggy 实现零安装 SSH localhost 隧道"
 
 | | |
 |---|---|
-| 来源 | 可选 — 使用 `hermes skills install official/devops/pinggy-tunnel` 安装 |
+| 来源 | 可选 — 使用 `argus skills install official/devops/pinggy-tunnel` 安装 |
 | 路径 | `optional-skills/devops/pinggy-tunnel` |
 | 版本 | `0.1.0` |
 | 作者 | Teknium (teknium1), Hermes Agent |

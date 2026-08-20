@@ -35,7 +35,7 @@ const { gatewayAtom } = vi.hoisted(() => {
   }
 })
 
-vi.mock('@/hermes', () => ({
+vi.mock('@/argus', () => ({
   getMultimodalMemoryDebugFrame: memoryDebugApi.frame,
   getMultimodalMemoryDebugSession: memoryDebugApi.session,
   getMultimodalMemoryDebugSessions: memoryDebugApi.sessions,

@@ -49,7 +49,7 @@ Gmail、Calendar、Drive、Contacts、Sheets 和 Docs —— 通过 Hermes 管�
 首先定义一个简写：
 
 ```bash
-GSETUP="python ${HERMES_HOME:-$HOME/.hermes}/skills/productivity/google-workspace/scripts/setup.py"
+GSETUP="python ${ARGUS_HOME:-$HOME/.hermes}/skills/productivity/google-workspace/scripts/setup.py"
 ```
 
 ### 步骤 0：检查是否已完成设置
@@ -100,7 +100,7 @@ $GSETUP --check
 >    受众群体 → 测试用户 → 添加用户
 > 6. 下载 JSON 文件并告诉我文件路径
 >
-> Hermes CLI 重要提示：若文件路径以 `/` 开头，请勿在 CLI 中单独发送该裸路径，因为它可能被误识别为斜杠命令。请将其放在句子中发送，例如：
+> Argus CLI 重要提示：若文件路径以 `/` 开头，请勿在 CLI 中单独发送该裸路径，因为它可能被误识别为斜杠命令。请将其放在句子中发送，例如：
 > `The JSON file path is: /home/user/Downloads/client_secret_....json`
 
 用户提供路径后：
@@ -159,7 +159,7 @@ $GSETUP --check
 所有命令均通过 API 脚本执行。将 `GAPI` 设为简写：
 
 ```bash
-GAPI="python ${HERMES_HOME:-$HOME/.hermes}/skills/productivity/google-workspace/scripts/google_api.py"
+GAPI="python ${ARGUS_HOME:-$HOME/.hermes}/skills/productivity/google-workspace/scripts/google_api.py"
 ```
 
 ### Gmail

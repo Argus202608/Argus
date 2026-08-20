@@ -14,7 +14,7 @@ description: "使用 Pillow 选取模板并叠加文字，生成真实的表情�
 
 | | |
 |---|---|
-| 来源 | 可选 — 通过 `hermes skills install official/creative/meme-generation` 安装 |
+| 来源 | 可选 — 通过 `argus skills install official/creative/meme-generation` 安装 |
 | 路径 | `optional-skills/creative/meme-generation` |
 | 版本 | `2.0.0` |
 | 作者 | adanaleycio |

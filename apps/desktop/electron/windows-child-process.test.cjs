@@ -42,7 +42,7 @@ test('desktop background child processes opt into hidden Windows consoles', () =
   )
 
   assert.match(source, /function unwrapWindowsVenvHermesCommand\(command, dashboardArgs\)/)
-  assert.match(source, /existing Hermes no-console Python at/)
+  assert.match(source, /existing Argus no-console Python at/)
   assert.match(source, /function getNoConsoleVenvPython\(venvRoot\)/)
   assert.match(source, /function toNoConsolePython\(pythonPath\)/)
   assert.match(source, /function applyWindowsNoConsoleSpawnHints\(backend\)/)

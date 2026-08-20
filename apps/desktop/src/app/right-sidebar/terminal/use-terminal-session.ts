@@ -189,7 +189,7 @@ function collectDroppedPaths(t: DataTransfer): string[] {
     // Malformed in-app drag payload — fall through to OS files.
   }
 
-  const getPath = window.hermesDesktop?.getPathForFile
+  const getPath = window.argusDesktop?.getPathForFile
 
   const addFile = (file: File | null) => {
     if (!file || !getPath) {
@@ -316,7 +316,7 @@ export function useTerminalSession({ cwd, onAddSelectionToChat }: UseTerminalSes
 
   useEffect(() => {
     const host = hostRef.current
-    const terminalApi = window.hermesDesktop?.terminal
+    const terminalApi = window.argusDesktop?.terminal
 
     if (!host || !terminalApi) {
       setStatus('closed')
@@ -693,7 +693,7 @@ export function useTerminalSession({ cwd, onAddSelectionToChat }: UseTerminalSes
         return
       }
 
-      void window.hermesDesktop?.terminal?.write(id, `${command}\r`)
+      void window.argusDesktop?.terminal?.write(id, `${command}\r`)
       $terminalInjection.set(null)
       termRef.current?.focus()
     })

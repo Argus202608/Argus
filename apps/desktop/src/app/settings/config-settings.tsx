@@ -12,7 +12,7 @@ import {
   getHermesConfigRecord,
   getHermesConfigSchema,
   saveHermesConfig
-} from '@/hermes'
+} from '@/argus'
 import { useI18n } from '@/i18n'
 import { cn } from '@/lib/utils'
 import { notify, notifyError } from '@/store/notifications'

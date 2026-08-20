@@ -18,7 +18,7 @@ def build_setup_parser(subparsers, *, cmd_setup: Callable) -> None:
         "setup",
         aliases=["onboarding"],
         help="Interactive setup wizard (alias: onboarding)",
-        description="Configure Hermes Agent with an interactive wizard. "
+        description="Configure Argus with an interactive wizard. "
         "Run a specific section: argus setup model|tts|terminal|gateway|tools|multimodal|agent",
     )
     setup_parser.add_argument(

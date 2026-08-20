@@ -1,5 +1,5 @@
 """
-Top-level argparse construction for the hermes CLI.
+Top-level argparse construction for the argus CLI.
 
 Lives in its own module so other modules (e.g. ``relaunch.py``) can
 introspect the parser to discover which flags exist without running the
@@ -11,6 +11,8 @@ because its dispatch is tightly coupled to module-level ``cmd_*`` functions.
 """
 
 import argparse
+import os
+import sys
 
 
 # `--profile` / `-p` is consumed by ``main._apply_profile_override`` before
@@ -39,7 +41,7 @@ def _inherited_flag(parser, *args, **kwargs):
 
 _EPILOGUE = """
 Examples:
-    hermes                        Start interactive chat
+    argus                        Start interactive chat
     argus chat -q "Hello"        Single query mode
     argus --tui                  Launch the modern TUI (or set display.interface: tui)
     argus --cli                  Force the classic REPL (overrides display.interface: tui)
@@ -77,7 +79,7 @@ Examples:
     argus dashboard --status     List running dashboard processes
 
 For more help on a command:
-    hermes <command> --help
+    argus <command> --help
 """
 
 
@@ -89,8 +91,10 @@ def build_top_level_parser():
     other subparsers via ``subparsers.add_parser(...)``.
     """
     parser = argparse.ArgumentParser(
-        prog="hermes",
-        description="Hermes Agent - AI assistant with tool-calling capabilities",
+        # Preserve the legacy alias in its own help output while making the
+        # canonical installed command advertise itself as ``argus``.
+        prog=os.path.basename(sys.argv[0]) or "argus",
+        description="Argus - AI assistant with tool-calling capabilities",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=_EPILOGUE,
     )
@@ -114,7 +118,7 @@ def build_top_level_parser():
     # --model / --provider are accepted at the top level so they can pair
     # with -z without needing the `chat` subcommand.  If neither -z nor a
     # subcommand consumes them, they fall through harmlessly as None.
-    # Mirrors `hermes chat --model ... --provider ...` semantics.
+    # Mirrors `argus chat --model ... --provider ...` semantics.
     _inherited_flag(
         parser,
         "-m",
@@ -251,7 +255,7 @@ def build_top_level_parser():
     chat_parser = subparsers.add_parser(
         "chat",
         help="Interactive chat with the agent",
-        description="Start an interactive chat session with Hermes Agent",
+        description="Start an interactive chat session with Argus",
     )
     chat_parser.add_argument(
         "-q", "--query", help="Single query (non-interactive mode)"
@@ -378,7 +382,7 @@ def build_top_level_parser():
         "--safe-mode",
         action="store_true",
         default=argparse.SUPPRESS,
-        help="Troubleshooting mode: disable ALL customizations — user config, AGENTS.md/memory injection, plugins, and MCP servers (implies --ignore-user-config and --ignore-rules). Use to isolate whether a problem comes from your setup or from Hermes itself.",
+        help="Troubleshooting mode: disable ALL customizations — user config, AGENTS.md/memory injection, plugins, and MCP servers (implies --ignore-user-config and --ignore-rules). Use to isolate whether a problem comes from your setup or from Argus itself.",
     )
     chat_parser.add_argument(
         "--source",

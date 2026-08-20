@@ -132,7 +132,7 @@ async function filterIgnored(entries: HermesReadDirEntry[], rootPath: string, di
 }
 
 export async function readProjectDir(dirPath: string, rootPath = dirPath): Promise<HermesReadDirResult> {
-  if (!window.hermesDesktop) {
+  if (!window.argusDesktop) {
     return { entries: [], error: 'no-bridge' }
   }
 

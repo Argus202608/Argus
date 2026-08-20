@@ -700,7 +700,7 @@ class TestBuildContextFilesPrompt:
         with patch("pathlib.Path.home", return_value=fake_home):
             result = build_context_files_prompt(cwd=str(tmp_path))
         assert "Project Context" in result
-        assert "Hermes Agent" in result
+        assert "Argus" in result
 
     def test_loads_agents_md(self, tmp_path):
         (tmp_path / "AGENTS.md").write_text("Use Ruff for linting.")
@@ -765,7 +765,20 @@ class TestBuildContextFilesPrompt:
         assert "Top level" in result
         assert "Src-specific" not in result
 
-    # --- .hermes.md / HERMES.md discovery ---
+    # --- .argus.md / ARGUS.md discovery, with legacy aliases ---
+
+    def test_loads_argus_md(self, tmp_path):
+        (tmp_path / ".argus.md").write_text("Use pytest for Argus testing.")
+        result = build_context_files_prompt(cwd=str(tmp_path))
+        assert "pytest for Argus testing" in result
+        assert "Project Context" in result
+
+    def test_argus_md_takes_priority_over_legacy_name(self, tmp_path):
+        (tmp_path / ".argus.md").write_text("Canonical Argus rules.")
+        (tmp_path / ".hermes.md").write_text("Legacy rules.")
+        result = build_context_files_prompt(cwd=str(tmp_path))
+        assert "Canonical Argus rules" in result
+        assert "Legacy rules" not in result
 
     def test_loads_hermes_md(self, tmp_path):
         (tmp_path / ".hermes.md").write_text("Use pytest for testing.")
@@ -892,11 +905,15 @@ class TestBuildContextFilesPrompt:
 
 
 # =========================================================================
-# .hermes.md helper functions
+# Argus project-rules helper functions
 # =========================================================================
 
 
 class TestFindHermesMd:
+    def test_finds_canonical_argus_file(self, tmp_path):
+        (tmp_path / ".argus.md").write_text("rules")
+        assert _find_hermes_md(tmp_path) == tmp_path / ".argus.md"
+
     def test_finds_in_cwd(self, tmp_path):
         (tmp_path / ".hermes.md").write_text("rules")
         assert _find_hermes_md(tmp_path) == tmp_path / ".hermes.md"
@@ -1567,5 +1584,4 @@ class TestParallelToolCallGuidance:
 # =========================================================================
 # Budget warning history stripping
 # =========================================================================
-
 

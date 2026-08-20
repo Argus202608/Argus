@@ -14,7 +14,7 @@ description: "配置并使用 Honcho 记忆功能与 Hermes -- 跨会话用户�
 
 | | |
 |---|---|
-| 来源 | 可选 — 通过 `hermes skills install official/autonomous-ai-agents/honcho` 安装 |
+| 来源 | 可选 — 通过 `argus skills install official/autonomous-ai-agents/honcho` 安装 |
 | 路径 | `optional-skills/autonomous-ai-agents/honcho` |
 | 版本 | `2.0.0` |
 | 作者 | Hermes Agent |
@@ -47,14 +47,14 @@ Honcho 提供 AI 原生的跨会话用户建模。它在多次对话中学习用
 ### 云端（app.honcho.dev）
 
 ```bash
-hermes honcho setup
+argus honcho setup
 # select "cloud", paste API key from https://app.honcho.dev
 ```
 
 ### 自托管
 
 ```bash
-hermes honcho setup
+argus honcho setup
 # select "local", enter base URL (e.g. http://localhost:8000)
 ```
 
@@ -63,7 +63,7 @@ hermes honcho setup
 ### 验证
 
 ```bash
-hermes honcho status    # shows resolved config, connection test, peer info
+argus honcho status    # shows resolved config, connection test, peer info
 ```
 
 ## 架构
@@ -138,7 +138,7 @@ Honcho 会话限定消息和观察的落点。策略选项：
 | `per-session` | 每次 Hermes 运行创建新的 Honcho 会话 |
 | `global` | 跨所有目录使用单一会话 |
 
-手动覆盖：`hermes honcho map my-project-name`
+手动覆盖：`argus honcho map my-project-name`
 
 ### 召回模式
 
@@ -220,7 +220,7 @@ Honcho 的辩证行为由三个独立维度控制。每个维度可单独调整�
 ### 创建带 Honcho peer 的配置文件
 
 ```bash
-hermes profile create coder --clone
+argus profile create coder --clone
 # creates host block hermes.coder, AI peer "coder", inherits config from default
 ```
 
@@ -233,7 +233,7 @@ hermes profile create coder --clone
 ### 为现有配置文件补充创建
 
 ```bash
-hermes honcho sync    # creates host blocks for all profiles that don't have one yet
+argus honcho sync    # creates host blocks for all profiles that don't have one yet
 ```
 
 ### 按配置文件配置
@@ -352,7 +352,7 @@ honcho_reasoning query="<question>"  → synthesized answer, use when search isn
 
 ## 配置参考
 
-配置文件：`$HERMES_HOME/honcho.json`（配置文件本地）或 `~/.honcho/config.json`（全局）。
+配置文件：`$ARGUS_HOME/honcho.json`（配置文件本地）或 `~/.honcho/config.json`（全局）。
 
 ### 关键设置
 
@@ -404,13 +404,13 @@ Honcho 在注入前对 `memory-context` 块进行净化，以防止 prompt 注�
 ## 故障排查
 
 ### "Honcho not configured"
-运行 `hermes honcho setup`。确保 `~/.hermes/config.yaml` 中包含 `memory.provider: honcho`。
+运行 `argus honcho setup`。确保 `~/.hermes/config.yaml` 中包含 `memory.provider: honcho`。
 
 ### 记忆未跨会话持久化
-检查 `hermes honcho status` -- 验证 `saveMessages: true` 且 `writeFrequency` 不是 `session`（该选项仅在退出时写入）。
+检查 `argus honcho status` -- 验证 `saveMessages: true` 且 `writeFrequency` 不是 `session`（该选项仅在退出时写入）。
 
 ### 配置文件未获得自己的 peer
-创建时使用 `--clone`：`hermes profile create <name> --clone`。对于现有配置文件：`hermes honcho sync`。
+创建时使用 `--clone`：`argus profile create <name> --clone`。对于现有配置文件：`argus honcho sync`。
 
 ### 控制台中的观察更改未生效
 观察配置在每次会话初始化时从服务器同步。在 Honcho UI 中更改设置后，启动新会话。
@@ -428,19 +428,19 @@ Honcho 在注入前对 `memory-context` 块进行净化，以防止 prompt 注�
 
 | 命令 | 描述 |
 |---------|-------------|
-| `hermes honcho setup` | 交互式设置向导（云端/本地、身份、观察、召回、会话） |
-| `hermes honcho status` | 显示当前配置文件的已解析配置、连接测试、peer 信息 |
-| `hermes honcho enable` | 为当前配置文件启用 Honcho（如需则创建 host 块） |
-| `hermes honcho disable` | 为当前配置文件禁用 Honcho |
-| `hermes honcho peer` | 显示或更新 peer 名称（`--user <name>`、`--ai <name>`、`--reasoning <level>`） |
-| `hermes honcho peers` | 显示所有配置文件的 peer 身份 |
-| `hermes honcho mode` | 显示或设置召回模式（`hybrid`、`context`、`tools`） |
-| `hermes honcho tokens` | 显示或设置 token 预算（`--context <N>`、`--dialectic <N>`） |
-| `hermes honcho sessions` | 列出已知的目录到会话名称映射 |
-| `hermes honcho map <name>` | 将当前工作目录映射到 Honcho 会话名称 |
-| `hermes honcho identity` | 为 AI peer 身份播种，或显示两个 peer 的表示 |
-| `hermes honcho sync` | 为所有尚未拥有 host 块的 Hermes 配置文件创建 host 块 |
-| `hermes honcho migrate` | 从 OpenClaw 原生记忆迁移到 Hermes + Honcho 的分步指南 |
-| `hermes memory setup` | 通用记忆提供商选择器（选择 "honcho" 运行相同向导） |
-| `hermes memory status` | 显示当前活跃的记忆提供商及配置 |
-| `hermes memory off` | 禁用外部记忆提供商 |
+| `argus honcho setup` | 交互式设置向导（云端/本地、身份、观察、召回、会话） |
+| `argus honcho status` | 显示当前配置文件的已解析配置、连接测试、peer 信息 |
+| `argus honcho enable` | 为当前配置文件启用 Honcho（如需则创建 host 块） |
+| `argus honcho disable` | 为当前配置文件禁用 Honcho |
+| `argus honcho peer` | 显示或更新 peer 名称（`--user <name>`、`--ai <name>`、`--reasoning <level>`） |
+| `argus honcho peers` | 显示所有配置文件的 peer 身份 |
+| `argus honcho mode` | 显示或设置召回模式（`hybrid`、`context`、`tools`） |
+| `argus honcho tokens` | 显示或设置 token 预算（`--context <N>`、`--dialectic <N>`） |
+| `argus honcho sessions` | 列出已知的目录到会话名称映射 |
+| `argus honcho map <name>` | 将当前工作目录映射到 Honcho 会话名称 |
+| `argus honcho identity` | 为 AI peer 身份播种，或显示两个 peer 的表示 |
+| `argus honcho sync` | 为所有尚未拥有 host 块的 Hermes 配置文件创建 host 块 |
+| `argus honcho migrate` | 从 OpenClaw 原生记忆迁移到 Hermes + Honcho 的分步指南 |
+| `argus memory setup` | 通用记忆提供商选择器（选择 "honcho" 运行相同向导） |
+| `argus memory status` | 显示当前活跃的记忆提供商及配置 |
+| `argus memory off` | 禁用外部记忆提供商 |

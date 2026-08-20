@@ -1,10 +1,10 @@
 ---
 sidebar_position: 8
-title: "在 Hermes 中使用语音模式"
-description: "在 CLI、Telegram、Discord 及 Discord 语音频道中设置和使用 Hermes 语音模式的实用指南"
+title: "在 Argus 中使用语音模式"
+description: "在 CLI、Telegram、Discord 及 Discord 语音频道中设置和使用 Argus 语音模式的实用指南"
 ---
 
-# 在 Hermes 中使用语音模式
+# 在 Argus 中使用语音模式
 
 本指南是[语音模式功能参考](/user-guide/features/voice-mode)的实用配套文档。
 
@@ -15,12 +15,12 @@ description: "在 CLI、Telegram、Discord 及 Discord 语音频道中设置和�
 语音模式在以下情况特别有用：
 - 需要免手持的 CLI 工作流
 - 希望在 Telegram 或 Discord 中获得语音回复
-- 希望 Hermes 加入 Discord 语音频道进行实时对话
+- 希望 Argus 加入 Discord 语音频道进行实时对话
 - 边走动边快速记录想法、调试问题或来回交流，而不是打字
 
 ## 选择你的语音模式方案
 
-Hermes 中实际上有三种不同的语音体验。
+Argus 中实际上有三种不同的语音体验。
 
 | 模式 | 最适合 | 平台 |
 |---|---|---|
@@ -33,15 +33,15 @@ Hermes 中实际上有三种不同的语音体验。
 2. 再启用语音回复
 3. 最后如需完整体验，再切换到 Discord 语音频道
 
-## 第一步：确保普通 Hermes 先正常运行
+## 第一步：确保普通 Argus 先正常运行
 
 在接触语音模式之前，请确认：
-- Hermes 能正常启动
+- Argus 能正常启动
 - 已配置好 provider（提供商）
 - Agent 能正常回答文本 prompt（提示词）
 
 ```bash
-hermes
+argus
 ```
 
 问一个简单的问题：
@@ -57,19 +57,19 @@ What tools do you have available?
 ### CLI 麦克风 + 播放
 
 ```bash
-cd ~/.hermes/hermes-agent && uv pip install -e ".[voice]"
+cd ~/.argus/argus && uv pip install -e ".[voice]"
 ```
 
 ### 消息平台
 
 ```bash
-cd ~/.hermes/hermes-agent && uv pip install -e ".[messaging]"
+cd ~/.argus/argus && uv pip install -e ".[messaging]"
 ```
 
 ### 高级 ElevenLabs TTS
 
 ```bash
-cd ~/.hermes/hermes-agent && uv pip install -e ".[tts-premium]"
+cd ~/.argus/argus && uv pip install -e ".[tts-premium]"
 ```
 
 ### 本地 NeuTTS（可选）
@@ -81,7 +81,7 @@ python -m pip install -U neutts[all]
 ### 全部安装
 
 ```bash
-cd ~/.hermes/hermes-agent && uv pip install -e ".[all]"
+cd ~/.argus/argus && uv pip install -e ".[all]"
 ```
 
 ## 第三步：安装系统依赖
@@ -108,7 +108,7 @@ sudo apt install espeak-ng
 
 ## 第四步：选择 STT 和 TTS 提供商
 
-Hermes 同时支持本地和云端语音处理方案。
+Argus 同时支持本地和云端语音处理方案。
 
 ### 最简单 / 最低成本的方案
 
@@ -120,7 +120,7 @@ Hermes 同时支持本地和云端语音处理方案。
 
 ### 环境变量文件示例
 
-添加到 `~/.hermes/.env`：
+添加到 `~/.argus/.env`：
 
 ```bash
 # 云端 STT 选项（本地无需密钥）
@@ -147,9 +147,9 @@ ELEVENLABS_API_KEY=***
 - `openai` → 良好的中间选项
 - `mistral` → 多语言，原生 Opus
 
-### 如果使用 `hermes setup`
+### 如果使用 `argus setup`
 
-如果你在设置向导中选择了 NeuTTS，Hermes 会检查 `neutts` 是否已安装。如果缺失，向导会告知你 NeuTTS 需要 Python 包 `neutts` 和系统包 `espeak-ng`，并提供自动安装，使用平台包管理器安装 `espeak-ng`，然后运行：
+如果你在设置向导中选择了 NeuTTS，Argus 会检查 `neutts` 是否已安装。如果缺失，向导会告知你 NeuTTS 需要 Python 包 `neutts` 和系统包 `espeak-ng`，并提供自动安装，使用平台包管理器安装 `espeak-ng`，然后运行：
 
 ```bash
 python -m pip install -U neutts[all]
@@ -197,10 +197,10 @@ tts:
 
 ## 开启方式
 
-启动 Hermes：
+启动 Argus：
 
 ```bash
-hermes
+argus
 ```
 
 在 CLI 内执行：
@@ -218,7 +218,7 @@ hermes
 1. 按下 `Ctrl+B`
 2. 说话
 3. 等待静音检测自动停止录音
-4. Hermes 转录并回复
+4. Argus 转录并回复
 5. 如果开启了 TTS，它会朗读答案
 6. 循环可自动重启以持续使用
 
@@ -252,17 +252,17 @@ I keep getting a docker permission error. Help me debug it.
 非常适合：
 - 边走动边思考
 - 口述半成形的想法
-- 让 Hermes 实时整理你的思路
+- 让 Argus 实时整理你的思路
 
 #### 无障碍 / 少打字场景
 
-如果打字不方便，语音模式是保持完整 Hermes 工作流的最快方式之一。
+如果打字不方便，语音模式是保持完整 Argus 工作流的最快方式之一。
 
 ## 调整 CLI 行为
 
 ### 静音阈值
 
-如果 Hermes 开始/停止过于激进，调整：
+如果 Argus 开始/停止过于激进，调整：
 
 ```yaml
 voice:
@@ -293,12 +293,12 @@ voice:
 
 此模式比完整语音频道更简单。
 
-Hermes 仍作为普通聊天机器人运行，但可以朗读回复。
+Argus 仍作为普通聊天机器人运行，但可以朗读回复。
 
 ### 启动 gateway
 
 ```bash
-hermes gateway
+argus gateway
 ```
 
 ### 开启语音回复
@@ -335,7 +335,7 @@ hermes gateway
 适用于：
 - 离开电脑时
 - 发送语音备忘并获取快速语音回复
-- 希望 Hermes 充当便携式研究或运维助手
+- 希望 Argus 充当便携式研究或运维助手
 
 #### Discord 私信中的语音输出
 
@@ -345,7 +345,7 @@ hermes gateway
 
 这是最高级的模式。
 
-Hermes 加入 Discord 语音频道（VC），监听用户语音，转录后运行正常的 agent 流水线，并将回复朗读回频道。
+Argus 加入 Discord 语音频道（VC），监听用户语音，转录后运行正常的 agent 流水线，并将回复朗读回频道。
 
 ## 所需的 Discord 权限
 
@@ -372,9 +372,9 @@ Hermes 加入 Discord 语音频道（VC），监听用户语音，转录后运�
 ### 加入后的行为
 
 - 用户在语音频道中说话
-- Hermes 检测语音边界
+- Argus 检测语音边界
 - 转录内容发布到关联的文本频道
-- Hermes 以文字和音频形式回复
+- Argus 以文字和音频形式回复
 - 文本频道为执行 `/voice join` 的那个频道
 
 ### Discord 语音频道使用最佳实践
@@ -439,7 +439,7 @@ Hermes 加入 Discord 语音频道（VC），监听用户语音，转录后运�
 
 如果你想走最短的成功路径：
 
-1. 让文本 Hermes 正常工作
+1. 让文本 Argus 正常工作
 2. 安装 `hermes-agent[voice]`
 3. 使用本地 STT + Edge TTS 的 CLI 语音模式
 4. 然后在 Telegram 或 Discord 中启用 `/voice on`

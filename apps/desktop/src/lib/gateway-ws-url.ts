@@ -25,7 +25,7 @@ import type { HermesConnection } from '@/global'
  * transport failure.
  */
 export interface ResolveGatewayWsUrlDeps {
-  /** `window.hermesDesktop.getGatewayWsUrl`, if the preload exposes it. The
+  /** `window.argusDesktop.getGatewayWsUrl`, if the preload exposes it. The
    *  optional profile selects which backend to mint for — critical when swapping
    *  to a pooled profile, since the default mint resolves the primary backend. */
   getGatewayWsUrl?: (profile?: null | string) => Promise<string>

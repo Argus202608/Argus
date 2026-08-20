@@ -1,4 +1,4 @@
-"""Shared curses-based UI components for Hermes CLI.
+"""Shared curses-based UI components for Argus CLI.
 
 Used by `argus tools` and `hermes skills` for interactive checklists.
 Provides a curses multi-select with keyboard navigation, plus a

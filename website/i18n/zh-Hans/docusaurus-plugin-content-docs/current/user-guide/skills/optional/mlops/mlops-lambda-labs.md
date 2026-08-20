@@ -14,7 +14,7 @@ description: "用于 ML 训练和推理的预留及按需 GPU 云实例"
 
 | | |
 |---|---|
-| 来源 | 可选 — 通过 `hermes skills install official/mlops/lambda-labs` 安装 |
+| 来源 | 可选 — 通过 `argus skills install official/mlops/lambda-labs` 安装 |
 | 路径 | `optional-skills/mlops/lambda-labs` |
 | 版本 | `1.0.0` |
 | 作者 | Orchestra Research |
@@ -556,8 +556,8 @@ python inference.py \
 
 ## 参考资料
 
-- **[高级用法](https://github.com/NousResearch/hermes-agent/blob/main/optional-skills/mlops/lambda-labs/references/advanced-usage.md)** — 多节点训练、API 自动化
-- **[故障排查](https://github.com/NousResearch/hermes-agent/blob/main/optional-skills/mlops/lambda-labs/references/troubleshooting.md)** — 常见问题及解决方案
+- **[高级用法](https://github.com/MMArgus-Team/Argus/blob/main/optional-skills/mlops/lambda-labs/references/advanced-usage.md)** — 多节点训练、API 自动化
+- **[故障排查](https://github.com/MMArgus-Team/Argus/blob/main/optional-skills/mlops/lambda-labs/references/troubleshooting.md)** — 常见问题及解决方案
 
 ## 资源
 

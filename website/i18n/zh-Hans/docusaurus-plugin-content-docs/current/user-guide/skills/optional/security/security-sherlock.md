@@ -14,7 +14,7 @@ description: "跨 400+ 社交网络的 OSINT 用户名搜索"
 
 | | |
 |---|---|
-| 来源 | 可选 — 使用 `hermes skills install official/security/sherlock` 安装 |
+| 来源 | 可选 — 使用 `argus skills install official/security/sherlock` 安装 |
 | 路径 | `optional-skills/security/sherlock` |
 | 版本 | `1.0.0` |
 | 作者 | unmodeled-tyler |

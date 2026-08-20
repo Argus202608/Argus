@@ -14,7 +14,7 @@ description: "药物发现工作流的制药研究助手"
 
 | | |
 |---|---|
-| 来源 | 可选 — 通过 `hermes skills install official/research/drug-discovery` 安装 |
+| 来源 | 可选 — 通过 `argus skills install official/research/drug-discovery` 安装 |
 | 路径 | `optional-skills/research/drug-discovery` |
 | 版本 | `1.0.0` |
 | 作者 | bennytimz |

@@ -14,7 +14,7 @@ PyTorch FSDP 全分片数据并行训练专家指导 - 参数分片、混合精�
 
 | | |
 |---|---|
-| 来源 | 可选 — 通过 `hermes skills install official/mlops/pytorch-fsdp` 安装 |
+| 来源 | 可选 — 通过 `argus skills install official/mlops/pytorch-fsdp` 安装 |
 | 路径 | `optional-skills/mlops/pytorch-fsdp` |
 | 版本 | `1.0.0` |
 | 作者 | Orchestra Research |

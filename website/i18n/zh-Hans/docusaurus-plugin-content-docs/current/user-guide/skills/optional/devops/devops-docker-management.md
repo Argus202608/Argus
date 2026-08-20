@@ -14,7 +14,7 @@ description: "管理 Docker 容器、镜像、卷、网络和 Compose 栈——�
 
 | | |
 |---|---|
-| 来源 | 可选——使用 `hermes skills install official/devops/docker-management` 安装 |
+| 来源 | 可选——使用 `argus skills install official/devops/docker-management` 安装 |
 | 路径 | `optional-skills/devops/docker-management` |
 | 版本 | `1.0.0` |
 | 作者 | sprmn24 |

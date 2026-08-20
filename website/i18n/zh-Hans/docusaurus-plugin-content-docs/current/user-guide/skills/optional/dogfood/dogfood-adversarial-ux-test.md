@@ -14,7 +14,7 @@ description: "扮演产品最难搞的技术抵触用户"
 
 | | |
 |---|---|
-| 来源 | 可选 — 通过 `hermes skills install official/dogfood/adversarial-ux-test` 安装 |
+| 来源 | 可选 — 通过 `argus skills install official/dogfood/adversarial-ux-test` 安装 |
 | 路径 | `optional-skills/dogfood/adversarial-ux-test` |
 | 版本 | `1.0.0` |
 | 作者 | Omni @ Comelse |

@@ -14,7 +14,7 @@ description: "技术提案与权衡分析的结构化决策框架"
 
 | | |
 |---|---|
-| 来源 | 可选 — 通过 `hermes skills install official/communication/one-three-one-rule` 安装 |
+| 来源 | 可选 — 通过 `argus skills install official/communication/one-three-one-rule` 安装 |
 | 路径 | `optional-skills/communication/one-three-one-rule` |
 | 版本 | `1.0.0` |
 | 作者 | Willard Moore |

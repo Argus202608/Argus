@@ -3,7 +3,7 @@
 /**
  * bootstrap-runner.cjs
  *
- * Drives apps/desktop's first-launch install of Hermes Agent by spawning
+ * Drives apps/desktop's first-launch install of Argus Agent by spawning
  * scripts/install.ps1 stage-by-stage and streaming progress events back to
  * the renderer.
  *
@@ -188,7 +188,7 @@ async function resolveInstallScript({
   _download = downloadInstallScript
 }) {
   // 0. Self-contained packaged app: a bundled agent source tree ships inside the
-  //    app (resources/hermes-src). Use ITS install script and hand the tree to
+  //    app (resources/argus-src). Use ITS install script and hand the tree to
   //    the installer as -LocalSource → no GitHub fetch, no clone, works for a
   //    locally-built app whose commit was never pushed. Highest priority.
   if (bundledSourceRoot) {
@@ -497,7 +497,7 @@ function buildPinArgs(installStamp, bundledSource) {
 }
 
 function buildPosixPinArgs({ installStamp, activeRoot, hermesHome, bundledSource }) {
-  const args = ['--dir', activeRoot, '--hermes-home', hermesHome]
+  const args = ['--dir', activeRoot, '--argus-home', hermesHome]
   // Local-source (self-contained app): copy the bundled tree instead of cloning.
   // install.sh implements --local-source (mac/Linux) mirroring install.ps1's
   // -LocalSource (Windows), so this works on all platforms. When set, skip ref pins.
@@ -653,7 +653,7 @@ async function runBootstrap(opts) {
     installStamp,
     activeRoot,
     sourceRepoRoot,
-    bundledSourceRoot, // self-contained app: resources/hermes-src (main.cjs provides)
+    bundledSourceRoot, // self-contained app: resources/argus-src (main.cjs provides)
     hermesHome,
     logRoot,
     onEvent,

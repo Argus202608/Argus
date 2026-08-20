@@ -42,7 +42,7 @@ description: "通过 twozero MCP 控制运行中的 TouchDesigner 实例——�
 ## 架构
 
 ```
-Hermes Agent -> MCP (Streamable HTTP) -> twozero.tox (port 40404) -> TD Python
+Argus -> MCP (Streamable HTTP) -> twozero.tox (port 40404) -> TD Python
 ```
 
 36 个原生工具。免费插件（无需付费/许可证——2026 年 4 月确认）。
@@ -54,7 +54,7 @@ Hub 健康检查：`GET http://localhost:40404/mcp` 返回包含实例 PID、项
 运行设置脚本处理所有事项：
 
 ```bash
-bash "${HERMES_HOME:-$HOME/.hermes}/skills/creative/touchdesigner-mcp/scripts/setup.sh"
+bash "${ARGUS_HOME:-$HOME/.hermes}/skills/creative/touchdesigner-mcp/scripts/setup.sh"
 ```
 
 脚本将：
