@@ -145,3 +145,9 @@ npm --workspace apps/desktop run test:desktop
 
 Argus 使用 MIT License 发布，是 Nous Research 的 Hermes Agent 的修改衍生项目；
 所有 upstream 版权与许可证声明均予以保留。详见 [LICENSE](LICENSE)。
+
+因为这层渊源，仓库里仍有少量内部模块沿用 `hermes_*` 命名，最显眼的是存放 CLI
+实现的 `hermes_cli` 包。规范入口是 `argus_cli`（`argus` 命令解析到
+`argus_cli.main:main`），它转发到该实现；`hermes`、`hermes-agent`、`hermes-acp`
+这几个命令作为别名保留，以便已安装的环境继续可用。这些名字只是导入层的兼容面，
+并不代表你运行的是 upstream Hermes。

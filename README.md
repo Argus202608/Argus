@@ -154,3 +154,11 @@ npm --workspace apps/desktop run test:desktop
 Argus is distributed under the MIT License. It is a modified derivative of
 Hermes Agent by Nous Research; upstream notices and copyright statements are
 retained. See [LICENSE](LICENSE) for details.
+
+Because of that lineage a few internal module names still read `hermes_*` —
+most visibly the `hermes_cli` package, which holds the CLI implementation.
+`argus_cli` is the canonical entry point (`argus` resolves to
+`argus_cli.main:main`) and forwards into it, and the `hermes`, `hermes-agent`
+and `hermes-acp` console scripts are kept as aliases so existing installs
+keep working. The names are import-compatibility surface, not a sign that
+you are running upstream Hermes.

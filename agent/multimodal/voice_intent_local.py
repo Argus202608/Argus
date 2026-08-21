@@ -118,12 +118,13 @@ def _resolve_hf_cache_layout(path: str) -> str:
 
 
 def _hermes_home_root() -> str:
-    """HERMES_HOME 根目录 (config.yaml 里相对路径的解析根).
+    """ARGUS_HOME 根目录 (config.yaml 里相对路径的解析根).
 
-    优先环境变量 HERMES_HOME; 否则 get_hermes_home() (Windows 默认
-    ~/AppData/Local/hermes, macOS/Linux 默认 ~/.argus).
+    优先环境变量 ARGUS_HOME (兼容旧的 HERMES_HOME); 否则
+    get_hermes_home() (Windows 默认 ~/AppData/Local/argus,
+    macOS/Linux 默认 ~/.argus).
 
-    ★ 项目约定: config.yaml 里的相对路径以 HERMES_HOME 为根解析
+    ★ 项目约定: config.yaml 里的相对路径以 ARGUS_HOME 为根解析
     (不是 CWD, 也不是项目安装目录). 这样用户跨机器部署时只需拷贝
     HERMES_HOME (包含 config + 模型权重 + session db 等), 项目代码可
     单独更新.
