@@ -195,6 +195,13 @@ class TestBrowserVisionAnnotate:
 
 
 class TestBrowserVisionConfig:
+    """auxiliary.vision.timeout is honoured; temperature is never sent.
+
+    See TestVisionConfig in tests/tools/test_vision_tools.py — browser_vision
+    resolves the same config block, so it gets the same contract: timeout is a
+    transport setting and still read, temperature is not sent at all.
+    """
+
     def _setup_screenshot(self, tmp_path):
         shots_dir = tmp_path / "browser_screenshots"
         shots_dir.mkdir()
@@ -202,7 +209,9 @@ class TestBrowserVisionConfig:
         screenshot.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 8)
         return shots_dir, screenshot
 
-    def test_browser_vision_uses_configured_temperature_and_timeout(self, tmp_path):
+    def test_browser_vision_honours_configured_timeout_without_sending_temperature(
+        self, tmp_path
+    ):
         from tools.browser_tool import browser_vision
 
         shots_dir, screenshot = self._setup_screenshot(tmp_path)
@@ -223,10 +232,10 @@ class TestBrowserVisionConfig:
 
         assert result["success"] is True
         assert result["analysis"] == "Annotated screenshot analysis"
-        assert mock_llm.call_args.kwargs["temperature"] == 1.0
+        assert "temperature" not in mock_llm.call_args.kwargs
         assert mock_llm.call_args.kwargs["timeout"] == 45.0
 
-    def test_browser_vision_defaults_temperature_when_config_omits_it(self, tmp_path):
+    def test_browser_vision_defaults_timeout_when_config_omits_it(self, tmp_path):
         from tools.browser_tool import browser_vision
 
         shots_dir, screenshot = self._setup_screenshot(tmp_path)
@@ -247,7 +256,7 @@ class TestBrowserVisionConfig:
 
         assert result["success"] is True
         assert result["analysis"] == "Default screenshot analysis"
-        assert mock_llm.call_args.kwargs["temperature"] == 0.1
+        assert "temperature" not in mock_llm.call_args.kwargs
         assert mock_llm.call_args.kwargs["timeout"] == 120.0
 
     def test_browser_vision_native_fast_path_returns_multimodal(self, tmp_path):

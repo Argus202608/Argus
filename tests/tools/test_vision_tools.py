@@ -369,8 +369,21 @@ class TestErrorLoggingExcInfo:
 
 
 class TestVisionConfig:
+    """auxiliary.vision.timeout is honoured; temperature is never sent.
+
+    These two tests used to assert the configured/default temperature reached
+    async_call_llm. Sampling params are no longer sent on any request (see
+    agent/transports/chat_completions.py build_kwargs), so they now assert the
+    key is *absent* — asserting ``is None`` would pass while the key was still
+    being forwarded, which is exactly the regression worth catching. The timeout
+    half of each test is unchanged: it is a transport setting, not a sampling
+    param, and is still read from config.
+    """
+
     @pytest.mark.asyncio
-    async def test_vision_uses_configured_temperature_and_timeout(self, tmp_path):
+    async def test_vision_honours_configured_timeout_without_sending_temperature(
+        self, tmp_path
+    ):
         img = tmp_path / "test.png"
         img.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 8)
 
@@ -396,11 +409,12 @@ class TestVisionConfig:
             result = json.loads(await vision_analyze_tool(str(img), "describe this", "test/model"))
 
         assert result["success"] is True
-        assert mock_llm.await_args.kwargs["temperature"] == 1.0
+        # Configured even though temperature is set in config — it is ignored.
+        assert "temperature" not in mock_llm.await_args.kwargs
         assert mock_llm.await_args.kwargs["timeout"] == 77.0
 
     @pytest.mark.asyncio
-    async def test_vision_defaults_temperature_when_config_omits_it(self, tmp_path):
+    async def test_vision_defaults_timeout_when_config_omits_it(self, tmp_path):
         img = tmp_path / "test.png"
         img.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 8)
 
@@ -424,7 +438,7 @@ class TestVisionConfig:
             result = json.loads(await vision_analyze_tool(str(img), "describe this", "test/model"))
 
         assert result["success"] is True
-        assert mock_llm.await_args.kwargs["temperature"] == 0.1
+        assert "temperature" not in mock_llm.await_args.kwargs
         assert mock_llm.await_args.kwargs["timeout"] == 120.0
 
 

@@ -953,8 +953,11 @@ async def vision_analyze_tool(
         # Call the vision API via centralized router.
         # Read timeout from config.yaml (auxiliary.vision.timeout), default 120s.
         # Local vision models (llama.cpp, ollama) can take well over 30s.
+        # No temperature: sampling params are not sent at all (see
+        # agent/transports/chat_completions.py build_kwargs). Reading
+        # auxiliary.vision.temperature here and then not forwarding it would be
+        # worse than not reading it — the config key would look honoured.
         vision_timeout = 120.0
-        vision_temperature = 0.1
         try:
             from hermes_cli.config import cfg_get, load_config
             _cfg = load_config()
@@ -962,9 +965,6 @@ async def vision_analyze_tool(
             _vt = _vision_cfg.get("timeout")
             if _vt is not None:
                 vision_timeout = float(_vt)
-            _vtemp = _vision_cfg.get("temperature")
-            if _vtemp is not None:
-                vision_temperature = float(_vtemp)
         except Exception:
             pass
         call_kwargs = {
@@ -1443,8 +1443,8 @@ async def video_analyze_tool(
             }
         ]
 
+        # No temperature — see the note in vision_analyze_tool above.
         vision_timeout = 180.0
-        vision_temperature = 0.1
         try:
             from hermes_cli.config import cfg_get, load_config
             _cfg = load_config()
@@ -1452,9 +1452,6 @@ async def video_analyze_tool(
             _vt = _vision_cfg.get("timeout")
             if _vt is not None:
                 vision_timeout = max(float(_vt), 180.0)
-            _vtemp = _vision_cfg.get("temperature")
-            if _vtemp is not None:
-                vision_temperature = float(_vtemp)
         except Exception:
             pass
 

@@ -752,10 +752,8 @@ def camofox_vision(question: str, annotate: bool = False,
             _cfg = load_config()
             _vision_cfg = cfg_get(_cfg, "auxiliary", "vision", default={})
             _vision_timeout = float(_vision_cfg.get("timeout", 120))
-            _vision_temperature = float(_vision_cfg.get("temperature", 0.1))
         except Exception:
             _vision_timeout = 120.0
-            _vision_temperature = 0.1
 
         response = call_llm(
             messages=[{
@@ -771,7 +769,10 @@ def camofox_vision(question: str, annotate: bool = False,
                 ],
             }],
             task="vision",
-            temperature=_vision_temperature,
+            # No temperature: auxiliary requests no longer send sampling params
+            # (call_llm accepts and discards it — see _build_call_kwargs). Reading
+            # auxiliary.vision.temperature here would make a config key that no
+            # longer exists in the schema look honoured.
             timeout=_vision_timeout,
         )
         analysis = (response.choices[0].message.content or "").strip() if response.choices else ""

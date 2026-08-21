@@ -370,7 +370,7 @@ class TestCamofoxVisionConfig:
     @patch("tools.browser_camofox.requests.post")
     @patch("tools.browser_camofox._get")
     @patch("tools.browser_camofox._get_raw")
-    def test_camofox_vision_uses_configured_temperature_and_timeout(self, mock_get_raw, mock_get, mock_post, monkeypatch):
+    def test_camofox_vision_honours_configured_timeout_without_sending_temperature(self, mock_get_raw, mock_get, mock_post, monkeypatch):
         monkeypatch.setenv("CAMOFOX_URL", "http://localhost:9377")
         mock_post.return_value = _mock_response(json_data={"tabId": "tab11", "url": "https://x.com"})
         camofox_navigate("https://x.com", task_id="t11")
@@ -396,13 +396,14 @@ class TestCamofoxVisionConfig:
 
         assert result["success"] is True
         assert result["analysis"] == "Camofox screenshot analysis"
-        assert mock_llm.call_args.kwargs["temperature"] == 1.0
+        # Configured temperature is ignored: sampling params are not sent.
+        assert "temperature" not in mock_llm.call_args.kwargs
         assert mock_llm.call_args.kwargs["timeout"] == 45.0
 
     @patch("tools.browser_camofox.requests.post")
     @patch("tools.browser_camofox._get")
     @patch("tools.browser_camofox._get_raw")
-    def test_camofox_vision_defaults_temperature_when_config_omits_it(self, mock_get_raw, mock_get, mock_post, monkeypatch):
+    def test_camofox_vision_defaults_timeout_when_config_omits_it(self, mock_get_raw, mock_get, mock_post, monkeypatch):
         monkeypatch.setenv("CAMOFOX_URL", "http://localhost:9377")
         mock_post.return_value = _mock_response(json_data={"tabId": "tab12", "url": "https://x.com"})
         camofox_navigate("https://x.com", task_id="t12")
@@ -428,7 +429,7 @@ class TestCamofoxVisionConfig:
 
         assert result["success"] is True
         assert result["analysis"] == "Default camofox screenshot analysis"
-        assert mock_llm.call_args.kwargs["temperature"] == 0.1
+        assert "temperature" not in mock_llm.call_args.kwargs
         assert mock_llm.call_args.kwargs["timeout"] == 120.0
 
 

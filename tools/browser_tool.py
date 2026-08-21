@@ -3437,11 +3437,12 @@ def browser_vision(question: str, annotate: bool = False, task_id: Optional[str]
         logger.debug("browser_vision: analysing screenshot (%d bytes)",
                      len(_screenshot_bytes))
 
-        # Read vision timeout/temperature from config (auxiliary.vision.*).
+        # Read the vision timeout from config (auxiliary.vision.timeout).
         # Local vision models (llama.cpp, ollama) can take well over 30s for
         # screenshot analysis, so the default timeout must be generous.
+        # No temperature: sampling params are not sent at all (see
+        # agent/transports/chat_completions.py build_kwargs).
         vision_timeout = 120.0
-        vision_temperature = 0.1
         try:
             from hermes_cli.config import load_config
             _cfg = load_config()
@@ -3449,9 +3450,6 @@ def browser_vision(question: str, annotate: bool = False, task_id: Optional[str]
             _vt = _vision_cfg.get("timeout")
             if _vt is not None:
                 vision_timeout = float(_vt)
-            _vtemp = _vision_cfg.get("temperature")
-            if _vtemp is not None:
-                vision_temperature = float(_vtemp)
         except Exception:
             pass
 
