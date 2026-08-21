@@ -39,7 +39,9 @@ jobs:
     # main commit needs to ship live before the next release tag — e.g.
     # a skills-index PR that doesn't touch website/** paths and so
     # doesn't auto-deploy via the deploy-docs path.
-    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+    # Vercel is optional for the public fork. Keep it disabled unless the
+    # repository has both opted in and configured VERCEL_DEPLOY_HOOK.
+    if: vars.ARGUS_ENABLE_VERCEL == 'true' && (github.event_name == 'release' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     steps:
       - name: Trigger Vercel Deploy
@@ -68,6 +70,10 @@ jobs:
         run: pip install pyyaml==6.0.2 httpx==0.28.1
 
       - name: Prepare skills index (unified multi-source catalog)
+        # Crawling thousands of external GitHub repositories requires a
+        # dedicated higher-quota token. The docs site can build without the
+        # unified external catalog, so keep this optional for first deploys.
+        if: vars.ARGUS_ENABLE_SKILLS_INDEX == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           GITHUB_TOKEN: ${{ github.token }}
