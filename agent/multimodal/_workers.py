@@ -2702,7 +2702,8 @@ class MemoryLLMClient:
 
     async def call_chat(
         self, messages: List[Dict[str, Any]], *,
-        max_tokens: int, temperature: float, usage_kind: str = "",
+        max_tokens: int, temperature: Optional[float] = None,
+        usage_kind: str = "",
     ) -> Optional[str]:
         """Run one chat call, returning the body text (thinking stripped), or None
         on failure/timeout."""
@@ -2781,7 +2782,8 @@ class OpenAIMemoryClient(MemoryLLMClient):
 
     async def call_chat(
         self, messages: List[Dict[str, Any]], *,
-        max_tokens: int, temperature: float, usage_kind: str = "",
+        max_tokens: int, temperature: Optional[float] = None,
+        usage_kind: str = "",
     ) -> Optional[str]:
         self.last_error = ""
         messages = self._audio_url_to_input_audio(messages)
@@ -3022,7 +3024,8 @@ class MessagesMemoryClient(MemoryLLMClient):
 
     async def call_chat(
         self, messages: List[Dict[str, Any]], *,
-        max_tokens: int, temperature: float, usage_kind: str = "",
+        max_tokens: int, temperature: Optional[float] = None,
+        usage_kind: str = "",
     ) -> Optional[str]:
         self.last_error = ""
         cur_messages = _drop_empty_image_parts(messages)
@@ -3186,7 +3189,8 @@ class GeminiMemoryClient(MemoryLLMClient):
 
     async def call_chat(
         self, messages: List[Dict[str, Any]], *,
-        max_tokens: int, temperature: float, usage_kind: str = "",
+        max_tokens: int, temperature: Optional[float] = None,
+        usage_kind: str = "",
     ) -> Optional[str]:
         sys_inst, contents = _oai_messages_to_gemini(messages)
         # ★ 强制提到 65535 (见上面 docstring 解释): qwen3.5 关 thinking 用 2560 够,
@@ -10934,7 +10938,7 @@ class RecallAgent:
 
     async def _create_chat_completion(
         self, messages: List[Dict[str, Any]], *,
-        max_tokens: int, temperature: float,
+        max_tokens: int,
         enable_thinking: bool = False,
         channel_tag: str = "recall",
         client_override: Any = None,
@@ -10948,6 +10952,13 @@ class RecallAgent:
         such as gpt-5.6-luna reject qwen/vLLM-only knobs like top_k, so use a
         portable request shape for those models while keeping the qwen path
         unchanged.
+
+        No temperature parameter: sampling params are not sent at all (see
+        agent/transports/chat_completions.py build_kwargs). It was previously a
+        REQUIRED keyword here, so once the decide call site stopped passing one
+        every recall decision raised TypeError — swallowed by the surrounding
+        except and logged as a plain warning, which read like a transport error
+        and made the whole ORA loop answer from nothing.
 
         Wraps the call in _recall_channel_ctx so that the shared LLM channel
         lock (when installed by MemoryBackend) serialises recall vs writer.
@@ -10963,7 +10974,6 @@ class RecallAgent:
                 text = await client.call_chat(
                     messages,
                     max_tokens=max_tokens,
-                    temperature=temperature,
                     usage_kind=f"recall_{channel_tag}",
                 )
                 return SimpleNamespace(
@@ -11777,7 +11787,6 @@ class RecallAgent:
             resp = await self._create_chat_completion(
                 msgs,
                 max_tokens=self.cfg.recall_distill_max_tokens,
-                temperature=0.2,
                 enable_thinking=False,
                 channel_tag="distill",
             )
@@ -11891,7 +11900,6 @@ class RecallAgent:
                 resp = await self._create_chat_completion(
                     msgs,
                     max_tokens=384,
-                    temperature=0.1,
                     enable_thinking=False,
                     channel_tag="verify_frames",
                     client_override=verify_client,

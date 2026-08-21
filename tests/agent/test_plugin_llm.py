@@ -530,8 +530,10 @@ class TestPluginLlmFacade:
         assert captured["model_override"] == "claude-3-opus"
         assert captured["profile_override"] == "work"
         # Sampling params are no longer forwarded — see
-        # agent/transports/chat_completions.py build_kwargs.
-        assert captured["temperature"] is None
+        # agent/transports/chat_completions.py build_kwargs. The key is absent
+        # rather than present-and-None: the facade drops it before calling, so
+        # asserting ``is None`` would only pass if it were still being passed.
+        assert "temperature" not in captured
         assert captured["max_tokens"] == 128
         assert captured["timeout"] == 10.0
 

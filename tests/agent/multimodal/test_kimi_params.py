@@ -7,8 +7,17 @@ temperature=1 (HTTP 400 "invalid temperature: only 1 is allowed") and uses
 `thinking:{"type":...}` instead of enable_thinking. This left deep-research
 summaries failing and the monitor daemon silently 400-ing every tick.
 
-kimi_fix_create_kwargs coerces those params for Moonshot models (no-op
-otherwise); wrap_kimi_client applies it transparently on an owned client.
+Only the second half of that is still this module's job. Sampling params are
+no longer coerced here because they are no longer SENT anywhere — see
+agent/transports/chat_completions.py build_kwargs for why per-provider
+negotiation was abandoned in favour of provider defaults. A temperature
+reaching this fixer would mean a call site regressed, so the tests below
+assert pass-through rather than coercion: silently rewriting it would hide
+the regression that the no-sampling-params tests exist to catch.
+
+kimi_fix_create_kwargs still sanitizes tool schemas and translates thinking
+flags for Moonshot models (no-op otherwise); wrap_kimi_client applies it
+transparently on an owned client.
 """
 import unittest
 
@@ -18,19 +27,22 @@ from agent.multimodal.hermes_glue import (
 
 
 class TestKimiFixKwargs(unittest.TestCase):
-    def test_kimi_forces_temperature_1(self):
+    def test_kimi_leaves_sampling_params_untouched(self):
+        # Not coerced to 1 any more: nothing sends temperature, so a value
+        # arriving here is a call-site bug and must stay visible.
         k = kimi_fix_create_kwargs({"model": "kimi-k2.6", "temperature": 0.2})
-        self.assertEqual(k["temperature"], 1)
+        self.assertEqual(k["temperature"], 0.2)
 
     def test_kimi_translates_enable_thinking_off(self):
         k = kimi_fix_create_kwargs({
-            "model": "kimi-k2.6", "temperature": 0.2, "top_p": 0.8,
+            "model": "kimi-k2.6", "top_p": 0.8,
             "extra_body": {"chat_template_kwargs": {"enable_thinking": False},
                            "top_k": 20}})
-        self.assertEqual(k["temperature"], 1)
-        self.assertNotIn("top_p", k)
+        self.assertEqual(k["top_p"], 0.8)
         self.assertEqual(k["extra_body"]["thinking"], {"type": "disabled"})
         self.assertNotIn("chat_template_kwargs", k["extra_body"])
+        # top_k is still dropped — it is not a sampling param Kimi tolerates in
+        # extra_body at all, so it is a schema fix rather than a sampling one.
         self.assertNotIn("top_k", k["extra_body"])
 
     def test_thinking_only_model_never_gets_disabled(self):
@@ -38,9 +50,8 @@ class TestKimiFixKwargs(unittest.TestCase):
         # HTTP 400. Even when the caller wants thinking off, the fixer must strip
         # the thinking key (default = enabled), not send disabled.
         k = kimi_fix_create_kwargs({
-            "model": "kimi-k2.7-code", "temperature": 0.2,
+            "model": "kimi-k2.7-code",
             "extra_body": {"chat_template_kwargs": {"enable_thinking": False}}})
-        self.assertEqual(k["temperature"], 1)
         eb = k.get("extra_body", {})
         self.assertNotIn("thinking", eb)  # never 'disabled'
 
@@ -96,18 +107,24 @@ class TestWrapKimiClient(unittest.TestCase):
     def test_wrapper_coerces_and_is_idempotent(self):
         c = _FakeClient()
         wrap_kimi_client(c)
-        c.chat.completions.create(model="kimi-k2.6", temperature=0.0)
-        self.assertEqual(c.chat.completions.last["temperature"], 1)
+        c.chat.completions.create(
+            model="kimi-k2.6", extra_body={"enable_thinking": False})
+        self.assertEqual(c.chat.completions.last["extra_body"],
+                         {"thinking": {"type": "disabled"}})
         # double-wrap must not double-wrap or change behavior
         wrap_kimi_client(c)
-        c.chat.completions.create(model="kimi-k2.6", temperature=0.0)
-        self.assertEqual(c.chat.completions.last["temperature"], 1)
+        c.chat.completions.create(
+            model="kimi-k2.6", extra_body={"enable_thinking": False})
+        self.assertEqual(c.chat.completions.last["extra_body"],
+                         {"thinking": {"type": "disabled"}})
 
     def test_wrapper_leaves_non_kimi_calls_alone(self):
         c = _FakeClient()
         wrap_kimi_client(c)
-        c.chat.completions.create(model="qwen3.6-flash", temperature=0.2)
-        self.assertEqual(c.chat.completions.last["temperature"], 0.2)
+        c.chat.completions.create(
+            model="qwen3.6-flash", extra_body={"enable_thinking": False})
+        self.assertEqual(c.chat.completions.last["extra_body"],
+                         {"enable_thinking": False})
 
 
 if __name__ == "__main__":
