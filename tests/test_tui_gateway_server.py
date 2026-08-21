@@ -5683,12 +5683,23 @@ def test_session_create_no_race_keeps_worker_alive(monkeypatch):
 
         # Build finished without a close race — nothing should have been
         # cleaned up by the orphan check.
-        assert (
-            closed_workers == []
-        ), f"build thread closed its own worker despite no race: {closed_workers}"
-        assert (
-            unregistered_keys == []
-        ), f"build thread unregistered its own notify despite no race: {unregistered_keys}"
+        #
+        # Scope both assertions to THIS session's key. ``_SlashWorker`` and
+        # ``unregister_gateway_notify`` are patched process-wide, so a build
+        # thread still finishing from an earlier session.create test lands in
+        # the same lists — and the ``_sessions.clear()`` above is exactly what
+        # makes that thread see ``replaced`` and unregister. Comparing the raw
+        # lists against [] therefore fails on someone else's key whenever a
+        # sibling build thread is slow (observed on CI runners).
+        own_key = session["session_key"]
+        assert own_key not in closed_workers, (
+            "build thread closed its own worker despite no race: "
+            f"{closed_workers} (own key {own_key})"
+        )
+        assert own_key not in unregistered_keys, (
+            "build thread unregistered its own notify despite no race: "
+            f"{unregistered_keys} (own key {own_key})"
+        )
 
         # Session should have the live worker installed.
         assert session.get("slash_worker") is not None
