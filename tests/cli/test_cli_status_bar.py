@@ -400,14 +400,22 @@ class TestCLIStatusBar:
         cli_obj = _make_cli()
         cli_obj._spinner_text = "running tool"
 
-        # <60s path
-        cli_obj._tool_start_time = time.monotonic() - 9.2
-        short = cli_obj._render_spinner_text()
+        # Pin the clock instead of reading the real one: time.monotonic() counts
+        # from boot on Linux, so on a freshly started CI runner `monotonic() - 65.2`
+        # can be negative. _render_spinner_text() then treats the timer as unset
+        # and returns the form without "(...)", making this test blow up with an
+        # IndexError below instead of asserting on the format.
+        now = 10_000.0
+        with patch.object(cli_mod.time, "monotonic", return_value=now):
+            # <60s path
+            cli_obj._tool_start_time = now - 9.2
+            short = cli_obj._render_spinner_text()
 
-        # >=60s path
-        cli_obj._tool_start_time = time.monotonic() - 65.2
-        long = cli_obj._render_spinner_text()
+            # >=60s path
+            cli_obj._tool_start_time = now - 65.2
+            long = cli_obj._render_spinner_text()
 
+        assert "(" in short and "(" in long
         short_elapsed = short.split("(", 1)[1].rstrip(")")
         long_elapsed = long.split("(", 1)[1].rstrip(")")
 
