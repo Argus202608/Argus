@@ -3748,7 +3748,7 @@ class TestRunConversation:
         assert "Ollama loaded `qwen3.5:9b` with only 4,096 tokens" in result["final_response"]
         assert "model.ollama_num_ctx: 65536" in result["final_response"]
         assert not agent.client.chat.completions.create.called
-        assert "Ollama runtime context too small for Hermes tool use" in caplog.text
+        assert "Ollama runtime context too small for Argus tool use" in caplog.text
         assert "runtime_context=4096" in caplog.text
 
     def test_tool_calls_then_stop(self, agent):
