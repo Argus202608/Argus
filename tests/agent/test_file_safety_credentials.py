@@ -100,7 +100,7 @@ def test_skills_hub_block_still_applies(fake_home):
     hub_file = _create(fake_home, "skills/.hub/manifest.json")
     err = get_read_block_error(str(hub_file))
     assert err is not None
-    assert "internal Hermes cache file" in err
+    assert "internal Argus cache file" in err
 
 
 def test_path_traversal_resolves_to_blocked(fake_home, tmp_path):

@@ -250,9 +250,9 @@ class TestSystemPromptActiveProfile:
         # explicit user direction.
         from pathlib import Path
         src = Path("agent/system_prompt.py").read_text()
-        assert "Active Hermes profile" in src
+        assert "Active Argus profile" in src
         assert "cross_profile=True" in src
         assert "~/.argus/profiles/" in src
         # Both branches present (default and named profile).
-        assert "Active Hermes profile: default" in src
-        assert "Active Hermes profile: {active_profile}" in src
+        assert "Active Argus profile: default" in src
+        assert "Active Argus profile: {active_profile}" in src

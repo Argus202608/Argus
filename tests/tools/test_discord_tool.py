@@ -614,14 +614,18 @@ class TestRegistration:
 
 
 # ---------------------------------------------------------------------------
-# Toolset: discord / discord_admin only in hermes-discord
+# Toolset: discord / discord_admin only in the discord toolset
+# (registered under both the canonical ``argus-discord`` name and the
+# inherited ``hermes-discord`` alias)
 # ---------------------------------------------------------------------------
 
 class TestToolsetInclusion:
     def test_discord_tools_in_hermes_discord_toolset(self):
         from toolsets import TOOLSETS
-        assert "discord" in TOOLSETS["hermes-discord"]["tools"]
-        assert "discord_admin" in TOOLSETS["hermes-discord"]["tools"]
+        # Both names resolve to the same definition (_ARGUS_TOOLSET_ALIASES).
+        for toolset in ("argus-discord", "hermes-discord"):
+            assert "discord" in TOOLSETS[toolset]["tools"]
+            assert "discord_admin" in TOOLSETS[toolset]["tools"]
 
     def test_discord_tools_not_in_core_tools(self):
         from toolsets import _HERMES_CORE_TOOLS
@@ -630,8 +634,13 @@ class TestToolsetInclusion:
 
     def test_discord_tools_not_in_other_toolsets(self):
         from toolsets import TOOLSETS
+        allowed = {
+            "argus-discord", "hermes-discord",
+            "argus-gateway", "hermes-gateway",
+            "discord", "discord_admin",
+        }
         for name, ts in TOOLSETS.items():
-            if name in {"hermes-discord", "hermes-gateway", "discord", "discord_admin"}:
+            if name in allowed:
                 continue
             tools = ts.get("tools", [])
             assert "discord" not in tools or name == "discord", (

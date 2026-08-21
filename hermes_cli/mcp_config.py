@@ -270,8 +270,8 @@ def _oauth_tokens_present(name: str) -> bool:
     initialize/tools-list without auth (so no token was ever acquired).
     """
     try:
-        from tools.mcp_oauth import HermesTokenStorage
-        return HermesTokenStorage(name).has_cached_tokens()
+        from tools.mcp_oauth import ArgusTokenStorage
+        return ArgusTokenStorage(name).has_cached_tokens()
     except Exception as exc:  # pragma: no cover — defensive
         logger.debug("Could not check OAuth tokens for '%s': %s", name, exc)
         # Be permissive on unexpected errors: don't block a real success.

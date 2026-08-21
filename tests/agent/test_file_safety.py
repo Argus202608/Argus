@@ -99,7 +99,7 @@ class TestCacheFileReadBlocking:
         with patch("agent.file_safety._hermes_home_path", return_value=hermes_home):
             error = get_read_block_error(str(cache))
             assert error is not None
-            assert "internal Hermes cache" in error
+            assert "internal Argus cache" in error
 
     def test_hub_directory_blocked(self, tmp_path):
         """Hub directory reads are blocked."""
@@ -145,4 +145,4 @@ class TestCombinedGuards:
         with patch("agent.file_safety._hermes_home_path", return_value=hermes_home):
             error = get_read_block_error(str(cache))
             assert error is not None
-            assert "internal Hermes cache" in error
+            assert "internal Argus cache" in error

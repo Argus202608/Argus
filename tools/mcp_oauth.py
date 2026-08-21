@@ -412,6 +412,16 @@ class ArgusTokenStorage:
         return self._tokens_path().exists()
 
 
+# Back-compat alias for the pre-rebrand class name. Third-party plugins and
+# out-of-tree code import ``HermesTokenStorage`` and do ``isinstance`` checks
+# against it, so dropping the name outright breaks them silently: every
+# in-tree callsite wrapped the import in a broad ``except Exception``, which
+# turned the ImportError into a wrong-but-quiet fallback (``argus mcp login``
+# reporting success with no token on disk). Keep the alias; new code should
+# use ``ArgusTokenStorage``.
+HermesTokenStorage = ArgusTokenStorage
+
+
 # ---------------------------------------------------------------------------
 # Callback handler factory -- each invocation gets its own result dict
 # ---------------------------------------------------------------------------
