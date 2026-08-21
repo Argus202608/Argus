@@ -124,7 +124,7 @@ def get_hermes_home() -> Path:
 def get_default_hermes_root() -> Path:
     """Return the root Argus directory for profile-level operations.
 
-    In standard deployments this is the platform-native Hermes home
+    In standard deployments this is the platform-native Argus home
     (``~/.argus`` on POSIX, ``%LOCALAPPDATA%\\argus`` on native Windows).
 
     In Docker or custom deployments where ``ARGUS_HOME`` points outside
