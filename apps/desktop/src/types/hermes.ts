@@ -250,6 +250,11 @@ export interface ModelPricing {
 }
 
 export interface ModelOptionProvider {
+  /** Backend's own verdict on "this row is the active provider" — authoritative.
+   *  A `custom:` endpoint's slug is derived from its HOSTNAME
+   *  (`custom:open.bigmodel.cn`) while the response's top-level `provider` is the
+   *  bare configured name (`custom`), so comparing those two by string never
+   *  matches. Use `isCurrentProviderRow`, never `slug === provider`. */
   is_current?: boolean
   models?: string[]
   name: string
@@ -446,6 +451,12 @@ export interface SessionRuntimeInfo {
   personality?: string
   provider?: string
   reasoning_effort?: string
+  /** Whether this ENDPOINT lets us change the model's reasoning — distinct from
+   *  "the model reasons". False for thinking-only models, pre-toggle
+   *  generations, and aggregators serving another vendor's model. Gate the
+   *  thinking control on it so we never render a switch that silently does
+   *  nothing. Absent (older backend) → treat as true. */
+  can_toggle_reasoning?: boolean
   running?: boolean
   service_tier?: string
   skills?: Record<string, string[]> | string[]

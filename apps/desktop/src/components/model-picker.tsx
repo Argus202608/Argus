@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 
 import { useI18n } from '@/i18n'
-import { currentPickerSelection } from '@/lib/model-status-label'
+import { currentPickerSelection, isCurrentProviderRow } from '@/lib/model-status-label'
 import type { ModelOptionProvider, ModelOptionsResponse, ModelPricing } from '@/types/hermes'
 
 import type { HermesGateway } from '../argus'
@@ -209,7 +209,11 @@ function ModelResults({
               </div>
             )}
             {models.map(model => {
-              const isCurrent = model === currentModel && provider.slug === currentProvider
+              // Provider identity via isCurrentProviderRow, not a slug string
+              // compare — a `custom:` row's slug is hostname-derived
+              // (`custom:open.bigmodel.cn`) while currentProvider is the bare
+              // configured name (`custom`). See the helper's note.
+              const isCurrent = model === currentModel && isCurrentProviderRow(provider, currentProvider)
               const price = provider.pricing?.[model]
               const locked = unavailable.has(model)
 

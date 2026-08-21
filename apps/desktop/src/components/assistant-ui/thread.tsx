@@ -774,6 +774,9 @@ const STREAM_STALL_S = 2
 // Subscribes to the activity signal ITSELF (rather than taking it as a prop)
 // so that per-token updates re-render only this leaf, not the whole
 // AssistantMessage subtree.
+// Exported for tests only (like ToolHistoryPanel): the duplicate-"Thinking"
+// regression this component caused had NO coverage, which is why it survived the
+// 0fea14e1 cleanup that removed its sibling CurrentActivityLine.
 export const StreamStallIndicator: FC = () => {
   const activity = useAuiState(s => {
     let textLength = 0
@@ -788,6 +791,33 @@ export const StreamStallIndicator: FC = () => {
 
     return `${s.message.content.length}:${textLength}`
   })
+
+  // ★ 过程框 (ToolHistoryPanel) 挂载时【本行不出】。它的标题行已经在报同一件事,
+  //   而且报得更好: 有具体动作 (activityLabel)、shimmer、计时。两处都报就是当初
+  //   0fea14e1 要消灭的"重复 Thinking 行" —— CurrentActivityLine 那时被搬进了
+  //   过程框, 但本组件漏了, 于是长工具调用 (stream 静默 >2s 必然触发) 时框外一行
+  //   死的灰字、框内一行活的, 且框外这行是 StatusRow (纯 div, 无 disclosure) ——
+  //   点不开、无内容、不在思考框里。
+  //   条件与 ToolHistoryPanel 的挂载条件严格一致 (见那里的 early return)。
+  const panelMounted = useAuiState(s => {
+    let hasReasoning = false
+    let toolCount = 0
+
+    for (const part of s.message.parts) {
+      const p = part as { text?: unknown; type?: string } | null
+
+      if (p?.type === 'tool-call') {
+        toolCount += 1
+      } else if (p?.type === 'reasoning' && typeof p.text === 'string' && p.text.trim().length > 0) {
+        hasReasoning = true
+      }
+    }
+
+    return hasReasoning || toolCount > 0
+  })
+
+  // tool.generating 也算过程框在场: 参数还在写, 一个 part 都没有, 但框已为它挂载。
+  const generatingTool = useStore($generatingToolName)
 
   const [stalled, setStalled] = useState(false)
   const compacting = useStore($compactionActive)
@@ -804,7 +834,8 @@ export const StreamStallIndicator: FC = () => {
     return () => window.clearTimeout(id)
   }, [activity])
 
-  const active = (stalled || compacting) && !awaitingInput
+  // 压缩中是全局态 (与本轮 part 无关), 所以不受过程框影响; 停顿指示仅在过程框缺席时补位。
+  const active = (compacting || (stalled && !panelMounted && !generatingTool)) && !awaitingInput
   const elapsed = useElapsedSeconds(active)
 
   if (!active) {
@@ -815,7 +846,7 @@ export const StreamStallIndicator: FC = () => {
     <StatusRow
       className="mt-1.5"
       data-slot="aui_stream-stall"
-      label={compacting ? COMPACTION_LABEL : 'Argus is thinking'}
+      label={compacting ? COMPACTION_LABEL : t.assistant.thread.thinking}
     >
       {compacting ? (
         <CompactionHint />

@@ -4,6 +4,7 @@ import {
   currentPickerSelection,
   displayModelName,
   formatModelStatusLabel,
+  isCurrentProviderRow,
   reasoningEffortLabel
 } from './model-status-label'
 
@@ -59,6 +60,38 @@ describe('model-status-label', () => {
 
     it('falls back to the store while options are still loading', () => {
       expect(currentPickerSelection(true, store, undefined)).toEqual(store)
+    })
+  })
+
+  // A `custom:` provider row's slug is derived from the endpoint HOSTNAME, while
+  // model.options reports the bare configured provider name. Comparing the two by
+  // string never matched, so the active model was never "current": the composer
+  // pill showed live state ("Off") while the picker row fell back to a preset
+  // ("Low"). These are the real values observed from the gateway.
+  describe('isCurrentProviderRow', () => {
+    it('trusts is_current when the slug cannot match the bare provider name', () => {
+      expect(isCurrentProviderRow({ is_current: true, slug: 'custom:open.bigmodel.cn' }, 'custom')).toBe(true)
+    })
+
+    it('does not mark a row current just because it shares the custom: prefix', () => {
+      expect(isCurrentProviderRow({ is_current: false, slug: 'custom:api.other.example' }, 'custom')).toBe(false)
+    })
+
+    it('regression: a bare string compare would have failed this case', () => {
+      const row = { is_current: true, slug: 'custom:open.bigmodel.cn' }
+
+      // The old logic, kept here as the tripwire.
+      expect(row.slug === 'custom').toBe(false)
+      expect(isCurrentProviderRow(row, 'custom')).toBe(true)
+    })
+
+    it('falls back to the slug compare when is_current is absent', () => {
+      expect(isCurrentProviderRow({ slug: 'anthropic' }, 'anthropic')).toBe(true)
+      expect(isCurrentProviderRow({ slug: 'nous' }, 'anthropic')).toBe(false)
+    })
+
+    it('lets an explicit is_current:false win over a matching slug', () => {
+      expect(isCurrentProviderRow({ is_current: false, slug: 'anthropic' }, 'anthropic')).toBe(false)
     })
   })
 })

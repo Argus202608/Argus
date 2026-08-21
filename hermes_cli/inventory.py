@@ -246,9 +246,34 @@ def _apply_capabilities(rows: list[dict]) -> None:
     except Exception:
         get_model_capabilities = None  # type: ignore[assignment]
 
+    try:
+        from providers import resolve_provider_profile
+    except Exception:
+        resolve_provider_profile = None  # type: ignore[assignment]
+
     for row in rows:
         slug = row.get("slug") or ""
         caps: dict[str, dict[str, bool]] = {}
+
+        # ★ Can the thinking control actually change anything on this endpoint?
+        #   Separate question from "does the model reason", and the reason the UI
+        #   used to show a dead switch (thinking-only models, pre-toggle
+        #   generations, aggregators serving another vendor's model). Checked
+        #   per-model below, because one endpoint can host several vendors'
+        #   models.
+        #
+        #   By slug only: these rows carry no endpoint URL. That is enough for
+        #   named providers, which is what this listing is built from; a
+        #   hand-configured ``custom:`` endpoint resolves to None here and keeps
+        #   the optimistic default. ``/api/model/info`` covers that case, since it
+        #   has the base_url and reports ``can_toggle_reasoning`` for the model
+        #   actually in use.
+        profile = None
+        if resolve_provider_profile is not None:
+            try:
+                profile = resolve_provider_profile(slug)
+            except Exception:
+                profile = None
 
         for model in row.get("models") or []:
             reasoning = True
@@ -260,9 +285,18 @@ def _apply_capabilities(rows: list[dict]) -> None:
                 except Exception:
                     reasoning = True
 
+            # Unknown endpoint → assume controllable, matching `reasoning`'s own
+            # optimistic default: a missing switch is worse than a no-op one.
+            toggleable = True
+            if profile is not None:
+                try:
+                    toggleable = bool(profile.can_toggle_reasoning(model))
+                except Exception:
+                    toggleable = True
+
             caps[model] = {
                 "fast": bool(model_supports_fast_mode(model)),
-                "reasoning": reasoning,
+                "reasoning": reasoning and toggleable,
             }
 
         row["capabilities"] = caps

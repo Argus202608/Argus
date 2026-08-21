@@ -3798,6 +3798,27 @@ def get_model_info(profile: Optional[str] = None):
         except Exception:
             pass
 
+        # ★ Whether the thinking switch can actually DO anything here — a
+        #   different question from `supports_reasoning` (which only says the
+        #   model reasons). The UI gated its control on the latter and so showed a
+        #   live-looking switch for models whose endpoint accepts no toggle:
+        #   thinking-only models (kimi-k2.7-code), pre-toggle generations
+        #   (glm-4-flash), and aggregators serving another vendor's model
+        #   (GLM/Kimi on the DashScope gateway — that endpoint's own params don't
+        #   apply to them). Reported so the frontend can hide the control instead
+        #   of offering one that silently does nothing.
+        try:
+            from providers import resolve_provider_profile
+
+            _profile = resolve_provider_profile(provider, base_url)
+            caps["can_toggle_reasoning"] = bool(
+                _profile is not None
+                and _profile.can_toggle_reasoning(model_name)
+            )
+        except Exception:
+            # Unknown → don't claim it's impossible; leave the control as-is.
+            caps["can_toggle_reasoning"] = True
+
         return {
             "model": model_name,
             "provider": provider,

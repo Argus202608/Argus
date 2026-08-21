@@ -17,6 +17,29 @@ export function reasoningEffortLabel(effort: string): string {
   return REASONING_LABELS[key] ?? effort
 }
 
+/** Is this provider row the active one?
+ *
+ *  ★ NOT a plain `row.slug === currentProvider`. For a hand-configured `custom:`
+ *    endpoint the row slug is derived from the endpoint HOSTNAME
+ *    (`custom:open.bigmodel.cn`), while the picker's "current provider" is the
+ *    bare configured name (`custom`) — so the two never compare equal and the
+ *    active model was never recognised as current.
+ *
+ *    Visible fallout: the composer pill read live session state and showed "Off",
+ *    while the picker row, believing it was not the current model, fell back to a
+ *    per-model preset and showed "Low". Two surfaces, one model, two answers.
+ *
+ *    The backend already computes this correctly and ships it as `is_current`, so
+ *    trust that when present and keep the string compare only as a fallback for
+ *    payloads/tests that omit it.
+ */
+export function isCurrentProviderRow(
+  row: { is_current?: boolean; slug: string },
+  currentProvider: string
+): boolean {
+  return row.is_current === true || (row.is_current === undefined && row.slug === currentProvider)
+}
+
 /** Which model/provider a picker should mark "current". With a live session the
  *  gateway's `model.options` is authoritative; pre-session there is no server
  *  "current", so the sticky composer pick wins over the profile default the

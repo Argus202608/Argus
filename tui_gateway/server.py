@@ -4614,6 +4614,28 @@ def _session_info(agent, session: dict | None = None) -> dict:
         yolo = bool(_YOLO_MODE_FROZEN) or session_yolo or _get_approval_mode() == "off"
     except Exception:
         yolo = False
+    # ★ Whether the thinking control can actually DO anything on THIS endpoint —
+    #   a different question from "does the model reason". Parity with the web
+    #   dashboard, which reports the same flag from /api/model/info; the desktop
+    #   path had no equivalent, so it could only ever show an ungated switch.
+    #   Resolved by provider name AND base_url, because a vendor reached through a
+    #   hand-configured ``custom:`` endpoint still has its own wire quirks.
+    #   Unknown → True: a missing switch is worse than a no-op one (same
+    #   optimistic default as hermes_cli/inventory.py::_apply_capabilities).
+    try:
+        from providers import resolve_provider_profile
+
+        _rprofile = resolve_provider_profile(
+            getattr(agent, "provider", "") or "",
+            getattr(agent, "base_url", "") or "",
+        )
+        can_toggle_reasoning = bool(
+            _rprofile is None
+            or _rprofile.can_toggle_reasoning(getattr(agent, "model", "") or "")
+        )
+    except Exception:
+        can_toggle_reasoning = True
+
     info: dict = {
         "model": getattr(agent, "model", ""),
         "provider": getattr(agent, "provider", ""),

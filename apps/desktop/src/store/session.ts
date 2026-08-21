@@ -262,7 +262,24 @@ export const $resumeFailedSessionId = atom<string | null>(null)
 export const $resumeExhaustedSessionId = atom<string | null>(null)
 export const $currentModel = atom(storedString(COMPOSER_MODEL_KEY) ?? '')
 export const $currentProvider = atom(storedString(COMPOSER_PROVIDER_KEY) ?? '')
-export const $currentReasoningEffort = atom(storedString(COMPOSER_EFFORT_KEY) ?? '')
+// ★ An explicit "none" is deliberately NOT restored here.
+//
+//   This atom is a GLOBAL sticky value shipped as `reasoning_effort` on every
+//   session.create, while per-model memory already lives in
+//   `argus.desktop.model-presets`. So persisting "none" here means: turning
+//   thinking off once, for one model, silently disables thinking for EVERY model
+//   in EVERY future session — permanently, across restarts, with no visible
+//   cause. That is the "思考没内容" report: the gateway parses "none" to
+//   {enabled: false}, the provider is sent thinking:{type:"disabled"}, no
+//   reasoning.delta is ever emitted, and the ☁️ disclosure correctly renders
+//   nothing. The empty block was a faithful view of a genuinely disabled model.
+//
+//   Dropping it to '' means "no explicit level" → the model's own preset (or the
+//   backend default) decides. Per-model "off" is unaffected: it is remembered in
+//   the preset store, which is keyed by provider+model and is the right home for
+//   it.
+const storedEffort = storedString(COMPOSER_EFFORT_KEY) ?? ''
+export const $currentReasoningEffort = atom(storedEffort.trim().toLowerCase() === 'none' ? '' : storedEffort)
 export const $currentServiceTier = atom('')
 export const $currentFastMode = atom(storedBoolean(COMPOSER_FAST_KEY, false))
 // Effective approval-bypass state mirrored from the gateway (session.info).
@@ -321,7 +338,14 @@ export const setCurrentProvider = (next: Updater<string>) => {
 
 export const setCurrentReasoningEffort = (next: Updater<string>) => {
   updateAtom($currentReasoningEffort, next)
-  persistString(COMPOSER_EFFORT_KEY, $currentReasoningEffort.get() || null)
+
+  // The live session still honours "none" (that is how you turn thinking off for
+  // THIS chat); it just must not become the global default for all future
+  // sessions — see the atom's note. `null` clears the stored key, so the next
+  // launch starts from "no explicit level" instead of a sticky off.
+  const value = $currentReasoningEffort.get()
+
+  persistString(COMPOSER_EFFORT_KEY, value.trim().toLowerCase() === 'none' ? null : value || null)
 }
 
 export const setCurrentServiceTier = (next: Updater<string>) => updateAtom($currentServiceTier, next)

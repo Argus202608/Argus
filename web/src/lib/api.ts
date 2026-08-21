@@ -2331,6 +2331,11 @@ export interface ModelInfoResponse {
     supports_tools?: boolean;
     supports_vision?: boolean;
     supports_reasoning?: boolean;
+    /** Whether this ENDPOINT lets us change the model's reasoning — distinct
+     *  from `supports_reasoning`, which only says the model reasons. False for
+     *  thinking-only models, pre-toggle generations, and aggregators serving
+     *  another vendor's model. Gate the thinking control on both. */
+    can_toggle_reasoning?: boolean;
     context_window?: number;
     max_output_tokens?: number;
     model_family?: string;

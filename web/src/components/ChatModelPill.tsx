@@ -70,10 +70,19 @@ export function ChatModelPill({ className }: Props) {
   const [model, setModel] = useState<string>("");
   const [provider, setProvider] = useState<string>("");
   const [effort, setEffort] = useState<string>("medium");
-  // Current model's reasoning capability, from /api/model/info. Defaults to
-  // true: the effort dial is broadly accepted and a no-op where unsupported,
-  // so hiding it from a capable-but-uncatalogued model is the worse failure
-  // (same rationale as hermes_cli/inventory.py's _apply_capabilities).
+  // Whether to show the thinking control at all. Needs BOTH:
+  //   supports_reasoning     — the model reasons
+  //   can_toggle_reasoning   — and this endpoint lets US change that
+  // Defaults to true: hiding the dial from a capable-but-uncatalogued model is
+  // the worse failure (same rationale as hermes_cli/inventory.py's
+  // _apply_capabilities).
+  //
+  // ★ The second flag is why this isn't just `supports_reasoning`. Gating on
+  //   capability alone rendered a live-looking switch for models whose endpoint
+  //   accepts no toggle — thinking-only models, pre-toggle generations, and
+  //   aggregators serving another vendor's model. A control that silently does
+  //   nothing is worse than an absent one, so back ends that can't honour it
+  //   say so and we hide it.
   const [canReason, setCanReason] = useState(true);
   const [open, setOpen] = useState(false);
   const [providers, setProviders] = useState<ModelOptionProvider[]>([]);
@@ -105,7 +114,10 @@ export function ChatModelPill({ className }: Props) {
           if (r?.model) setModel(String(r.model));
           if (r?.provider) setProvider(String(r.provider));
         }
-        setCanReason(r?.capabilities?.supports_reasoning !== false);
+        setCanReason(
+          r?.capabilities?.supports_reasoning !== false &&
+            r?.capabilities?.can_toggle_reasoning !== false,
+        );
       })
       .catch(() => {
         /* keep last known */

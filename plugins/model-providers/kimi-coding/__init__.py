@@ -13,11 +13,25 @@ from providers import register_provider
 from providers.base import OMIT_TEMPERATURE, ProviderProfile
 
 
+def _is_thinking_only(model: str | None) -> bool:
+    """True for Moonshot models that REJECT an explicit thinking-off.
+
+    Delegates to the existing helper so the model list lives in one place.
+    """
+    try:
+        from agent.moonshot_schema import is_thinking_only_moonshot_model
+
+        return bool(is_thinking_only_moonshot_model(model))
+    except Exception:
+        return False
+
+
 class KimiProfile(ProviderProfile):
     """Kimi/Moonshot — temperature omitted, thinking xor reasoning_effort."""
 
     def build_api_kwargs_extras(
-        self, *, reasoning_config: dict | None = None, **context
+        self, *, reasoning_config: dict | None = None,
+        model: str | None = None, **context
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         """Kimi reasoning controls.
 
@@ -40,7 +54,16 @@ class KimiProfile(ProviderProfile):
 
         enabled = reasoning_config.get("enabled", True)
         if enabled is False:
-            extra_body["thinking"] = {"type": "disabled"}
+            # ★ Thinking-only models (k2.7-code family) answer HTTP 400 to an
+            #   explicit "off" — "invalid thinking: only type=enabled is allowed
+            #   for this model". Omit the field entirely; the vendor default is
+            #   enabled, which is the closest legal state to the request.
+            #   The multimodal gateway already guarded this
+            #   (agent.moonshot_schema.is_thinking_only_moonshot_model); the main
+            #   chat path did not, so turning thinking off on k2.7-code failed the
+            #   whole request instead of merely being impossible.
+            if not _is_thinking_only(model):
+                extra_body["thinking"] = {"type": "disabled"}
             return extra_body, top_level
 
         # Enabled: prefer an explicit effort; only fall back to extra_body

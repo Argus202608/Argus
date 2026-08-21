@@ -21,6 +21,7 @@ import { useI18n } from '@/i18n'
 import {
   currentPickerSelection,
   displayModelName,
+  isCurrentProviderRow,
   modelDisplayParts,
   reasoningEffortLabel
 } from '@/lib/model-status-label'
@@ -231,7 +232,7 @@ export function ModelMenuPanel({ gateway, onSelectModel, requestGateway }: Model
                 // The active id may be the base or its -fast sibling; either
                 // way this one family row represents both.
                 const activeId =
-                  group.provider.slug === optionsProvider &&
+                  isCurrentProviderRow(group.provider, optionsProvider) &&
                   (optionsModel === family.id || optionsModel === family.fastId)
                     ? optionsModel
                     : null
@@ -411,7 +412,7 @@ function groupModels(
     // stable curated order (filter `allFamilies`, never reorder), so selecting
     // a model can't shuffle the list.
     const activeId =
-      provider.slug === current.provider && current.model
+      isCurrentProviderRow(provider, current.provider) && current.model
         ? allFamilies.find(family => family.id === current.model || family.fastId === current.model)?.id
         : undefined
 

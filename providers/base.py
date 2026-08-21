@@ -35,6 +35,42 @@ def _profile_user_agent() -> str:
         return "hermes-cli"
 
 
+def _expresses_thinking_off(payload: dict) -> bool:
+    """True when ``payload`` actually instructs the model NOT to reason.
+
+    Recognises the four spellings vendors use, so ``can_toggle_reasoning`` does
+    not have to know which profile it is asking:
+
+      * ``thinking: {"type": "disabled"}``   Kimi / Zhipu / DeepSeek
+      * ``enable_thinking: False``           DashScope, and the vLLM
+        ``chat_template_kwargs`` nesting of the same key
+      * ``reasoning: {"enabled": False}``    OpenRouter
+      * ``think: False``                     Ollama
+
+    An empty payload is False on purpose: every vendor above defaults to
+    reasoning ON, so sending nothing leaves it on.
+    """
+    if not payload:
+        return False
+
+    thinking = payload.get("thinking")
+    if isinstance(thinking, dict) and thinking.get("type") == "disabled":
+        return True
+
+    reasoning = payload.get("reasoning")
+    if isinstance(reasoning, dict) and reasoning.get("enabled") is False:
+        return True
+
+    if payload.get("enable_thinking") is False or payload.get("think") is False:
+        return True
+
+    ctk = payload.get("chat_template_kwargs")
+    if isinstance(ctk, dict) and ctk.get("enable_thinking") is False:
+        return True
+
+    return False
+
+
 @dataclass
 class ProviderProfile:
     """Base provider profile — subclass or instantiate with overrides."""
@@ -144,6 +180,39 @@ class ProviderProfile:
         Default: ({}, {}).
         """
         return {}, {}
+
+    def can_toggle_reasoning(self, model: str | None = None) -> bool:
+        """Whether WE can actually turn this model's reasoning on and off.
+
+        Distinct from the model catalog's ``supports_reasoning``, which only says
+        the model *reasons*. Those two were conflated, and the UI gated its
+        thinking control on the catalog flag — so it offered a switch for models
+        whose endpoint accepts no toggle (an aggregator serving a third party's
+        model, a pre-toggle model generation). The control looked live and did
+        nothing, which is worse than not showing it.
+
+        Derived, not declared: ask the profile to build the OFF payload and check
+        that it actually carries a disable instruction. A profile that already
+        expresses the toggle correctly needs no extra code, and one that cannot
+        express it reports False automatically — the answer can never drift out of
+        sync with the request we really send.
+
+        ★ Checks the OFF payload for a disable signal rather than just diffing OFF
+          against ON. Emitting NOTHING for "off" is the failure mode this is meant
+          to catch (thinking-only models, endpoints with no toggle): every vendor
+          here defaults to reasoning ON, so an empty payload means "still
+          thinking". A plain diff calls that controllable because ON does emit a
+          field — the exact confusion this method exists to remove.
+        """
+        try:
+            off_body, off_top = self.build_api_kwargs_extras(
+                reasoning_config={"enabled": False}, model=model,
+                supports_reasoning=True,
+            )
+        except Exception:
+            return False
+
+        return _expresses_thinking_off({**off_body, **off_top})
 
     def get_max_tokens(self, model: str | None) -> int | None:
         """Return the default max_tokens cap for *model*.
