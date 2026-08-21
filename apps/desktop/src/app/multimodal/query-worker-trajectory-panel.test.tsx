@@ -120,6 +120,23 @@ describe('QueryWorker structured trajectory mapping', () => {
     const completeStep = queryWorkerStepFromTrajectory(complete)
     const failedStep = queryWorkerStepFromTrajectory(failed)
 
+    const evidence = entry(
+      5,
+      'QueryWorker',
+      'tool.complete',
+      {
+        name: 'query_multimodal',
+        result: {
+          mode: 'evidence',
+          query: '定位屏幕中的 PDF',
+          visual_evidence: 'Observed: report.pdf'
+        },
+        tool_id: 'call-query-3'
+      },
+      'tool.complete'
+    )
+    const evidenceStep = queryWorkerStepFromTrajectory(evidence)
+
     expect(startStep).toMatchObject({
       callState: 'called',
       status: 'running',
@@ -138,6 +155,15 @@ describe('QueryWorker structured trajectory mapping', () => {
       detail: 'backend unavailable',
       status: 'error',
       title: 'QueryWorker handoff failed'
+    })
+    expect(evidenceStep).toMatchObject({
+      detail: 'Observed: report.pdf',
+      status: 'complete',
+      title: 'query_multimodal completed'
+    })
+    expect(evidenceStep?.toolResults[0]).toMatchObject({
+      name: 'query_multimodal',
+      summary: 'Observed: report.pdf'
     })
     expect(buildQueryWorkerTimelines([complete])?.[0].status).toBe('running')
     expect(buildQueryWorkerTimelines([failed])?.[0].status).toBe('error')

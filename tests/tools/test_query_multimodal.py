@@ -96,6 +96,105 @@ def test_gateway_query_worker_handoff_does_not_require_recall_worker():
     assert kwargs["parent_user_message_id"] == "turn_42"
 
 
+def test_evidence_mode_returns_normal_tool_result_and_keeps_main_ownership():
+    engine = SimpleNamespace(
+        query_visual_evidence=Mock(return_value={
+            "ok": True,
+            "evidence": (
+                "Observed: a PDF viewer is open.\n"
+                "Relevant text/identifiers: report.pdf, page 3/18."
+            ),
+            "ask_ts": 12.5,
+            "n_frames": 3,
+            "t_start": 11.5,
+            "t_end": 12.5,
+            "limitations": ["Visible frames do not establish the full document."],
+            "elapsed_sec": 0.8,
+        }),
+    )
+    agent = SimpleNamespace(
+        _active_parent_user_message_id="turn_pdf",
+        _active_user_message_text="帮我看看画面里的 PDF 讲了什么",
+        # Evidence mode is allowed after ordinary tool work because it does not
+        # create a second reply producer.
+        _query_multimodal_handoff_block_reason="prior_tool_work",
+    )
+    with (
+        patch(
+            "tools.mm_memory_tool._resolve_mm_engine",
+            return_value=(engine, agent),
+        ),
+        patch(
+            "tools.mm_memory_tool._resolve_send_anchor_ts",
+            return_value=12.5,
+        ),
+    ):
+        data = json.loads(query_multimodal(
+            query="定位 PDF 文件名、页码和可见主题，供后续 PDF skill 使用",
+            response_mode="evidence",
+            session_id="sid",
+        ))
+
+    assert data["mode"] == "evidence"
+    assert "PDF viewer" in data["visual_evidence"]
+    assert data["evidence_scope"] == {
+        "source": "ask_time_frames",
+        "ask_ts": 12.5,
+        "n_frames": 3,
+        "t_start": 11.5,
+        "t_end": 12.5,
+    }
+    assert "Main Agent retains reply ownership" in data["next_action"]
+    assert "control" not in data
+    assert "reply_owner" not in data
+    engine.query_visual_evidence.assert_called_once_with(
+        "定位 PDF 文件名、页码和可见主题，供后续 PDF skill 使用",
+        original_user_query="帮我看看画面里的 PDF 讲了什么",
+        ask_ts=12.5,
+        timeout=45.0,
+    )
+
+
+def test_evidence_mode_reports_missing_runtime_capability_without_handoff():
+    agent = SimpleNamespace(
+        _active_parent_user_message_id="turn_pdf",
+        _active_user_message_text="read the PDF on screen",
+    )
+    with patch(
+        "tools.mm_memory_tool._resolve_mm_engine",
+        return_value=(SimpleNamespace(), agent),
+    ):
+        data = json.loads(query_multimodal(
+            query="ground the visible PDF",
+            response_mode="evidence",
+            session_id="sid",
+        ))
+
+    assert data["success"] is False
+    assert data["code"] == "query_worker_evidence_unavailable"
+    assert "control" not in data
+
+
+def test_query_multimodal_schema_exposes_explicit_dual_response_modes():
+    mode = QUERY_MULTIMODAL_SCHEMA["parameters"]["properties"]["response_mode"]
+    assert mode["enum"] == ["direct", "evidence"]
+    assert mode["default"] == "direct"
+    assert QUERY_MULTIMODAL_SCHEMA["parameters"]["required"] == ["query"]
+
+
+def test_invalid_response_mode_fails_before_runtime_lookup():
+    with patch("tools.mm_memory_tool._resolve_mm_engine") as resolve:
+        data = json.loads(query_multimodal(
+            query="inspect the screen",
+            response_mode="delegate-everything",
+            session_id="sid",
+        ))
+
+    assert data["success"] is False
+    assert data["code"] == "invalid_query_multimodal_response_mode"
+    resolve.assert_not_called()
+
+
 @pytest.mark.parametrize("query", [None, "", "   "])
 def test_query_is_required_before_any_runtime_lookup(query):
     with patch("tools.mm_memory_tool._resolve_mm_engine") as resolve:

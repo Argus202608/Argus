@@ -218,13 +218,21 @@ function toolCompleteStep(entry: MmTrajectoryEntry): QueryWorkerTimelineStep {
   const error = cleanString(payload.error || result.error)
   const taskId = cleanString(result.task_id || payload.task_id)
   const handoff = result.control === 'handoff' || cleanString(result.reply_owner) === 'query_worker'
+  const evidenceMode = cleanString(result.mode) === 'evidence'
+  const evidenceResult = evidenceMode
+    ? normalizeToolResult({
+        ...result,
+        findings: result.visual_evidence,
+        name: 'query_multimodal'
+      }, 'query_multimodal')
+    : null
 
   // query_multimodal's tool receipt is only the handoff boundary. The
   // QueryWorker's own `complete/error/cancelled` trajectory row is the sole
   // task terminal; treating this receipt as terminal makes a live task look
   // finished before OCR/Recall/Search have even started.
   return {
-    detail: error || cleanString(result.query || payload.context),
+    detail: error || cleanString(result.visual_evidence || result.query || payload.context),
     frames: [],
     id: entry.id,
     metrics: taskId ? [`task ${taskId}`] : [],
@@ -232,10 +240,10 @@ function toolCompleteStep(entry: MmTrajectoryEntry): QueryWorkerTimelineStep {
     phase: entry.event,
     raw: entry,
     seq: entry.seq,
-    status: error ? 'error' : 'running',
+    status: error ? 'error' : handoff ? 'running' : 'complete',
     title: error ? 'QueryWorker handoff failed' : handoff ? 'Main Agent handed the question to QueryWorker' : 'query_multimodal completed',
     toolCalls: [],
-    toolResults: [],
+    toolResults: evidenceResult ? [evidenceResult] : [],
     ts: entry.ts,
     worker: 'Main Agent'
   }

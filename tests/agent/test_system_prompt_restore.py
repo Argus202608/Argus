@@ -143,6 +143,30 @@ class TestStoredPromptReuse:
         agent._build_system_prompt.assert_called_once_with(None)
         db.update_system_prompt.assert_called_once_with(agent.session_id, rebuilt)
 
+    def test_v1_direct_only_contract_rebuilds_to_dual_mode_v2(self):
+        stale = (
+            "Multimodal-Query-Contract: query_multimodal/v1\n"
+            "QueryWorker always replies directly.\n"
+            "Model: test-model\nProvider: openrouter"
+        )
+        rebuilt = (
+            f"{MM_QUERY_CONTRACT_MARKER}\n"
+            "Use direct or evidence mode according to downstream skills.\n"
+            "Model: test-model\nProvider: openrouter"
+        )
+        db = MagicMock()
+        db.get_session.return_value = {"system_prompt": stale}
+        agent = _make_agent(session_db=db, prebuilt_prompt=rebuilt)
+        agent.valid_tool_names = {"query_multimodal"}
+
+        _restore_or_build_system_prompt(
+            agent, None, [{"role": "user", "content": "continue"}]
+        )
+
+        assert agent._cached_system_prompt == rebuilt
+        agent._build_system_prompt.assert_called_once_with(None)
+        db.update_system_prompt.assert_called_once_with(agent.session_id, rebuilt)
+
     def test_real_session_db_roundtrip_migrates_once(self, tmp_path):
         """Exercise the append/persist boundary without a mocked DB."""
         from hermes_state import SessionDB

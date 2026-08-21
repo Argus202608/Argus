@@ -80,6 +80,29 @@ def test_prompt_routes_one_shot_visual_questions_to_query_worker_entry():
     assert "complete, self-contained delegation" in MM_LIVE_GUIDANCE
 
 
+def test_prompt_routes_simple_visual_qa_to_direct_queryworker_ownership():
+    assert "response_mode='direct' for pure visual QA" in MM_LIVE_GUIDANCE
+    assert "simple visual + Recall/Search QA" in MM_LIVE_GUIDANCE
+    assert "replies directly to the user" in MM_LIVE_GUIDANCE
+    assert "After a direct-mode handoff" in MM_LIVE_GUIDANCE
+
+
+def test_prompt_routes_visual_plus_complex_skill_through_evidence_then_main():
+    for capability in (
+        "PDF/document reader",
+        "local file access",
+        "terminal",
+        "browser interaction",
+        "complex Skill",
+    ):
+        assert capability in MM_LIVE_GUIDANCE
+    assert "response_mode='evidence'" in MM_LIVE_GUIDANCE
+    assert "you retain reply ownership" in MM_LIVE_GUIDANCE
+    assert "continue with the required tools in later rounds" in MM_LIVE_GUIDANCE
+    assert "write exactly one final answer yourself" in MM_LIVE_GUIDANCE
+    assert "summarize the xxx.pdf shown on my screen" in MM_LIVE_GUIDANCE
+
+
 def test_prompt_preserves_mixed_visual_and_external_fact_semantics():
     assert "Never narrow an outside-fact request" in MM_LIVE_GUIDANCE
     assert "retail price" in MM_LIVE_GUIDANCE

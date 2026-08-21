@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""query_multimodal — one-shot handoff into multimodal QueryWorker.
+"""query_multimodal — one-shot multimodal answer or visual grounding.
 
 The main agent is not passively fed live frames. In gateway turns this tool
 hands the complete one-shot user question to the multimodal QueryWorker.
@@ -15,10 +15,12 @@ compatibility path; the model-visible tool never takes that narrower route.
 
 Division of labour (also in the schema description):
 
-  * query_multimodal (THIS tool) — in an interactive gateway turn, dispatch a
-    one-shot VLM QueryWorker with the user's question and ask-time frames. It
-    may answer directly from those frames or combine RecallAgent + external
-    Search, then replies directly to the original question.
+  * query_multimodal(response_mode="direct") — dispatch a one-shot VLM
+    QueryWorker. It may answer from ask-time frames or combine Recall/Search,
+    then replies directly to the original question.
+  * query_multimodal(response_mode="evidence") — inspect ask-time frames only
+    and return bounded visual evidence to the Main Agent. The Main Agent keeps
+    reply ownership and can continue with PDF/file/terminal/browser/skills.
   * set_live_watcher — heavy background job that RE-WATCHES the raw video
     stream frame-by-frame (crop-and-compare, counting, whole-stream scans,
     continuous research/report). Use it when memory is insufficient or the answer
@@ -44,6 +46,8 @@ log = logging.getLogger("hermes.multimodal.query")
 #   2-3 轮就撞 25s 上限。backend 会保留 partial findings; 这里仍给
 #   2-3 轮完整 ReAct 留出余量。
 _RECALL_TIMEOUT_SEC = 45.0
+_EVIDENCE_TIMEOUT_SEC = 45.0
+_RESPONSE_MODES = {"direct", "evidence"}
 
 
 def _resolve_send_anchor_ts(session_id=None, engine=None):
@@ -73,10 +77,11 @@ def _query_multimodal_impl(
     query=None,
     session_id=None,
     *,
+    response_mode="direct",
     allow_sync_recall=False,
     **_kw,
 ) -> str:
-    """Implement QueryWorker handoff plus the opt-in legacy recall path.
+    """Implement direct-answer handoff, visual evidence, and legacy recall.
 
     See the schema description for when to use this vs set_live_watcher.
     Interactive calls are non-blocking QueryWorker handoffs. Only the legacy
@@ -90,12 +95,89 @@ def _query_multimodal_impl(
             "historical camera/screen content?",
             success=False)
 
+    mode = str(response_mode or "direct").strip().lower()
+    if mode not in _RESPONSE_MODES:
+        return tool_error(
+            "response_mode must be one of: direct, evidence.",
+            success=False,
+            code="invalid_query_multimodal_response_mode",
+            response_mode=mode,
+        )
+
     engine, _agent = _resolve_mm_engine(session_id)
     if engine is None:
         return tool_error(
             "multimodal memory is not available for this session "
             "(multimodal disabled or session not multimodal-capable).",
             success=False)
+
+    # Evidence mode is an ordinary, synchronous tool observation. It never
+    # transfers reply ownership, so it is intentionally allowed after normal
+    # tool work and does not inherit the direct-handoff solo-turn restriction.
+    # QueryWorker is restricted to visual grounding in this mode; the Main
+    # Agent consumes the returned evidence and continues orchestration.
+    if mode == "evidence":
+        inspect = getattr(engine, "query_visual_evidence", None)
+        if not callable(inspect):
+            return tool_error(
+                "visual evidence mode is unavailable because this multimodal "
+                "runtime does not provide a visual evidence collector.",
+                success=False,
+                code="query_worker_evidence_unavailable",
+            )
+        original_user_text = str(
+            getattr(_agent, "_active_user_message_text", "")
+            or _kw.get("user_text")
+            or q
+        ).strip()
+        ask_ts = _resolve_send_anchor_ts(session_id, engine)
+        try:
+            res = inspect(
+                q,
+                original_user_query=original_user_text,
+                ask_ts=ask_ts,
+                timeout=_EVIDENCE_TIMEOUT_SEC,
+            )
+        except Exception as exc:
+            log.warning(
+                "[query-evidence] engine.query_visual_evidence raised: %s",
+                exc,
+                exc_info=True,
+            )
+            return tool_error(
+                f"visual evidence collection failed: {exc}",
+                success=False,
+                code="query_worker_evidence_failed",
+            )
+        if not isinstance(res, dict) or not res.get("ok", False):
+            res = res if isinstance(res, dict) else {}
+            return tool_error(
+                str(res.get("error") or "visual evidence collection failed"),
+                success=False,
+                code="query_worker_evidence_failed",
+                timed_out=bool(res.get("timed_out")),
+            )
+        evidence = str(res.get("evidence") or "").strip()
+        return tool_result({
+            "mode": "evidence",
+            "query": q,
+            "original_user_query": original_user_text,
+            "visual_evidence": evidence,
+            "evidence_scope": {
+                "source": "ask_time_frames",
+                "ask_ts": res.get("ask_ts"),
+                "n_frames": int(res.get("n_frames") or 0),
+                "t_start": res.get("t_start"),
+                "t_end": res.get("t_end"),
+            },
+            "limitations": list(res.get("limitations") or []),
+            "elapsed_sec": res.get("elapsed_sec", 0.0),
+            "next_action": (
+                "Main Agent retains reply ownership. Use this visual grounding "
+                "as evidence, invoke the required PDF/file/terminal/browser/"
+                "skill tools, then produce the final user-facing answer."
+            ),
+        })
 
     # Gateway turns preallocate a stable answer slot and stamp its id on the
     # live agent.  In that context QueryWorker is a delegation boundary, not a
@@ -336,8 +418,10 @@ def _query_multimodal_impl(
     return tool_result(result)
 
 
-def query_multimodal(query=None, session_id=None, **kwargs) -> str:
-    """Hand off one-shot multimodal QA to an interactive QueryWorker.
+def query_multimodal(
+    query=None, session_id=None, response_mode="direct", **kwargs,
+) -> str:
+    """Run one-shot multimodal QA in direct-answer or evidence mode.
 
     This model-visible contract never falls back to the narrower synchronous
     Recall-only behavior when no QueryWorker answer slot exists.
@@ -345,6 +429,7 @@ def query_multimodal(query=None, session_id=None, **kwargs) -> str:
     return _query_multimodal_impl(
         query=query,
         session_id=session_id,
+        response_mode=response_mode,
         allow_sync_recall=False,
         **kwargs,
     )
@@ -357,9 +442,13 @@ def recall_multimodal_memory(query=None, session_id=None, **kwargs) -> str:
     It still uses QueryWorker when an interactive answer slot exists; otherwise
     direct Python callers retain the former synchronous RecallWorker behavior.
     """
+    # The legacy alias has no evidence-mode contract; ignore an accidental
+    # forwarded mode instead of passing the keyword twice.
+    kwargs.pop("response_mode", None)
     return _query_multimodal_impl(
         query=query,
         session_id=session_id,
+        response_mode="direct",
         allow_sync_recall=True,
         **kwargs,
     )
@@ -368,10 +457,16 @@ def recall_multimodal_memory(query=None, session_id=None, **kwargs) -> str:
 QUERY_MULTIMODAL_SCHEMA = {
     "name": "query_multimodal",
     "description": (
-        "Answer a one-shot question grounded in the user's current or historical "
-        "camera/screen context. QueryWorker receives recent frames frozen at the "
-        "user's question time and decides whether to answer directly from vision, "
-        "use multimodal Recall, use external Search, or combine them. Build a complete, "
+        "Handle a one-shot question grounded in the user's current or historical "
+        "camera/screen context. "
+        "Choose response_mode='direct' for pure visual questions and simple visual "
+        "+ Recall/Search questions: QueryWorker receives ask-time frames, may use "
+        "multimodal Recall and external Search, and replies directly. Choose "
+        "response_mode='evidence' when "
+        "the task also needs PDF, local files, terminal, browser, or another complex "
+        "Main-Agent skill: QueryWorker inspects ask-time frames only and returns "
+        "structured visual evidence; the Main Agent must then continue tool "
+        "orchestration and produce the final answer. Build a complete, "
         "self-contained delegation from the current question and any directly useful "
         "prior QA; QueryWorker does not receive the main chat history. Preserve the "
         "uncertainty of reused context, leave current visual referents for QueryWorker "
@@ -379,9 +474,10 @@ QUERY_MULTIMODAL_SCHEMA = {
         "output requirement. Never invent missing details. Never replace an outside-fact request "
         "such as retail price, market value, or listing status with a request to read "
         "only text visible in the image. "
-        "QueryWorker replies directly to the original user message; after this "
-        "tool returns a handoff, do not synthesize a second answer. Call this as "
-        "the first and only tool in the turn; never batch it with other tools. Use "
+        "In direct mode, after this tool returns a handoff, do not synthesize a "
+        "second answer; it must be the first and only tool in that turn. In evidence "
+        "mode, do not answer yet: consume the evidence and continue with the needed "
+        "tools in subsequent rounds. Use "
         "get_current_frame only when raw current frames must be retrieved or shown; "
         "use set_monitor for a future trigger and set_live_watcher for continuous "
         "or deep stream analysis."
@@ -401,6 +497,17 @@ QUERY_MULTIMODAL_SCHEMA = {
                     "requested output format; do not invent missing specifics."
                 ),
             },
+            "response_mode": {
+                "type": "string",
+                "enum": ["direct", "evidence"],
+                "default": "direct",
+                "description": (
+                    "direct: QueryWorker may use visual/Recall/Search evidence and "
+                    "answers the user directly. evidence: inspect ask-time frames "
+                    "only, return visual grounding to Main Agent, and let Main Agent "
+                    "continue with PDF/file/terminal/browser/complex skills."
+                ),
+            },
         },
         "required": ["query"],
     },
@@ -415,6 +522,7 @@ registry.register(
     schema=QUERY_MULTIMODAL_SCHEMA,
     handler=lambda args, **kw: query_multimodal(
         query=args.get("query"),
+        response_mode=args.get("response_mode", "direct"),
         session_id=kw.get("session_id"),
     ),
     emoji="🧠",

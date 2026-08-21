@@ -2312,6 +2312,235 @@ class WatcherAgent:
             log.warning("[query-worker] submit failed: %s", exc, exc_info=True)
             return ""
 
+    def query_visual_evidence(
+        self,
+        task_instruction: str,
+        *,
+        original_user_query: str = "",
+        ask_ts: Optional[float] = None,
+        timeout: float = 45.0,
+    ) -> Dict[str, Any]:
+        """Synchronously collect ask-time visual grounding for the Main Agent.
+
+        Unlike :meth:`submit_query_async`, this path does not own or complete a
+        user message. It runs QueryWorker as a perception-only VLM with no
+        Recall/Search tools, then returns its bounded observation as an ordinary
+        tool result so the Main Agent can continue with PDF/file/terminal/
+        browser/skill orchestration.
+        """
+        instruction = (task_instruction or "").strip()
+        if not instruction:
+            return {"ok": False, "error": "visual evidence query is required"}
+
+        loop = self._loop
+        if (
+            self._stop.is_set()
+            or not self._healthy
+            or not self._ready.is_set()
+            or loop is None
+            or loop.is_closed()
+            or not loop.is_running()
+            or self.responder is None
+            or self._query_semaphore is None
+        ):
+            return {"ok": False, "error": "QueryWorker is not ready"}
+        if self._thread is threading.current_thread():
+            return {
+                "ok": False,
+                "error": "visual evidence collection cannot block its own event loop",
+            }
+
+        started = time.monotonic()
+        timeout_sec = max(1.0, float(timeout or 45.0))
+        try:
+            frame_cap = min(3, max(1, int(
+                getattr(self.cfg, "cont_recent_frames", 3) or 3)))
+            if ask_ts is not None:
+                raw_all_le = getattr(self.frame_buffer, "raw_all_le", None)
+                if callable(raw_all_le):
+                    frozen_frames = list(
+                        raw_all_le(float(ask_ts), frame_cap) or [])
+                else:
+                    frozen_frames = list(
+                        self.frame_buffer.all_le(float(ask_ts)) or [])[-frame_cap:]
+            else:
+                frozen_frames = list(
+                    self.frame_buffer.latest(frame_cap) or [])
+        except Exception:
+            frozen_frames = []
+
+        try:
+            effective_ask_ts = float(
+                ask_ts
+                if ask_ts is not None
+                else (getattr(self.frame_buffer, "latest_ts", None) or 0.0)
+            )
+        except (TypeError, ValueError):
+            effective_ask_ts = 0.0
+
+        if not frozen_frames:
+            return {
+                "ok": True,
+                "evidence": (
+                    "Observed: no ask-time frame was available.\n"
+                    "Relevant text/identifiers: none.\n"
+                    "Grounding: no visual claim can be established.\n"
+                    "Uncertainty: high.\n"
+                    "Recommended next capability: ask the user to share the "
+                    "screen or expose the target artifact explicitly."
+                ),
+                "ask_ts": effective_ask_ts,
+                "n_frames": 0,
+                "t_start": None,
+                "t_end": None,
+                "limitations": [
+                    "No frame was captured at or before the question timestamp.",
+                    "No Search, Recall, file, browser, terminal, or skill was run.",
+                ],
+                "elapsed_sec": round(time.monotonic() - started, 3),
+            }
+
+        user_query = (original_user_query or instruction).strip()
+        worker_instruction = instruction
+        if user_query and user_query != instruction:
+            worker_instruction = (
+                "Original user request (context only; do not answer it end-to-end):\n"
+                f"{user_query}\n\n"
+                "Main Agent visual-grounding brief:\n"
+                f"{instruction}"
+            )
+
+        evidence_id = "evi_" + uuid.uuid4().hex[:8]
+        with self._query_lock:
+            admitted = len(self._query_pending) + len(self._query_running)
+            capacity = self._query_max_concurrency + self._query_max_pending
+            if admitted >= capacity:
+                return {
+                    "ok": False,
+                    "error": "visual evidence query queue is full",
+                    "queue_full": True,
+                }
+            self._query_pending.add(evidence_id)
+
+        async def _run_evidence() -> Dict[str, Any]:
+            semaphore = self._query_semaphore
+            if semaphore is None:
+                raise RuntimeError("QueryWorker semaphore is not initialized")
+            acquired = False
+            streamed_parts: list[str] = []
+            authoritative_answer = {"text": ""}
+            try:
+                remaining = max(
+                    0.1, timeout_sec - (time.monotonic() - started))
+                await asyncio.wait_for(semaphore.acquire(), timeout=remaining)
+                acquired = True
+                with self._query_lock:
+                    self._query_pending.discard(evidence_id)
+                    self._query_running.add(evidence_id)
+
+                query_ocr_evidence: list[dict] = []
+                ocr_worker = getattr(self, "query_ocr_worker", None)
+                if ocr_worker is not None:
+                    try:
+                        ocr_timeout = max(0.1, min(
+                            remaining,
+                            float(getattr(
+                                self.cfg, "ocr_timeout_sec", 4.0) or 4.0)
+                            + 0.25,
+                        ))
+                        query_ocr_evidence = list(await asyncio.wait_for(
+                            ocr_worker.collect_query_evidence(
+                                list(frozen_frames),
+                                ask_ts=effective_ask_ts,
+                            ),
+                            timeout=ocr_timeout,
+                        ) or [])
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as exc:
+                        log.warning(
+                            "[query-evidence] supplemental OCR failed: %s", exc)
+
+                async def _sink(token: str) -> None:
+                    if token:
+                        streamed_parts.append(token)
+
+                async def _on_event(event: Dict[str, Any]) -> None:
+                    ev = dict(event or {})
+                    if ev.get("type") == "answer_ready":
+                        full = ev.get("answer_full")
+                        if isinstance(full, str) and full.strip():
+                            authoritative_answer["text"] = full.strip()
+
+                driving = await self.responder._spawn_delegation(
+                    task_instruction=worker_instruction,
+                    prelude="",
+                    sink=_sink,
+                    on_event=_on_event,
+                    ask_ts=effective_ask_ts,
+                    ask_frames_override=list(frozen_frames),
+                    force_initial_recall=False,
+                    query_worker_mode=True,
+                    evidence_only_mode=True,
+                    query_ocr_evidence=query_ocr_evidence,
+                    router_enable_thinking=False,
+                )
+                await driving
+                evidence = (
+                    authoritative_answer["text"].strip()
+                    or "".join(streamed_parts).strip()
+                )
+                if not evidence:
+                    return {
+                        "ok": False,
+                        "error": "QueryWorker returned no visual evidence",
+                    }
+                return {
+                    "ok": True,
+                    "evidence": evidence,
+                    "ask_ts": effective_ask_ts,
+                    "n_frames": len(frozen_frames),
+                    "t_start": float(frozen_frames[0].ts),
+                    "t_end": float(frozen_frames[-1].ts),
+                    "limitations": [
+                        "Evidence is limited to the frozen ask-time frames and supplemental OCR.",
+                        "No Search, Recall, file, browser, terminal, or skill was run.",
+                        "The Main Agent must verify downstream artifact contents with the appropriate tool.",
+                    ],
+                    "elapsed_sec": round(time.monotonic() - started, 3),
+                }
+            finally:
+                with self._query_lock:
+                    self._query_pending.discard(evidence_id)
+                    self._query_running.discard(evidence_id)
+                if acquired:
+                    semaphore.release()
+
+        future = None
+        try:
+            future = asyncio.run_coroutine_threadsafe(_run_evidence(), loop)
+            return future.result(timeout=timeout_sec)
+        except FuturesTimeout:
+            if future is not None:
+                future.cancel()
+            with self._query_lock:
+                self._query_pending.discard(evidence_id)
+                self._query_running.discard(evidence_id)
+            return {
+                "ok": False,
+                "error": "visual evidence collection timed out",
+                "timed_out": True,
+            }
+        except Exception as exc:
+            if future is not None:
+                future.cancel()
+            with self._query_lock:
+                self._query_pending.discard(evidence_id)
+                self._query_running.discard(evidence_id)
+            log.warning(
+                "[query-evidence] collection failed: %s", exc, exc_info=True)
+            return {"ok": False, "error": f"visual evidence collection failed: {exc}"}
+
     # ------------------------------------------------------------------ #
     def recall_memory(self, brief: str, user_text: str = "",
                       timeout: Optional[float] = None) -> Dict[str, Any]:
